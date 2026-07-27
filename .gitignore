@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.agents/
+.tmp-eraser-auth/
+.env
+.env.*
+!.env.example
+coverage/
+*.log
+.DS_Store
