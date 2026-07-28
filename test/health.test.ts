@@ -25,6 +25,21 @@ const testConfig: AppConfig = {
     serverSelectionTimeoutMs: 100,
     maxPoolSize: 1,
   },
+  auth: {
+    sessionTtlHours: 168,
+    maxSessions: 5,
+    maxLoginAttempts: 5,
+    lockMinutes: 15,
+    adminAccessTokenSecret: 'test-admin-secret-with-at-least-32-chars',
+    adminAccessTokenTtlMinutes: 60,
+    partnerCredentialMasterSecret:
+      'test-partner-secret-with-at-least-32-chars',
+    partnerHmacMaxSkewSeconds: 300,
+  },
+  kyc: {
+    maxFileBytes: 10 * 1024 * 1024,
+    allowedMimeTypes: ['image/jpeg', 'image/png', 'application/pdf'],
+  },
   cloudinary: {
     cloudName: 'test-cloud',
     apiKey: 'test-key',
