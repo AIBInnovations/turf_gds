@@ -16,23 +16,31 @@ declare module 'fastify' {
 
 export interface CloudinaryPluginOptions {
   config: AppConfig['cloudinary'];
+  storage?: MediaStorage;
 }
 
 const cloudinaryPlugin: FastifyPluginAsync<CloudinaryPluginOptions> = async (
   fastify,
   options,
 ) => {
-  cloudinary.config({
-    cloud_name: options.config.cloudName,
-    api_key: options.config.apiKey,
-    api_secret: options.config.apiSecret,
-    secure: true,
-  });
+  let storage = options.storage;
 
-  fastify.decorate(
-    'mediaStorage',
-    new CloudinaryMediaStorage(cloudinary, options.config.folder),
-  );
+  if (!storage) {
+    cloudinary.config({
+      cloud_name: options.config.cloudName,
+      api_key: options.config.apiKey,
+      api_secret: options.config.apiSecret,
+      secure: true,
+      hide_sensitive: true,
+    });
+
+    storage = new CloudinaryMediaStorage(
+      cloudinary,
+      options.config.folder,
+    );
+  }
+
+  fastify.decorate('mediaStorage', storage);
 };
 
 export default fp(cloudinaryPlugin, {

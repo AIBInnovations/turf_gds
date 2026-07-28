@@ -34,6 +34,9 @@ VenueOwner [icon: users, color: purple] {
   password_hash string
   email_verified_at date nullable
   status enum {PENDING, ACTIVE, SUSPENDED}
+  failed_login_count int
+  locked_until date nullable
+  last_login_at date nullable
   sessions document[]
   fcm_tokens document[]
   notifications document[]

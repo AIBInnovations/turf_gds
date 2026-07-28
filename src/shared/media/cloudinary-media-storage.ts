@@ -29,6 +29,7 @@ export interface MediaMetadata {
 }
 
 export interface MediaStorage {
+  ping(): Promise<void>;
   uploadBuffer(
     buffer: Buffer,
     options?: UploadMediaOptions,
@@ -44,6 +45,14 @@ export class CloudinaryMediaStorage implements MediaStorage {
     private readonly client: typeof Cloudinary,
     private readonly defaultFolder: string,
   ) {}
+
+  public async ping(): Promise<void> {
+    const response = (await this.client.api.ping()) as { status?: string };
+
+    if (response.status !== 'ok') {
+      throw new Error('Cloudinary health check failed');
+    }
+  }
 
   public async uploadBuffer(
     buffer: Buffer,
