@@ -26,6 +26,7 @@ export interface MediaMetadata {
   url: string;
   secureUrl: string;
   version: number;
+  checksum: string | undefined;
 }
 
 export interface MediaStorage {
@@ -104,6 +105,7 @@ export class CloudinaryMediaStorage implements MediaStorage {
       url: result.url,
       secureUrl: result.secure_url,
       version: result.version,
+      checksum: result.etag,
     };
   }
 

@@ -1,0 +1,343 @@
+import type { Db, Document } from 'mongodb';
+import { initializeInventoryPersistence } from './inventory.persistence.js';
+
+const venueValidator: Document = {
+  $jsonSchema: {
+    bsonType: 'object',
+    additionalProperties: false,
+    required: [
+      '_id',
+      'legal_name',
+      'display_name',
+      'environment',
+      'timezone',
+      'address',
+      'geo',
+      'currency',
+      'media',
+      'status',
+      'approved_by',
+      'approved_at',
+      'audit_history',
+      'version',
+      'created_at',
+      'updated_at',
+    ],
+    properties: {
+      _id: { bsonType: 'objectId' },
+      legal_name: { bsonType: 'string', minLength: 2, maxLength: 200 },
+      display_name: { bsonType: 'string', minLength: 2, maxLength: 200 },
+      environment: { enum: ['SANDBOX', 'PRODUCTION'] },
+      timezone: { bsonType: 'string' },
+      address: {
+        bsonType: 'object',
+        additionalProperties: false,
+        required: ['line1', 'city', 'state', 'postal_code', 'country'],
+        properties: {
+          line1: { bsonType: 'string' },
+          line2: { bsonType: 'string' },
+          city: { bsonType: 'string' },
+          state: { bsonType: 'string' },
+          postal_code: { bsonType: 'string' },
+          country: { bsonType: 'string', minLength: 2, maxLength: 2 },
+        },
+      },
+      geo: {
+        bsonType: 'object',
+        required: ['type', 'coordinates'],
+        properties: {
+          type: { enum: ['Point'] },
+          coordinates: {
+            bsonType: 'array',
+            minItems: 2,
+            maxItems: 2,
+            items: { bsonType: ['double', 'int', 'long', 'decimal'] },
+          },
+        },
+      },
+      currency: { enum: ['INR'] },
+      media: {
+        bsonType: 'array',
+        maxItems: 20,
+        items: {
+          bsonType: 'object',
+          additionalProperties: false,
+          required: [
+            'provider',
+            'storage_key',
+            'resource_type',
+            'delivery_type',
+            'format',
+            'bytes',
+            'width',
+            'height',
+            'mime_type',
+            'original_filename',
+            'secure_url',
+            'checksum',
+            'created_at',
+          ],
+          properties: {
+            provider: { enum: ['CLOUDINARY'] },
+            storage_key: { bsonType: 'string' },
+            resource_type: { bsonType: 'string' },
+            delivery_type: { bsonType: 'string' },
+            format: { bsonType: ['string', 'null'] },
+            bytes: { bsonType: ['int', 'long'], minimum: 1 },
+            width: { bsonType: ['int', 'long', 'null'] },
+            height: { bsonType: ['int', 'long', 'null'] },
+            mime_type: { bsonType: 'string' },
+            original_filename: { bsonType: 'string' },
+            secure_url: { bsonType: 'string' },
+            checksum: { bsonType: ['string', 'null'] },
+            created_at: { bsonType: 'date' },
+          },
+        },
+      },
+      status: {
+        enum: ['DRAFT', 'PENDING_APPROVAL', 'ACTIVE', 'SUSPENDED'],
+      },
+      approved_by: { bsonType: ['objectId', 'null'] },
+      approved_at: { bsonType: ['date', 'null'] },
+      audit_history: {
+        bsonType: 'array',
+        maxItems: 100,
+        items: {
+          bsonType: 'object',
+          additionalProperties: false,
+          required: [
+            'event_type',
+            'actor_type',
+            'actor_id',
+            'correlation_id',
+            'occurred_at',
+          ],
+          properties: {
+            event_type: { bsonType: 'string' },
+            actor_type: { enum: ['ADMIN', 'VENUE_OWNER'] },
+            actor_id: { bsonType: 'objectId' },
+            correlation_id: { bsonType: 'string' },
+            changed_fields: {
+              bsonType: 'array',
+              items: { bsonType: 'string' },
+            },
+            occurred_at: { bsonType: 'date' },
+          },
+        },
+      },
+      version: { bsonType: 'int', minimum: 1 },
+      created_at: { bsonType: 'date' },
+      updated_at: { bsonType: 'date' },
+    },
+  },
+};
+
+const courtValidator: Document = {
+  $jsonSchema: {
+    bsonType: 'object',
+    additionalProperties: false,
+    required: [
+      '_id',
+      'venue_id',
+      'name',
+      'sport_types',
+      'booking_mode',
+      'min_booking_minutes',
+      'booking_increment_minutes',
+      'operating_hours',
+      'timezone',
+      'media',
+      'status',
+      'audit_history',
+      'version',
+      'created_at',
+      'updated_at',
+    ],
+    properties: {
+      _id: { bsonType: 'objectId' },
+      venue_id: { bsonType: 'objectId' },
+      name: { bsonType: 'string', minLength: 2, maxLength: 120 },
+      sport_types: {
+        bsonType: 'array',
+        minItems: 1,
+        maxItems: 20,
+        uniqueItems: true,
+        items: { bsonType: 'string' },
+      },
+      booking_mode: { enum: ['OPEN_TIME', 'FIXED_SLOT', 'BOTH'] },
+      min_booking_minutes: {
+        bsonType: 'int',
+        minimum: 60,
+        maximum: 1440,
+      },
+      booking_increment_minutes: {
+        bsonType: 'int',
+        minimum: 5,
+        maximum: 1440,
+      },
+      operating_hours: {
+        bsonType: 'array',
+        maxItems: 7,
+        items: {
+          bsonType: 'object',
+          additionalProperties: false,
+          required: ['day_of_week', 'opens_at', 'closes_at'],
+          properties: {
+            day_of_week: {
+              bsonType: 'int',
+              minimum: 1,
+              maximum: 7,
+            },
+            opens_at: {
+              bsonType: 'string',
+              pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$',
+            },
+            closes_at: {
+              bsonType: 'string',
+              pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$',
+            },
+          },
+        },
+      },
+      timezone: { bsonType: 'string' },
+      media: {
+        bsonType: 'array',
+        maxItems: 20,
+        items: {
+          bsonType: 'object',
+          additionalProperties: false,
+          required: [
+            'provider',
+            'storage_key',
+            'resource_type',
+            'delivery_type',
+            'format',
+            'bytes',
+            'width',
+            'height',
+            'mime_type',
+            'original_filename',
+            'secure_url',
+            'checksum',
+            'created_at',
+          ],
+          properties: {
+            provider: { enum: ['CLOUDINARY'] },
+            storage_key: { bsonType: 'string' },
+            resource_type: { bsonType: 'string' },
+            delivery_type: { bsonType: 'string' },
+            format: { bsonType: ['string', 'null'] },
+            bytes: { bsonType: ['int', 'long'], minimum: 1 },
+            width: { bsonType: ['int', 'long', 'null'] },
+            height: { bsonType: ['int', 'long', 'null'] },
+            mime_type: { bsonType: 'string' },
+            original_filename: { bsonType: 'string' },
+            secure_url: { bsonType: 'string' },
+            checksum: { bsonType: ['string', 'null'] },
+            created_at: { bsonType: 'date' },
+          },
+        },
+      },
+      status: { enum: ['ACTIVE', 'INACTIVE'] },
+      audit_history: {
+        bsonType: 'array',
+        maxItems: 100,
+        items: {
+          bsonType: 'object',
+          additionalProperties: false,
+          required: [
+            'event_type',
+            'actor_type',
+            'actor_id',
+            'correlation_id',
+            'occurred_at',
+          ],
+          properties: {
+            event_type: { bsonType: 'string' },
+            actor_type: { enum: ['ADMIN', 'VENUE_OWNER'] },
+            actor_id: { bsonType: 'objectId' },
+            correlation_id: { bsonType: 'string' },
+            changed_fields: {
+              bsonType: 'array',
+              items: { bsonType: 'string' },
+            },
+            occurred_at: { bsonType: 'date' },
+          },
+        },
+      },
+      version: { bsonType: 'int', minimum: 1 },
+      created_at: { bsonType: 'date' },
+      updated_at: { bsonType: 'date' },
+    },
+  },
+};
+
+async function ensureVenueCollection(db: Db): Promise<void> {
+  const exists = await db
+    .listCollections({ name: 'venues' }, { nameOnly: true })
+    .hasNext();
+
+  if (!exists) {
+    await db.createCollection('venues', {
+      validator: venueValidator,
+      validationLevel: 'strict',
+      validationAction: 'error',
+    });
+    return;
+  }
+
+  await db.command({
+    collMod: 'venues',
+    validator: venueValidator,
+    validationLevel: 'strict',
+    validationAction: 'error',
+  });
+}
+
+async function ensureCourtCollection(db: Db): Promise<void> {
+  const exists = await db
+    .listCollections({ name: 'courts' }, { nameOnly: true })
+    .hasNext();
+
+  if (!exists) {
+    await db.createCollection('courts', {
+      validator: courtValidator,
+      validationLevel: 'strict',
+      validationAction: 'error',
+    });
+    return;
+  }
+
+  await db.command({
+    collMod: 'courts',
+    validator: courtValidator,
+    validationLevel: 'strict',
+    validationAction: 'error',
+  });
+}
+
+export async function initializeVenuePersistence(db: Db): Promise<void> {
+  await ensureVenueCollection(db);
+  await ensureCourtCollection(db);
+  await db.collection('venues').createIndex(
+    { geo: '2dsphere' },
+    { name: 'ix_venues_geo' },
+  );
+  await db.collection('venues').createIndex(
+    { environment: 1, status: 1 },
+    { name: 'ix_venues_environment_status' },
+  );
+  await db.collection('courts').createIndex(
+    { venue_id: 1, name: 1 },
+    {
+      unique: true,
+      name: 'uq_courts_venue_name',
+      collation: { locale: 'en', strength: 2 },
+    },
+  );
+  await db.collection('courts').createIndex(
+    { venue_id: 1, status: 1, booking_mode: 1 },
+    { name: 'ix_courts_venue_status_mode' },
+  );
+  await initializeInventoryPersistence(db);
+}

@@ -58,6 +58,21 @@ const errorHandlerPlugin: FastifyPluginAsync = async (fastify) => {
         return;
       }
 
+      if (
+        error.statusCode &&
+        error.statusCode >= 400 &&
+        error.statusCode < 500
+      ) {
+        void reply.status(error.statusCode).send({
+          error: {
+            code: error.code || 'REQUEST_ERROR',
+            message: error.message,
+            requestId: request.id,
+          },
+        } satisfies ErrorBody);
+        return;
+      }
+
       request.log.error({ err: error }, 'Unhandled request error');
       void reply.status(500).send({
         error: {

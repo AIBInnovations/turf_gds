@@ -1,0 +1,909 @@
+import { ObjectId, type Document } from 'mongodb';
+
+import type { OwnerAccessService } from '../identity/owner/owner-access.service.js';
+import type { DatabaseConnection } from '../../shared/database/database-connection.js';
+import { AppError } from '../../shared/errors/app-error.js';
+import type { CourtRepository } from './court.repository.js';
+import type { CourtDocument } from './court.types.js';
+import type {
+  PricingRuleDocument,
+  SlotDocument,
+  VenueContentDocument,
+  VenuePayoutAccountDocument,
+} from './inventory.types.js';
+import type { VenueOperationsRepository } from './venue-operations.repository.js';
+import type { VenueRepository } from './venue.repository.js';
+
+export interface VenueOperationsService {
+  createPricingRule(input: PricingInput): Promise<object>;
+  listPricingRules(input: ScopedCourt): Promise<object[]>;
+  updatePricingRule(input: PricingUpdateInput): Promise<object>;
+  generateFixedSlots(input: ScopedCourt & {
+    actorOwnerId: string;
+    dateFrom: string;
+    dateTo: string;
+    correlationId: string;
+  }): Promise<{ created: number }>;
+  listInventory(input: ScopedCourt & {
+    actorOwnerId: string;
+    from: string;
+    to: string;
+  }): Promise<object[]>;
+  blockAvailability(input: {
+    actorOwnerId: string;
+    venueId: string;
+    courtId: string;
+    correlationId: string;
+    reason: string;
+    slotId?: string;
+    slotVersion?: number;
+    courtVersion?: number;
+    startsAt?: string;
+    endsAt?: string;
+  }): Promise<object>;
+  releaseAvailability(input: {
+    actorOwnerId: string;
+    venueId: string;
+    courtId: string;
+    slotId: string;
+    expectedVersion: number;
+    reason: string;
+    correlationId: string;
+  }): Promise<void | object>;
+  getContent(input: {
+    actorOwnerId: string;
+    venueId: string;
+  }): Promise<object>;
+  saveContent(input: {
+    actorOwnerId: string;
+    venueId: string;
+    expectedVersion?: number;
+    content: Document;
+  }): Promise<object>;
+  addPayoutAccount(input: {
+    actorOwnerId: string;
+    venueId: string;
+    accountHolderName: string;
+    vaultProvider: string;
+    vaultAccountToken: string;
+    accountLast4: string;
+    bankName: string;
+    ifscCode: string;
+  }): Promise<object>;
+  listPayoutAccounts(input: {
+    actorOwnerId: string;
+    venueId: string;
+  }): Promise<object[]>;
+  searchAvailability(input: {
+    courtId: string;
+    from: Date;
+    to: Date;
+  }): Promise<object[]>;
+}
+
+interface ScopedCourt {
+  actorOwnerId: string;
+  venueId: string;
+  courtId: string;
+}
+
+interface PricingInput extends ScopedCourt {
+  name: string;
+  daysOfWeek: number[];
+  startsTime: string;
+  endsTime: string;
+  amountMinor: number;
+  currency: string;
+  effectiveFrom: string;
+  effectiveTo?: string;
+  priority: number;
+}
+
+interface PricingUpdateInput extends ScopedCourt {
+  pricingRuleId: string;
+  name?: string;
+  daysOfWeek?: number[];
+  startsTime?: string;
+  endsTime?: string;
+  amountMinor?: number;
+  currency?: string;
+  effectiveFrom?: string;
+  effectiveTo?: string | null;
+  priority?: number;
+  status?: 'ACTIVE' | 'INACTIVE';
+}
+
+export function createVenueOperationsService(input: {
+  repository: VenueOperationsRepository;
+  venueRepository: VenueRepository;
+  courtRepository: CourtRepository;
+  ownerAccessService: OwnerAccessService;
+  database: DatabaseConnection;
+  now?: () => Date;
+}): VenueOperationsService {
+  const now = input.now ?? (() => new Date());
+
+  async function scopedCourt(
+    values: ScopedCourt,
+    permission:
+      | 'MANAGE_PRICING'
+      | 'MANAGE_AVAILABILITY',
+  ): Promise<CourtDocument> {
+    await input.ownerAccessService.requirePermission(
+      values.actorOwnerId,
+      values.venueId,
+      permission,
+    );
+    const court = await input.courtRepository.findByIdAndVenue(
+      oid(values.courtId),
+      oid(values.venueId),
+    );
+    if (!court) {
+      throw notFound('COURT_NOT_FOUND', 'Court was not found');
+    }
+    return court;
+  }
+
+  async function createPricingRule(values: PricingInput) {
+    await scopedCourt(values, 'MANAGE_PRICING');
+    const timestamp = now();
+    const rule = pricingDocument(values, timestamp);
+    await input.repository.insertPricingRule(rule);
+    return presentPricing(rule);
+  }
+
+  async function listPricingRules(values: ScopedCourt) {
+    await scopedCourt(values, 'MANAGE_PRICING');
+    return (
+      await input.repository.listPricingRules(oid(values.courtId))
+    ).map(presentPricing);
+  }
+
+  async function updatePricingRule(values: PricingUpdateInput) {
+    await scopedCourt(values, 'MANAGE_PRICING');
+    const id = oid(values.pricingRuleId);
+    const courtId = oid(values.courtId);
+    const existing = await input.repository.findPricingRule(id, courtId);
+    if (!existing) {
+      throw notFound('PRICING_RULE_NOT_FOUND', 'Pricing rule was not found');
+    }
+    const effectiveTo =
+      values.effectiveTo === null
+        ? undefined
+        : values.effectiveTo ?? existing.effective_to?.toISOString();
+    const merged: PricingInput = {
+      actorOwnerId: values.actorOwnerId,
+      venueId: values.venueId,
+      courtId: values.courtId,
+      name: values.name ?? existing.name,
+      daysOfWeek: values.daysOfWeek ?? existing.days_of_week,
+      startsTime: values.startsTime ?? existing.starts_time,
+      endsTime: values.endsTime ?? existing.ends_time,
+      amountMinor: values.amountMinor ?? existing.amount_minor,
+      currency: values.currency ?? existing.currency,
+      effectiveFrom:
+        values.effectiveFrom ?? existing.effective_from.toISOString(),
+      priority: values.priority ?? existing.priority,
+      ...(effectiveTo ? { effectiveTo } : {}),
+    };
+    const validated = pricingDocument(
+      merged,
+      existing.created_at,
+      existing._id,
+    );
+    const updated = await input.repository.updatePricingRule(
+      id,
+      courtId,
+      {
+        name: validated.name,
+        days_of_week: validated.days_of_week,
+        starts_time: validated.starts_time,
+        ends_time: validated.ends_time,
+        amount_minor: validated.amount_minor,
+        currency: validated.currency,
+        effective_from: validated.effective_from,
+        effective_to: validated.effective_to,
+        priority: validated.priority,
+        status: values.status ?? existing.status,
+        updated_at: now(),
+      },
+    );
+    if (!updated) {
+      throw notFound('PRICING_RULE_NOT_FOUND', 'Pricing rule was not found');
+    }
+    return presentPricing(updated);
+  }
+
+  async function generateFixedSlots(
+    values: Parameters<VenueOperationsService['generateFixedSlots']>[0],
+  ) {
+    const court = await scopedCourt(values, 'MANAGE_AVAILABILITY');
+    if (
+      court.status !== 'ACTIVE' ||
+      !['FIXED_SLOT', 'BOTH'].includes(court.booking_mode)
+    ) {
+      return { created: 0 };
+    }
+    const venue = await input.venueRepository.findById(oid(values.venueId));
+    if (!venue || venue.status !== 'ACTIVE') {
+      return { created: 0 };
+    }
+    const dates = dateRange(values.dateFrom, values.dateTo, 31);
+    const rules = (await input.repository.listPricingRules(court._id))
+      .filter((rule) => rule.status === 'ACTIVE')
+      .sort((a, b) => b.priority - a.priority);
+    const timestamp = now();
+    const slots: SlotDocument[] = [];
+    for (const date of dates) {
+      const day = isoDay(date);
+      const hours = court.operating_hours.find(
+        (item) => item.day_of_week === day,
+      );
+      if (!hours) continue;
+      let cursor = zonedToUtc(date, hours.opens_at, court.timezone);
+      const close = zonedToUtc(date, hours.closes_at, court.timezone);
+      while (
+        cursor.getTime() + court.min_booking_minutes * 60_000 <=
+        close.getTime()
+      ) {
+        const localTime = formatTime(cursor, court.timezone);
+        const rule = rules.find(
+          (candidate) =>
+            candidate.days_of_week.includes(day) &&
+            localTime >= candidate.starts_time &&
+            localTime < candidate.ends_time &&
+            cursor >= candidate.effective_from &&
+            (!candidate.effective_to || cursor < candidate.effective_to),
+        );
+        if (rule) {
+          const endsAt = new Date(
+            cursor.getTime() + court.min_booking_minutes * 60_000,
+          );
+          slots.push({
+            _id: new ObjectId(),
+            court_id: court._id,
+            environment: venue.environment,
+            booking_mode: 'FIXED_SLOT',
+            starts_at: cursor,
+            ends_at: endsAt,
+            price_amount_minor: rule.amount_minor,
+            currency: 'INR',
+            status: 'AVAILABLE',
+            hold_id: null,
+            hold_partner_id: null,
+            hold_expires_at: null,
+            hold_created_at: null,
+            generation_source: 'OWNER_ROLLING_GENERATION',
+            audit_history: [{
+              event_type: 'SLOT_GENERATED',
+              actor_type: 'VENUE_OWNER',
+              actor_id: oid(values.actorOwnerId),
+              previous_status: null,
+              new_status: 'AVAILABLE',
+              reason: 'Rolling inventory generation',
+              correlation_id: values.correlationId,
+              occurred_at: timestamp,
+            }],
+            version: 1,
+            created_at: timestamp,
+            updated_at: timestamp,
+          });
+          cursor = endsAt;
+        } else {
+          cursor = new Date(
+            cursor.getTime() + court.booking_increment_minutes * 60_000,
+          );
+        }
+      }
+    }
+    if (slots.length === 0) {
+      return { created: 0 };
+    }
+    const existingInventory = await input.repository.listSlots(
+      court._id,
+      slots[0]!.starts_at,
+      slots[slots.length - 1]!.ends_at,
+    );
+    const generatable = slots.filter(
+      (slot) =>
+        !existingInventory.some(
+          (candidate) =>
+            ['HELD', 'BOOKED', 'BLOCKED', 'UNAVAILABLE'].includes(
+              candidate.status,
+            ) &&
+            candidate.starts_at < slot.ends_at &&
+            candidate.ends_at > slot.starts_at,
+        ),
+    );
+    return {
+      created: await input.repository.bulkUpsertSlots(generatable),
+    };
+  }
+
+  async function listInventory(
+    values: Parameters<VenueOperationsService['listInventory']>[0],
+  ) {
+    await scopedCourt(values, 'MANAGE_AVAILABILITY');
+    return (
+      await input.repository.listSlots(
+        oid(values.courtId),
+        date(values.from, 'from'),
+        date(values.to, 'to'),
+      )
+    ).map(presentSlot);
+  }
+
+  async function blockAvailability(
+    values: Parameters<VenueOperationsService['blockAvailability']>[0],
+  ) {
+    const court = await scopedCourt(values, 'MANAGE_AVAILABILITY');
+    const reason = required(values.reason, 'reason');
+    if (values.slotId) {
+      if (!values.slotVersion) {
+        throw invalid('SLOT_VERSION_REQUIRED', 'Slot version is required');
+      }
+      const updated = await input.repository.updateFixedSlot({
+        slotId: oid(values.slotId),
+        courtId: court._id,
+        expectedVersion: values.slotVersion,
+        fromStatus: 'AVAILABLE',
+        toStatus: 'BLOCKED',
+        actorOwnerId: oid(values.actorOwnerId),
+        reason,
+        correlationId: values.correlationId,
+        now: now(),
+      });
+      if (!updated) {
+        throw conflict(
+          'SLOT_BLOCK_CONFLICT',
+          'Slot is held, booked, blocked, or stale',
+        );
+      }
+      return presentSlot(updated);
+    }
+    if (
+      !values.startsAt ||
+      !values.endsAt ||
+      values.courtVersion === undefined
+    ) {
+      throw invalid(
+        'OPEN_BLOCK_FIELDS_REQUIRED',
+        'Open-time blocks require start, end, and Court version',
+      );
+    }
+    if (!['OPEN_TIME', 'BOTH'].includes(court.booking_mode)) {
+      throw conflict(
+        'COURT_MODE_NOT_ALLOWED',
+        'Court does not allow open-time inventory',
+      );
+    }
+    const startsAt = date(values.startsAt, 'startsAt');
+    const endsAt = date(values.endsAt, 'endsAt');
+    validateInterval(court, startsAt, endsAt);
+    const venue = await input.venueRepository.findById(oid(values.venueId));
+    if (!venue) throw notFound('VENUE_NOT_FOUND', 'Venue was not found');
+    const timestamp = now();
+    const slot: SlotDocument = {
+      _id: new ObjectId(),
+      court_id: court._id,
+      environment: venue.environment,
+      booking_mode: 'OPEN_TIME',
+      starts_at: startsAt,
+      ends_at: endsAt,
+      price_amount_minor: 0,
+      currency: 'INR',
+      status: 'BLOCKED',
+      hold_id: null,
+      hold_partner_id: null,
+      hold_expires_at: null,
+      hold_created_at: null,
+      generation_source: 'OWNER_MANUAL_BLOCK',
+      audit_history: [{
+        event_type: 'SLOT_BLOCKED',
+        actor_type: 'VENUE_OWNER',
+        actor_id: oid(values.actorOwnerId),
+        previous_status: null,
+        new_status: 'BLOCKED',
+        reason,
+        correlation_id: values.correlationId,
+        occurred_at: timestamp,
+      }],
+      version: 1,
+      created_at: timestamp,
+      updated_at: timestamp,
+    };
+    await input.database.withTransaction(async ({ session }) => {
+      const locked = await input.repository.lockCourtForInventory({
+        courtId: court._id,
+        venueId: oid(values.venueId),
+        expectedVersion: values.courtVersion!,
+        actorOwnerId: oid(values.actorOwnerId),
+        correlationId: values.correlationId,
+        now: timestamp,
+        session,
+      });
+      if (!locked) {
+        throw conflict(
+          'COURT_VERSION_CONFLICT',
+          'Court inventory changed concurrently',
+        );
+      }
+      const overlap = await input.repository.findOverlap(
+        court._id,
+        venue.environment,
+        startsAt,
+        endsAt,
+        session,
+      );
+      if (overlap) {
+        throw conflict(
+          'INVENTORY_OVERLAP',
+          'The interval overlaps unavailable inventory',
+        );
+      }
+      await input.repository.insertOpenBlock(slot, session);
+    });
+    return presentSlot(slot);
+  }
+
+  async function releaseAvailability(
+    values: Parameters<VenueOperationsService['releaseAvailability']>[0],
+  ) {
+    await scopedCourt(values, 'MANAGE_AVAILABILITY');
+    const slot = await input.repository.findSlot(
+      oid(values.slotId),
+      oid(values.courtId),
+    );
+    if (!slot || slot.status !== 'BLOCKED') {
+      throw conflict(
+        'SLOT_RELEASE_CONFLICT',
+        'Only blocked inventory can be released',
+      );
+    }
+    if (slot.booking_mode === 'OPEN_TIME') {
+      const deleted = await input.repository.deleteOpenBlock({
+        slotId: slot._id,
+        courtId: slot.court_id,
+        expectedVersion: values.expectedVersion,
+      });
+      if (!deleted) {
+        throw conflict('SLOT_VERSION_CONFLICT', 'Slot changed concurrently');
+      }
+      return;
+    }
+    const updated = await input.repository.updateFixedSlot({
+      slotId: slot._id,
+      courtId: slot.court_id,
+      expectedVersion: values.expectedVersion,
+      fromStatus: 'BLOCKED',
+      toStatus: 'AVAILABLE',
+      actorOwnerId: oid(values.actorOwnerId),
+      reason: required(values.reason, 'reason'),
+      correlationId: values.correlationId,
+      now: now(),
+    });
+    if (!updated) {
+      throw conflict('SLOT_VERSION_CONFLICT', 'Slot changed concurrently');
+    }
+    return presentSlot(updated);
+  }
+
+  async function getContent(
+    values: Parameters<VenueOperationsService['getContent']>[0],
+  ) {
+    await input.ownerAccessService.requireVenueMembership(
+      values.actorOwnerId,
+      values.venueId,
+    );
+    const content = await input.repository.getContent(oid(values.venueId));
+    if (!content) {
+      return { venueId: values.venueId, content: {}, version: 0 };
+    }
+    return presentContent(content);
+  }
+
+  async function saveContent(
+    values: Parameters<VenueOperationsService['saveContent']>[0],
+  ) {
+    await input.ownerAccessService.requirePermission(
+      values.actorOwnerId,
+      values.venueId,
+      'MANAGE_VENUE',
+    );
+    validateContent(values.content);
+    const venueId = oid(values.venueId);
+    const existing = await input.repository.getContent(venueId);
+    if (existing && values.expectedVersion === undefined) {
+      throw conflict(
+        'CONTENT_VERSION_REQUIRED',
+        'Content version is required for updates',
+      );
+    }
+    if (!existing && values.expectedVersion !== undefined) {
+      throw conflict(
+        'CONTENT_VERSION_CONFLICT',
+        'Venue content does not exist yet',
+      );
+    }
+    const saved = await input.repository.saveContent({
+      venueId,
+      ...(values.expectedVersion !== undefined
+        ? { expectedVersion: values.expectedVersion }
+        : {}),
+      content: values.content,
+      actorOwnerId: oid(values.actorOwnerId),
+      now: now(),
+    });
+    if (!saved) {
+      throw conflict(
+        'CONTENT_VERSION_CONFLICT',
+        'Venue content changed concurrently',
+      );
+    }
+    return presentContent(saved);
+  }
+
+  async function addPayoutAccount(
+    values: Parameters<VenueOperationsService['addPayoutAccount']>[0],
+  ) {
+    await input.ownerAccessService.requirePermission(
+      values.actorOwnerId,
+      values.venueId,
+      'VIEW_FINANCE',
+    );
+    if (
+      !/^[0-9]{4}$/.test(values.accountLast4) ||
+      values.vaultAccountToken.trim().length < 12 ||
+      !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(values.ifscCode.toUpperCase())
+    ) {
+      throw invalid(
+        'INVALID_PAYOUT_ACCOUNT',
+        'Tokenized payout-account metadata is invalid',
+      );
+    }
+    const timestamp = now();
+    const account: VenuePayoutAccountDocument = {
+      _id: new ObjectId(),
+      venue_id: oid(values.venueId),
+      account_holder_name: required(
+        values.accountHolderName,
+        'accountHolderName',
+      ),
+      vault_provider: required(values.vaultProvider, 'vaultProvider'),
+      vault_account_token: values.vaultAccountToken.trim(),
+      account_last4: values.accountLast4,
+      bank_name: required(values.bankName, 'bankName'),
+      ifsc_code: values.ifscCode.toUpperCase(),
+      status: 'PENDING',
+      verified_by: null,
+      verified_at: null,
+      verification_failure_reason: null,
+      created_at: timestamp,
+      updated_at: timestamp,
+    };
+    try {
+      await input.repository.insertPayoutAccount(account);
+    } catch (error) {
+      if (duplicate(error)) {
+        throw conflict(
+          'PAYOUT_ACCOUNT_ALREADY_EXISTS',
+          'This tokenized payout account already exists',
+        );
+      }
+      throw error;
+    }
+    return presentPayout(account);
+  }
+
+  async function listPayoutAccounts(
+    values: Parameters<VenueOperationsService['listPayoutAccounts']>[0],
+  ) {
+    await input.ownerAccessService.requirePermission(
+      values.actorOwnerId,
+      values.venueId,
+      'VIEW_FINANCE',
+    );
+    return (
+      await input.repository.listPayoutAccounts(oid(values.venueId))
+    ).map(presentPayout);
+  }
+
+  async function searchAvailability(
+    values: Parameters<VenueOperationsService['searchAvailability']>[0],
+  ) {
+    const inventory = await input.repository.listSlots(
+      oid(values.courtId),
+      values.from,
+      values.to,
+    );
+    return inventory
+      .filter(
+        (slot) =>
+          slot.status === 'AVAILABLE' &&
+          !inventory.some(
+            (candidate) =>
+              !candidate._id.equals(slot._id) &&
+              ['HELD', 'BOOKED', 'BLOCKED', 'UNAVAILABLE'].includes(
+                candidate.status,
+              ) &&
+              candidate.starts_at < slot.ends_at &&
+              candidate.ends_at > slot.starts_at,
+          ),
+      )
+      .map(presentSlot);
+  }
+
+  return {
+    createPricingRule,
+    listPricingRules,
+    updatePricingRule,
+    generateFixedSlots,
+    listInventory,
+    blockAvailability,
+    releaseAvailability,
+    getContent,
+    saveContent,
+    addPayoutAccount,
+    listPayoutAccounts,
+    searchAvailability,
+  };
+}
+
+function pricingDocument(
+  input: PricingInput,
+  createdAt: Date,
+  id = new ObjectId(),
+): PricingRuleDocument {
+  const days = [...new Set(input.daysOfWeek)].sort();
+  if (
+    days.length === 0 ||
+    days.some((day) => !Number.isInteger(day) || day < 1 || day > 7) ||
+    !time(input.startsTime) ||
+    !time(input.endsTime) ||
+    input.startsTime >= input.endsTime ||
+    !Number.isSafeInteger(input.amountMinor) ||
+    input.amountMinor < 0 ||
+    input.currency !== 'INR' ||
+    !Number.isInteger(input.priority)
+  ) {
+    throw invalid('INVALID_PRICING_RULE', 'Pricing rule is invalid');
+  }
+  const from = date(input.effectiveFrom, 'effectiveFrom');
+  const to = input.effectiveTo
+    ? date(input.effectiveTo, 'effectiveTo')
+    : null;
+  if (to && to <= from) {
+    throw invalid(
+      'INVALID_PRICING_EFFECTIVE_RANGE',
+      'Pricing effective end must follow its start',
+    );
+  }
+  return {
+    _id: id,
+    court_id: oid(input.courtId),
+    name: required(input.name, 'name'),
+    days_of_week: days,
+    starts_time: input.startsTime,
+    ends_time: input.endsTime,
+    amount_minor: input.amountMinor,
+    currency: 'INR',
+    effective_from: from,
+    effective_to: to,
+    priority: input.priority,
+    status: 'ACTIVE',
+    created_at: createdAt,
+    updated_at: createdAt,
+  };
+}
+
+function validateInterval(
+  court: CourtDocument,
+  startsAt: Date,
+  endsAt: Date,
+): void {
+  const minutes = (endsAt.getTime() - startsAt.getTime()) / 60_000;
+  const localStart = formatTime(startsAt, court.timezone);
+  const localEnd = formatTime(endsAt, court.timezone);
+  const hours = court.operating_hours.find(
+    (value) => value.day_of_week === isoDay(localDate(startsAt, court.timezone)),
+  );
+  if (
+    endsAt <= startsAt ||
+    minutes < court.min_booking_minutes ||
+    minutes % court.booking_increment_minutes !== 0 ||
+    !hours ||
+    localStart < hours.opens_at ||
+    localEnd > hours.closes_at
+  ) {
+    throw invalid(
+      'INVALID_AVAILABILITY_INTERVAL',
+      'Interval violates Court duration, increment, or operating hours',
+    );
+  }
+}
+
+function dateRange(from: string, to: string, maxDays: number): string[] {
+  const start = parseDateOnly(from);
+  const end = parseDateOnly(to);
+  const count = Math.floor((end.getTime() - start.getTime()) / 86_400_000) + 1;
+  if (count < 1 || count > maxDays) {
+    throw invalid('INVALID_DATE_RANGE', `Date range must be 1-${maxDays} days`);
+  }
+  return Array.from({ length: count }, (_, index) =>
+    new Date(start.getTime() + index * 86_400_000)
+      .toISOString()
+      .slice(0, 10),
+  );
+}
+
+function parseDateOnly(value: string): Date {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw invalid('INVALID_DATE', 'Date must use YYYY-MM-DD');
+  }
+  const result = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(result.getTime()) || result.toISOString().slice(0, 10) !== value) {
+    throw invalid('INVALID_DATE', 'Date is invalid');
+  }
+  return result;
+}
+
+function zonedToUtc(day: string, value: string, timezone: string): Date {
+  const [year, month, datePart] = day.split('-').map(Number);
+  const [hour, minute] = value.split(':').map(Number);
+  const desired = Date.UTC(year!, month! - 1, datePart!, hour!, minute!);
+  let instant = desired;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat('en-CA', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+      })
+        .formatToParts(new Date(instant))
+        .filter((part) => part.type !== 'literal')
+        .map((part) => [part.type, Number(part.value)]),
+    );
+    const actual = Date.UTC(
+      parts['year']!,
+      parts['month']! - 1,
+      parts['day']!,
+      parts['hour']!,
+      parts['minute']!,
+    );
+    instant += desired - actual;
+  }
+  return new Date(instant);
+}
+
+function localDate(value: Date, timezone: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(value);
+}
+
+function formatTime(value: Date, timezone: string): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: timezone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(value);
+}
+
+function isoDay(day: string): number {
+  const value = new Date(`${day}T00:00:00.000Z`).getUTCDay();
+  return value === 0 ? 7 : value;
+}
+
+function validateContent(content: Document): void {
+  if (
+    !content ||
+    Array.isArray(content) ||
+    Buffer.byteLength(JSON.stringify(content), 'utf8') > 64 * 1024
+  ) {
+    throw invalid('INVALID_VENUE_CONTENT', 'Venue content must be an object under 64 KB');
+  }
+  const inspect = (value: unknown): void => {
+    if (!value || typeof value !== 'object') return;
+    for (const [key, child] of Object.entries(value)) {
+      if (key.startsWith('$') || key.includes('.')) {
+        throw invalid('INVALID_VENUE_CONTENT', 'Venue content contains an unsafe key');
+      }
+      inspect(child);
+    }
+  };
+  inspect(content);
+}
+
+function presentPricing(value: PricingRuleDocument) {
+  return {
+    id: value._id.toHexString(),
+    courtId: value.court_id.toHexString(),
+    name: value.name,
+    daysOfWeek: value.days_of_week,
+    startsTime: value.starts_time,
+    endsTime: value.ends_time,
+    amountMinor: value.amount_minor,
+    currency: value.currency,
+    effectiveFrom: value.effective_from.toISOString(),
+    effectiveTo: value.effective_to?.toISOString() ?? null,
+    priority: value.priority,
+    status: value.status,
+  };
+}
+
+function presentSlot(value: SlotDocument) {
+  return {
+    id: value._id.toHexString(),
+    courtId: value.court_id.toHexString(),
+    environment: value.environment,
+    bookingMode: value.booking_mode,
+    startsAt: value.starts_at.toISOString(),
+    endsAt: value.ends_at.toISOString(),
+    priceAmountMinor: value.price_amount_minor,
+    currency: value.currency,
+    status: value.status,
+    version: value.version,
+  };
+}
+
+function presentContent(value: VenueContentDocument) {
+  return {
+    id: value._id.toHexString(),
+    venueId: value.venue_id.toHexString(),
+    content: value.content,
+    version: value.version,
+    updatedAt: value.updated_at.toISOString(),
+  };
+}
+
+function presentPayout(value: VenuePayoutAccountDocument) {
+  return {
+    id: value._id.toHexString(),
+    venueId: value.venue_id.toHexString(),
+    accountHolderName: value.account_holder_name,
+    vaultProvider: value.vault_provider,
+    accountLast4: value.account_last4,
+    bankName: value.bank_name,
+    ifscCode: value.ifsc_code,
+    status: value.status,
+    verifiedAt: value.verified_at?.toISOString() ?? null,
+  };
+}
+
+function oid(value: string): ObjectId {
+  if (!ObjectId.isValid(value)) throw invalid('INVALID_ID', 'Identifier is invalid');
+  return new ObjectId(value);
+}
+function date(value: string, field: string): Date {
+  const result = new Date(value);
+  if (Number.isNaN(result.getTime())) throw invalid('INVALID_DATE', `${field} is invalid`);
+  return result;
+}
+function time(value: string): boolean {
+  return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value);
+}
+function required(value: string, field: string): string {
+  const result = value.trim();
+  if (!result) throw invalid('FIELD_REQUIRED', `${field} is required`);
+  return result;
+}
+function invalid(code: string, message: string): AppError {
+  return new AppError({ code, message, statusCode: 400 });
+}
+function conflict(code: string, message: string): AppError {
+  return new AppError({ code, message, statusCode: 409 });
+}
+function notFound(code: string, message: string): AppError {
+  return new AppError({ code, message, statusCode: 404 });
+}
+function duplicate(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 11_000;
+}

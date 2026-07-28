@@ -1,0 +1,334 @@
+import { ObjectId, type ClientSession } from 'mongodb';
+
+import type { AppConfig } from '../../../config/env.js';
+import { AppError } from '../../../shared/errors/app-error.js';
+import type { MediaStorage } from '../../../shared/media/cloudinary-media-storage.js';
+import type { KycRepository } from './kyc.repository.js';
+import type {
+  KycStatus,
+  KycSubjectType,
+  KycVerificationDocument,
+} from './kyc.types.js';
+
+export interface KycService {
+  createDraft(input: {
+    subjectType: KycSubjectType;
+    subjectId: string;
+    verificationType: string;
+  }): Promise<ReturnType<typeof presentVerification>>;
+  uploadDocument(input: {
+    verificationId: string;
+    subjectId: string;
+    documentType: string;
+    filename: string;
+    mimeType: string;
+    buffer: Buffer;
+  }): Promise<{ documentId: string; status: 'ACTIVE' }>;
+  submit(input: {
+    verificationId: string;
+    subjectId: string;
+  }): Promise<void>;
+  getCurrent(input: {
+    subjectType: KycSubjectType;
+    subjectId: string;
+    verificationType: string;
+  }): Promise<ReturnType<typeof presentVerification>>;
+  isVerified(
+    subjectType: KycSubjectType,
+    subjectId: string,
+    verificationType: string,
+    session?: ClientSession,
+  ): Promise<boolean>;
+  review(input: {
+    verificationId: string;
+    adminId: string;
+    status: Extract<KycStatus, 'VERIFIED' | 'REJECTED'>;
+    rejectionReason?: string;
+    expiresAt?: string;
+  }): Promise<void>;
+}
+
+export function createKycService(input: {
+  repository: KycRepository;
+  mediaStorage: MediaStorage;
+  config: AppConfig['kyc'];
+  now?: () => Date;
+}): KycService {
+  const now = input.now ?? (() => new Date());
+
+  async function createDraft(
+    values: Parameters<KycService['createDraft']>[0],
+  ): ReturnType<KycService['createDraft']> {
+    const subjectId = toObjectId(values.subjectId);
+    const verificationType = normalizeType(values.verificationType);
+    const current = await input.repository.findCurrent(
+      values.subjectType,
+      subjectId,
+      verificationType,
+    );
+
+    if (current?.status === 'DRAFT') {
+      return presentVerification(current);
+    }
+
+    if (
+      current &&
+      ['SUBMITTED', 'IN_REVIEW'].includes(current.status)
+    ) {
+      throw new AppError({
+        code: 'KYC_ALREADY_IN_PROGRESS',
+        message: 'The current KYC verification is already being reviewed',
+        statusCode: 409,
+      });
+    }
+
+    if (
+      current?.status === 'VERIFIED' &&
+      (!current.expires_at || current.expires_at > now())
+    ) {
+      throw new AppError({
+        code: 'KYC_ALREADY_VERIFIED',
+        message: 'The current KYC verification is already valid',
+        statusCode: 409,
+      });
+    }
+
+    const verification = await input.repository.createDraft({
+      subjectType: values.subjectType,
+      subjectId,
+      verificationType,
+      now: now(),
+    });
+    return presentVerification(verification);
+  }
+
+  async function uploadDocument(
+    values: Parameters<KycService['uploadDocument']>[0],
+  ): ReturnType<KycService['uploadDocument']> {
+    if (
+      !input.config.allowedMimeTypes.includes(
+        values.mimeType.toLowerCase(),
+      ) ||
+      values.buffer.length > input.config.maxFileBytes
+    ) {
+      throw new AppError({
+        code: 'UNSUPPORTED_KYC_FILE',
+        message: 'The KYC file type or size is not supported',
+        statusCode: 400,
+      });
+    }
+
+    const verification = await input.repository.findVerification(
+      toObjectId(values.verificationId),
+    );
+
+    if (
+      !verification ||
+      !verification.subject_id.equals(toObjectId(values.subjectId)) ||
+      verification.status !== 'DRAFT' ||
+      !verification.is_current
+    ) {
+      throw verificationNotEditable();
+    }
+
+    const uploaded = await input.mediaStorage.uploadBuffer(values.buffer, {
+      access: 'authenticated',
+      folder: `turf-gds/kyc/${verification.subject_type.toLowerCase()}/${verification.subject_id.toHexString()}`,
+      resourceType: 'auto',
+      tags: ['kyc', verification.verification_type],
+    });
+    const documentId = new ObjectId();
+    const timestamp = now();
+
+    try {
+      await input.repository.insertDocument({
+        _id: documentId,
+        kyc_verification_id: verification._id,
+        document_type: normalizeType(values.documentType),
+        file: {
+          provider: 'CLOUDINARY',
+          storage_key: uploaded.publicId,
+          resource_type: uploaded.resourceType,
+          delivery_type: uploaded.deliveryType,
+          format: uploaded.format ?? null,
+          bytes: uploaded.bytes,
+          checksum: uploaded.checksum ?? null,
+          mime_type: values.mimeType.toLowerCase(),
+          original_filename: values.filename.slice(0, 255),
+          secure_url: uploaded.secureUrl,
+        },
+        status: 'ACTIVE',
+        created_at: timestamp,
+        updated_at: timestamp,
+      });
+    } catch (error) {
+      await input.mediaStorage
+        .delete(uploaded.publicId, toDeletableResource(uploaded.resourceType))
+        .catch(() => undefined);
+      throw error;
+    }
+
+    return { documentId: documentId.toHexString(), status: 'ACTIVE' };
+  }
+
+  async function submit(
+    values: Parameters<KycService['submit']>[0],
+  ): Promise<void> {
+    const verificationId = toObjectId(values.verificationId);
+    const documentCount =
+      await input.repository.countActiveDocuments(verificationId);
+
+    if (documentCount === 0) {
+      throw new AppError({
+        code: 'KYC_DOCUMENT_REQUIRED',
+        message: 'At least one active document is required',
+        statusCode: 409,
+      });
+    }
+
+    const submitted = await input.repository.submit(
+      verificationId,
+      toObjectId(values.subjectId),
+      now(),
+    );
+
+    if (!submitted) {
+      throw verificationNotEditable();
+    }
+  }
+
+  async function getCurrent(
+    values: Parameters<KycService['getCurrent']>[0],
+  ): ReturnType<KycService['getCurrent']> {
+    const verification = await input.repository.findCurrent(
+      values.subjectType,
+      toObjectId(values.subjectId),
+      normalizeType(values.verificationType),
+    );
+
+    if (!verification) {
+      throw new AppError({
+        code: 'KYC_NOT_FOUND',
+        message: 'Current KYC verification was not found',
+        statusCode: 404,
+      });
+    }
+
+    return presentVerification(verification);
+  }
+
+  async function isVerified(
+    subjectType: KycSubjectType,
+    subjectId: string,
+    verificationType: string,
+    session?: ClientSession,
+  ): Promise<boolean> {
+    const verification = await input.repository.findCurrent(
+      subjectType,
+      toObjectId(subjectId),
+      normalizeType(verificationType),
+      session,
+    );
+    return (
+      verification?.status === 'VERIFIED' &&
+      (!verification.expires_at || verification.expires_at > now())
+    );
+  }
+
+  async function review(
+    values: Parameters<KycService['review']>[0],
+  ): Promise<void> {
+    if (values.status === 'REJECTED' && !values.rejectionReason?.trim()) {
+      throw new AppError({
+        code: 'REJECTION_REASON_REQUIRED',
+        message: 'A rejection reason is required',
+        statusCode: 400,
+      });
+    }
+
+    const expiresAt = values.expiresAt
+      ? new Date(values.expiresAt)
+      : null;
+
+    if (
+      expiresAt &&
+      (Number.isNaN(expiresAt.getTime()) || expiresAt <= now())
+    ) {
+      throw new AppError({
+        code: 'INVALID_KYC_EXPIRY',
+        message: 'KYC expiry must be a valid future date',
+        statusCode: 400,
+      });
+    }
+
+    const reviewed = await input.repository.review({
+      id: toObjectId(values.verificationId),
+      adminId: toObjectId(values.adminId),
+      status: values.status,
+      rejectionReason: values.rejectionReason?.trim() ?? null,
+      expiresAt,
+      now: now(),
+    });
+
+    if (!reviewed) {
+      throw new AppError({
+        code: 'KYC_REVIEW_NOT_ALLOWED',
+        message: 'This verification cannot be reviewed',
+        statusCode: 409,
+      });
+    }
+  }
+
+  return {
+    createDraft,
+    uploadDocument,
+    submit,
+    getCurrent,
+    isVerified,
+    review,
+  };
+}
+
+function presentVerification(verification: KycVerificationDocument) {
+  return {
+    id: verification._id.toHexString(),
+    subjectType: verification.subject_type,
+    subjectId: verification.subject_id.toHexString(),
+    verificationType: verification.verification_type,
+    status: verification.status,
+    isCurrent: verification.is_current,
+    submittedAt: verification.submitted_at?.toISOString() ?? null,
+    reviewedAt: verification.reviewed_at?.toISOString() ?? null,
+    rejectionReason: verification.rejection_reason,
+    expiresAt: verification.expires_at?.toISOString() ?? null,
+  };
+}
+
+function normalizeType(value: string): string {
+  return value.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+}
+
+function toObjectId(value: string): ObjectId {
+  if (!ObjectId.isValid(value)) {
+    throw new AppError({
+      code: 'INVALID_ID',
+      message: 'A supplied identifier is invalid',
+      statusCode: 400,
+    });
+  }
+  return new ObjectId(value);
+}
+
+function verificationNotEditable(): AppError {
+  return new AppError({
+    code: 'KYC_NOT_EDITABLE',
+    message: 'The KYC verification is not an editable current draft',
+    statusCode: 409,
+  });
+}
+
+function toDeletableResource(
+  value: string,
+): 'image' | 'video' | 'raw' {
+  return value === 'video' || value === 'raw' ? value : 'image';
+}

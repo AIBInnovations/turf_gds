@@ -12,13 +12,16 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test test/**/*.test.ts"
+    "test": "tsx --test test/**/*.test.ts",
+    "admin:create": "tsx src/scripts/create-admin.ts"
   },
   "dependencies": {
+    "@fastify/multipart": "^10.1.0",
     "cloudinary": "^2.10.0",
     "dotenv": "^17.4.2",
     "fastify": "^5.10.0",
     "fastify-plugin": "^6.0.0",
+    "fastify-raw-body": "^5.0.0",
     "mongodb": "^7.5.0"
   },
   "devDependencies": {

@@ -31,6 +31,14 @@ export interface AppConfig {
     maxSessions: number;
     maxLoginAttempts: number;
     lockMinutes: number;
+    adminAccessTokenSecret: string;
+    adminAccessTokenTtlMinutes: number;
+    partnerCredentialMasterSecret: string;
+    partnerHmacMaxSkewSeconds: number;
+  };
+  kyc: {
+    maxFileBytes: number;
+    allowedMimeTypes: string[];
   };
   cloudinary: {
     cloudName: string;
@@ -61,6 +69,16 @@ function readRequired(name: string, value: string | undefined): string {
   }
 
   return value.trim();
+}
+
+function readSecret(name: string, value: string | undefined): string {
+  const secret = readRequired(name, value);
+
+  if (secret.length < 32) {
+    throw new Error(`${name} must contain at least 32 characters`);
+  }
+
+  return secret;
 }
 
 function readInteger(
@@ -155,6 +173,44 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
         1,
         1_440,
       ),
+      adminAccessTokenSecret: readSecret(
+        'ADMIN_ACCESS_TOKEN_SECRET',
+        env.ADMIN_ACCESS_TOKEN_SECRET,
+      ),
+      adminAccessTokenTtlMinutes: readInteger(
+        'ADMIN_ACCESS_TOKEN_TTL_MINUTES',
+        env.ADMIN_ACCESS_TOKEN_TTL_MINUTES,
+        60,
+        5,
+        1_440,
+      ),
+      partnerCredentialMasterSecret: readSecret(
+        'PARTNER_CREDENTIAL_MASTER_SECRET',
+        env.PARTNER_CREDENTIAL_MASTER_SECRET,
+      ),
+      partnerHmacMaxSkewSeconds: readInteger(
+        'PARTNER_HMAC_MAX_SKEW_SECONDS',
+        env.PARTNER_HMAC_MAX_SKEW_SECONDS,
+        300,
+        30,
+        3_600,
+      ),
+    },
+    kyc: {
+      maxFileBytes: readInteger(
+        'KYC_MAX_FILE_BYTES',
+        env.KYC_MAX_FILE_BYTES,
+        10 * 1024 * 1024,
+        1_024,
+        50 * 1024 * 1024,
+      ),
+      allowedMimeTypes: (
+        env.KYC_ALLOWED_MIME_TYPES ??
+        'image/jpeg,image/png,application/pdf'
+      )
+        .split(',')
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean),
     },
     cloudinary: {
       cloudName: readRequired(
