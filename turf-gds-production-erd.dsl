@@ -102,6 +102,8 @@ Partner [icon: briefcase, color: blue] {
   email string unique
   status enum {ONBOARDING, SANDBOX, ACTIVE, SUSPENDED}
   integration_review_status enum {NOT_STARTED, PENDING, PASSED, FAILED}
+  sandbox_approved_by objectId ref AdminUser nullable
+  sandbox_approved_at date nullable
   production_approved_by objectId ref AdminUser nullable
   production_approved_at date nullable
   created_at date
@@ -114,6 +116,8 @@ PartnerApiKey [icon: key, color: blue] {
   environment enum {SANDBOX, PRODUCTION}
   key_prefix string unique
   secret_hash string
+  signing_secret_hash string
+  scopes string[]
   status enum {ACTIVE, REVOKED}
   last_used_at date nullable
   expires_at date nullable

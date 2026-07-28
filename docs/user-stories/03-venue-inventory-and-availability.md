@@ -146,7 +146,7 @@ Acceptance Criteria:
 Primary Module: `venue`
 Supporting Modules: `identity`, `contracts`, `shared/redis`
 Data: `Venue`, `Court`, `Slot`, `Booking`, `PricingRule`
-API/UI: `GET /v1/venues/search`, `GET /v1/venues/{id}/availability`
+API/UI: `GET /api/v1/venues/search`, `GET /api/v1/venues/{id}/availability`
 Priority: `P0`
 Notes: Partner contracts may restrict which venues a partner can book.
 

@@ -6,6 +6,12 @@ Source artifacts:
 - Production DB ERD: `../../turf-gds-production-erd.dsl`
 - Module architecture: `../turf-gds-user-centered-module-architecture.md`
 
+Conflict resolution: the repository's `turf-gds-production-erd.dsl` is the
+canonical persistence definition for v0.9. The SRS defines system constraints,
+the module architecture defines ownership, and user stories define observable
+behavior. A secondary artifact must be updated when it disagrees with this
+combined model; it must not introduce a parallel schema.
+
 Business modules:
 
 - `identity`
@@ -27,7 +33,7 @@ Module ownership guide:
 
 | Module | Main story areas |
 |---|---|
-| `identity` | Venue User and Booking Partner onboarding, authentication, authorization, KYC, API keys, and webhook endpoint registration |
+| `identity` | Platform User, Venue User, and Booking Partner identity, authentication, authorization, KYC, API keys, usage, and webhook endpoint registration |
 | `venue` | Venues, courts, content, embedded media, pricing, fixed-slot/open-time inventory, embedded audit, and payout accounts |
 | `contracts` | Partner–venue commercial and cancellation terms |
 | `booking` | Fixed-slot, open-time, and BOTH-mode holds, confirmation, separate cancellation records, idempotency, orchestration, and embedded audit |

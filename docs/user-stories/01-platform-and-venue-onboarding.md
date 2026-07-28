@@ -102,6 +102,6 @@ Acceptance Criteria:
 Primary Module: `admin`
 Supporting Modules: `identity`, `venue`
 Data: `VenueOwner`, `Venue`, `KycVerification`, `AdminUser`
-API/UI: Admin onboarding console
+API/UI: Admin onboarding console; `POST /api/v1/admin/onboarding/venues/{venueId}/approve`
 Priority: `P0`
 Notes: Admin orchestrates Identity and Venue public capabilities; it owns no business data.

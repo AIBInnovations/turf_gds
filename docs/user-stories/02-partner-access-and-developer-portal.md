@@ -60,7 +60,7 @@ Supporting Modules: `shared/auth`, `shared/redis`, `shared/db`
 Data: `PartnerApiKey`, `ApiUsageDaily`
 API/UI: Partner API gateway middleware
 Priority: `P0`
-Notes: All partner-facing endpoints require this middleware. Usage metrics belong to observability infrastructure rather than Identity business data.
+Notes: All partner-facing endpoints require this middleware. Identity owns the persisted `ApiUsageDaily` aggregate; Shared Observability owns raw logs, traces, and operational metrics.
 
 ## US-02.04 - Webhook Endpoint Configuration
 
@@ -120,6 +120,6 @@ Acceptance Criteria:
 Primary Module: `admin`
 Supporting Modules: `identity`, `booking`, `financial-close`, `shared/observability`, `shared/db`
 Data: `Partner`, `ApiUsageDaily`, `Booking`, `Settlement`, `Invoice`
-API/UI: Developer portal reports; `GET /v1/reports/bookings`
+API/UI: Developer portal reports; `GET /api/v1/reports/bookings`
 Priority: `P1`
 Notes: Admin provides the read-only reporting composition; each business module remains the source of truth for its data. Partner reports must never expose other partners' data.

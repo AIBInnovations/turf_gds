@@ -294,3 +294,25 @@ Redis is never persistent truth.
 8. Keep webhook delivery attempts bounded and embedded in OutboxEvent.
 9. Keep dashboard notifications bounded and embedded in VenueOwner.
 10. Never mix sandbox and production data.
+
+## Implementation Folder Mapping
+
+The TypeScript modular monolith uses feature subfolders without changing the
+collection ownership above:
+
+```text
+src/modules/
+├── identity/
+│   ├── platform/    # AdminUser authentication and identity persistence
+│   ├── owner/       # Venue User authentication, sessions and memberships
+│   ├── partner/     # Booking Partner identity, credentials and webhooks
+│   ├── kyc/         # Shared Venue User and Partner verification
+│   └── shared/      # Identity request contexts and authorization hooks
+├── venue/           # Venue and inventory-owned capabilities
+└── admin/
+    └── onboarding/  # Privileged cross-module orchestration; no repositories
+```
+
+`platform` refers to the Platform User actor group. Its persisted collection is
+still `AdminUser`, as required by the SRS. The `admin` module must not contain a
+repository for `AdminUser`, Venue, KYC, or any other business collection.

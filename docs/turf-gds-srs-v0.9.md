@@ -3,6 +3,14 @@
 
 Version 0.9 - MongoDB-only persistence, reduced collections, and production outbox routing revision.
 
+### Source-Of-Truth Order
+
+For v0.9, `turf-gds-production-erd.dsl` is the canonical collection, field,
+relationship, and state definition. This SRS defines system invariants, the
+module architecture defines ownership, and the user stories define observable
+behavior. Eraser diagrams and module references are synchronized views, not
+independent sources that may introduce different collections or state names.
+
 ## 1. Persistence Decision
 
 The system uses MongoDB as the only persistent database for v1.

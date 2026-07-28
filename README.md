@@ -63,3 +63,21 @@ can use `fastify.database.db` for collections and
 `fastify.database.withTransaction(...)` for multi-document workflows. Pass the
 provided `session` into every database operation inside the transaction and do
 not run transaction operations in parallel.
+
+## Venue Owner authentication
+
+The first Identity vertical slice is available at:
+
+- `POST /api/v1/auth/venue-owners/register`
+- `POST /api/v1/auth/venue-owners/login`
+
+Registration creates `VenueOwner`, the initial `Venue`, and the OWNER
+`VenueOwnerMembership` in one MongoDB transaction. Passwords use Node.js
+`scrypt`. Login returns an opaque token once and stores only its SHA-256 hash in
+the bounded `VenueOwner.sessions` array.
+
+New owners and venues start as `PENDING` and `PENDING_APPROVAL`. Pending owners
+can log in so they can complete onboarding and KYC; suspended owners cannot.
+
+The completed Identity endpoint and authentication reference is in
+`docs/identity-api.md`.

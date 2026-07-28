@@ -56,7 +56,7 @@ Acceptance Criteria:
 Primary Module: `booking`
 Supporting Modules: `identity`, `shared/db`
 Data: `Booking`
-API/UI: `POST /v1/bookings/confirm`
+API/UI: `POST /api/v1/bookings/confirm`
 Priority: `P0`
 Notes: Partner app is Merchant of Record.
 

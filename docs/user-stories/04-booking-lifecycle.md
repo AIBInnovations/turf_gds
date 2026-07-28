@@ -20,7 +20,7 @@ Acceptance Criteria:
 Primary Module: `booking`
 Supporting Modules: `venue`, `identity`, `shared/redis`, `shared/db`
 Data: `Slot`, `Booking`, `PartnerVenueContract`
-API/UI: `POST /v1/bookings/hold`
+API/UI: `POST /api/v1/bookings/hold`
 Priority: `P0`
 Notes: Slot hold fields are durable operational state. Redis may mirror them, but MongoDB is the source of truth. TTL deletion must not be used for reusable fixed Slots.
 
@@ -45,7 +45,7 @@ Acceptance Criteria:
 Primary Module: `booking`
 Supporting Modules: `identity`, `venue`, `contracts`, `ledger`, `shared/communications`, `shared/redis`, `shared/db`
 Data: `Booking`, `ApiIdempotencyRecord`, `Slot`, `LedgerEntry`, `OutboxEvent`
-API/UI: `POST /v1/bookings/confirm`
+API/UI: `POST /api/v1/bookings/confirm`
 Priority: `P0`
 Notes: Partner is Merchant of Record; GDS does not process card payment.
 
@@ -89,7 +89,7 @@ Acceptance Criteria:
 Primary Module: `booking`
 Supporting Modules: `identity`, `venue`, `contracts`, `ledger`, `shared/communications`
 Data: `Booking`, `BookingCancellation`, `PartnerVenueContract`, `Slot`, `LedgerEntry`, `OutboxEvent`
-API/UI: `POST /v1/bookings/{id}/cancel`
+API/UI: `POST /api/v1/bookings/{id}/cancel`
 Priority: `P0`
 Notes: Cancellation must be idempotent.
 

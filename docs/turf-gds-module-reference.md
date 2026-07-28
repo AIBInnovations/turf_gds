@@ -110,6 +110,7 @@ Rules:
 
 Public capabilities:
 
+- `registerVenueOwner()`
 - `authenticate()`
 - `authenticatePartnerRequest()`
 - `requirePermission()`
@@ -154,7 +155,9 @@ Rules:
 
 Public capabilities:
 
+- `createInitialVenue()`
 - `createVenue()`
+- `approveVenue()`
 - `updateVenue()`
 - `updateCourt()`
 - `setPricingRule()`
@@ -306,6 +309,16 @@ Responsibilities:
 - Cross-module read-only reporting.
 
 Every mutation must call the public capability of the owning module.
+
+The Venue onboarding approval is one Admin-orchestrated MongoDB transaction:
+
+1. Identity verifies current Venue Owner BUSINESS KYC.
+2. Identity validates the active `OWNER` membership and activates the
+   `VenueOwner`.
+3. Venue activates the `Venue`, records `approved_by`/`approved_at`, increments
+   its version, and appends approval audit context.
+
+Admin calls Identity and Venue services; it never writes either collection.
 
 ## 5. Shared Infrastructure
 
