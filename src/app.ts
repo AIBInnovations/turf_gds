@@ -3,6 +3,19 @@ import multipart from '@fastify/multipart';
 import rawBody from 'fastify-raw-body';
 
 import { loadConfig, type AppConfig } from './config/env.js';
+import { initializeBookingPersistence } from './modules/booking/booking.persistence.js';
+import { createOwnerBookingRepository } from './modules/booking/owner-booking.repository.js';
+import { createOwnerBookingService } from './modules/booking/owner-booking.service.js';
+import { createBookingLifecycleRepository } from './modules/booking/booking-lifecycle.repository.js';
+import { createBookingLifecycleService } from './modules/booking/booking-lifecycle.service.js';
+import { initializeContractPersistence } from './modules/contracts/contract.persistence.js';
+import { initializeOutboxPersistence } from './shared/communications/outbox.persistence.js';
+import { createOutboxRepository } from './shared/communications/outbox.repository.js';
+import { initializeFinancialClosePersistence } from './modules/financial-close/financial-close.persistence.js';
+import { initializeLedgerPersistence } from './modules/ledger/ledger.persistence.js';
+import { createLedgerRepository } from './modules/ledger/ledger.repository.js';
+import { createContractRepository } from './modules/contracts/contract.repository.js';
+import { createContractService } from './modules/contracts/contract.service.js';
 import { createAdminOnboardingService } from './modules/admin/onboarding/onboarding.service.js';
 import { createAdminAuthRepository } from './modules/identity/platform/auth.repository.js';
 import { createAdminAuthService } from './modules/identity/platform/auth.service.js';
@@ -86,6 +99,11 @@ export async function buildApp(
   if (!options.database) {
     await initializeIdentityPersistence(app.database.db);
     await initializeVenuePersistence(app.database.db);
+    await initializeContractPersistence(app.database.db);
+    await initializeBookingPersistence(app.database.db);
+    await initializeLedgerPersistence(app.database.db);
+    await initializeFinancialClosePersistence(app.database.db);
+    await initializeOutboxPersistence(app.database.db);
   }
 
   const venueService = createVenueService({
@@ -141,6 +159,29 @@ export async function buildApp(
     kycService,
     authConfig: config.auth,
   });
+  const ownerBookingService = createOwnerBookingService({
+    repository: createOwnerBookingRepository(app.database),
+    ownerAccessService,
+  });
+  const bookingLifecycleService = createBookingLifecycleService({
+    repository: createBookingLifecycleRepository(app.database),
+    ledgerRepository: createLedgerRepository(app.database),
+    outboxRepository: createOutboxRepository(app.database),
+    database: app.database,
+  });
+  const holdRecoveryTimer = setInterval(() => {
+    void bookingLifecycleService.recoverExpiredHolds().catch((error: unknown) => {
+      app.log.error({ err: error }, 'Failed to recover expired Booking holds');
+    });
+  }, 60_000);
+  holdRecoveryTimer.unref();
+  app.addHook('onClose', async () => {
+    clearInterval(holdRecoveryTimer);
+  });
+  const contractService = createContractService({
+    repository: createContractRepository(app.database),
+    database: app.database,
+  });
 
   await app.register(apiV1Routes, {
     prefix: '/api/v1',
@@ -153,6 +194,9 @@ export async function buildApp(
     venueOwnerService,
     courtOwnerService,
     venueOperationsService,
+    ownerBookingService,
+    bookingLifecycleService,
+    contractService,
   });
 
   return app;

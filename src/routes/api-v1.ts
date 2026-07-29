@@ -1,5 +1,11 @@
 import type { FastifyPluginAsync } from 'fastify';
 
+import ownerBookingRoutes from '../modules/booking/owner-booking.routes.js';
+import type { OwnerBookingService } from '../modules/booking/owner-booking.service.js';
+import bookingLifecycleRoutes from '../modules/booking/booking-lifecycle.routes.js';
+import type { BookingLifecycleService } from '../modules/booking/booking-lifecycle.service.js';
+import contractRoutes from '../modules/contracts/contract.routes.js';
+import type { ContractService } from '../modules/contracts/contract.service.js';
 import adminOnboardingRoutes from '../modules/admin/onboarding/onboarding.routes.js';
 import type { AdminOnboardingService } from '../modules/admin/onboarding/onboarding.service.js';
 import kycRoutes from '../modules/identity/kyc/kyc.routes.js';
@@ -29,6 +35,9 @@ export interface ApiV1RoutesOptions {
   venueOwnerService: VenueOwnerService;
   courtOwnerService: CourtOwnerService;
   venueOperationsService: VenueOperationsService;
+  ownerBookingService: OwnerBookingService;
+  bookingLifecycleService: BookingLifecycleService;
+  contractService: ContractService;
 }
 
 const apiV1Routes: FastifyPluginAsync<ApiV1RoutesOptions> = async (
@@ -63,6 +72,17 @@ const apiV1Routes: FastifyPluginAsync<ApiV1RoutesOptions> = async (
     service: options.venueOperationsService,
     ownerAccessService: options.ownerAccessService,
   });
+  await fastify.register(ownerBookingRoutes, {
+    prefix: '/owner/venues',
+    service: options.ownerBookingService,
+    ownerAccessService: options.ownerAccessService,
+  });
+  await fastify.register(bookingLifecycleRoutes, {
+    prefix: '/bookings',
+    service: options.bookingLifecycleService,
+    partnerAccessService: options.partnerAccessService,
+    adminAuthService: options.adminAuthService,
+  });
   await fastify.register(adminAuthRoutes, {
     prefix: '/auth/admin',
     service: options.adminAuthService,
@@ -70,6 +90,11 @@ const apiV1Routes: FastifyPluginAsync<ApiV1RoutesOptions> = async (
   await fastify.register(adminOnboardingRoutes, {
     prefix: '/admin/onboarding',
     service: options.adminOnboardingService,
+    adminAuthService: options.adminAuthService,
+  });
+  await fastify.register(contractRoutes, {
+    prefix: '/admin/contracts',
+    service: options.contractService,
     adminAuthService: options.adminAuthService,
   });
   await fastify.register(kycRoutes, {
