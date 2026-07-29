@@ -78,18 +78,6 @@ version as a transactional mutex and rejects conflicting durable inventory.
 Slot audit history records the actor, state change, reason, correlation ID, and
 timestamp.
 
-## Flexible Content
-
-| Method | Route | Permission | Purpose |
-|---|---|---|---|
-| GET | `/owner/venues/:venueId/content` | Active membership | Read flexible Venue content |
-| PUT | `/owner/venues/:venueId/content` | `MANAGE_VENUE` | Create or version flexible Venue content |
-
-Content is a single document per Venue, capped at 64 KB, rejects MongoDB
-operator/path keys, and records the updating Venue Owner. Updates require the
-current content version. Public media can be uploaded through the Venue or
-Court media routes and its returned metadata embedded in content.
-
 ## Payout Accounts
 
 | Method | Route | Permission | Purpose |
@@ -101,6 +89,33 @@ The API accepts a vault token and last four digits; it never accepts, persists,
 or returns a raw account number. New accounts remain `PENDING`. Admin
 verification fields remain empty until the later Admin API phase.
 
+## Bookings
+
+| Method | Route | Permission | Purpose |
+|---|---|---|---|
+| GET | `/owner/venues/:venueId/bookings` | `VIEW_BOOKINGS` | List bookings for one scoped Venue |
+| GET | `/owner/venues/:venueId/bookings/:bookingId` | `VIEW_BOOKINGS` | Read one Venue-scoped booking and its cancellation outcome |
+
+The list accepts optional `from`, `to`, `courtId`, and `status` filters.
+`from` is inclusive and `to` is exclusive against the booking start time.
+Supported statuses are `CONFIRMED`, `CANCELLED`, `REFUND_PENDING`, `REFUNDED`,
+and `DISPUTED`.
+Pagination uses `page` (default 1) and `limit` (default 50, maximum 100), and
+returns `items` plus page, limit, total, and page-count metadata.
+
+Both list and detail responses expose the Partner's
+`externalBookingReference` where present. Cancellation detail includes the
+reason, refund basis points and amount, whether inventory was released, and
+the cancellation timestamp. Confirmation/cancellation idempotency keys and
+embedded audit internals are not exposed to Venue Users.
+
+Booking reads require `VIEW_BOOKINGS` on the exact Venue before MongoDB is
+queried. Booking detail lookup includes the Venue ID in its database predicate,
+so an identifier from another Venue returns `BOOKING_NOT_FOUND`. There is no
+Venue Owner booking-creation route in v1. Venue Users continue to perform their
+permitted operational action—blocking or releasing availability—through the
+Venue inventory routes.
+
 ## Venue Owner Capability Order
 
 Within the canonical Venue module, Venue Owner capabilities proceed as:
@@ -109,11 +124,15 @@ Within the canonical Venue module, Venue Owner capabilities proceed as:
 2. Courts, court media, and operating hours - complete
 3. Pricing rules - complete
 4. Inventory generation and manual blocking/release - complete
-5. Flexible venue content - complete
-6. Payout-account management - complete
+5. Payout-account management - complete
 
-The Venue Owner slice of the canonical Venue module is complete. The
+The implemented Venue Owner slice of the canonical Venue module is complete
+except for the Partner-facing availability route. The
 underlying availability rules are retained in the Venue service, but no
 Partner availability route is registered. Admin payout verification and
 Partner-Venue cancellation terms have no actor-facing routes in this phase;
 their Admin-owned fields remain null or pending.
+
+The Venue Owner read/dashboard slice and the separate Partner Booking
+lifecycle are complete. Partner hold, confirmation, and cancellation remain
+outside the Venue Owner API and are documented in `booking-api.md`.

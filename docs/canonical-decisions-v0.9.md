@@ -1,16 +1,23 @@
 # Turf GDS v0.9 Canonical Decisions
 
+> Source-of-truth update (2026-07-29): the Eraser workspace
+> `CJ18BOmjmz5dXHe9I9gF` is authoritative wherever it conflicts with the
+> checked-in DSL or older prose. See
+> `eraser-authoritative-migration-2026-07-29.md`.
+
 This document records the conflict resolution across the SRS, production ERD,
 module architecture, user stories, and implementation.
 
 ## Authority
 
-1. `turf-gds-production-erd.dsl` defines persisted collections, fields,
-   relationships, and states.
+1. Eraser workspace `CJ18BOmjmz5dXHe9I9gF` defines persisted collections,
+   fields, relationships, and states. The checked-in
+   `turf-gds-production-erd.dsl` is a historical pre-migration artifact and
+   must not be used as an implementation source.
 2. The SRS defines system-wide invariants and non-negotiable behavior.
 3. The module architecture defines collection ownership and dependencies.
 4. User stories define actor-visible behavior and acceptance criteria.
-5. Eraser files are synchronized views of these repository artifacts.
+5. The live Eraser workspace takes precedence over every repository artifact.
 
 No document may independently add a collection or use a different state
 machine.
@@ -36,8 +43,8 @@ owners.
 - Identity owns `AdminUser`, Venue Owner identity and memberships, roles and
   permissions, KYC, Partners, Partner keys, daily API usage, and webhook
   endpoint configuration.
-- Venue owns Venue configuration, courts, pricing, slots, content, embedded
-  public media metadata, and payout accounts.
+- Venue owns Venue configuration, courts, pricing, slots, embedded public
+  media metadata, and payout accounts.
 - Contracts owns effective-dated `PartnerVenueContract` records.
 - Booking owns Booking, separate Booking Cancellation, and API idempotency.
 - Ledger exclusively owns append-only Ledger Entry writes.
@@ -48,15 +55,12 @@ owners.
 
 ## Canonical State Models
 
-- Venue Owner: `PENDING → ACTIVE`; `SUSPENDED` is an administrative restriction.
-- Venue: `DRAFT → PENDING_APPROVAL → ACTIVE`; an active Venue may be
-  `SUSPENDED`.
-- KYC Verification:
-  `DRAFT → SUBMITTED → IN_REVIEW → VERIFIED | REJECTED`, with `EXPIRED` for
-  expired verification and one current record per subject/type.
-- Partner: `ONBOARDING → SANDBOX → ACTIVE`; `SUSPENDED` restricts access.
-- Partner integration review:
-  `NOT_STARTED → PENDING → PASSED | FAILED`.
+- Venue Owner: `ACTIVE | SUSPENDED`; onboarding readiness is represented by
+  KYC and Venue state.
+- Venue: `PENDING | ACTIVE | SUSPENDED`.
+- KYC Verification: `PENDING | VERIFIED | REJECTED | EXPIRED`; submission is
+  represented by a bounded audit event rather than another persisted state.
+- Partner: `PENDING | ACTIVE | SUSPENDED`.
 - Court booking mode: `OPEN_TIME`, `FIXED_SLOT`, or `BOTH`.
 - Slot state: `AVAILABLE`, `HELD`, `BOOKED`, `BLOCKED`, or `UNAVAILABLE`.
 

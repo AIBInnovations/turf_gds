@@ -1,6 +1,11 @@
 # Software Requirements Specification
 ## Turf Booking GDS
 
+> Historical requirements baseline. For persisted collections, fields,
+> relationships, and states, the live Eraser workspace
+> `CJ18BOmjmz5dXHe9I9gF` is authoritative. See
+> `eraser-authoritative-migration-2026-07-29.md`.
+
 Version 0.9 - MongoDB-only persistence, reduced collections, and production outbox routing revision.
 
 ### Source-Of-Truth Order

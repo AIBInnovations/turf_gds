@@ -11,7 +11,8 @@ Acceptance Criteria:
 
 - Given a new Venue Partner submits legal name, email, phone, password, and venue details, when the request is valid, then `VenueOwner`, `Venue`, and `VenueOwnerMembership` records are created through their owning modules.
 - Given the owner email is already used, when registration is submitted, then the system rejects the request without creating duplicate identity records.
-- Given the venue is created during onboarding, when the record is persisted, then its status is `PENDING_APPROVAL` and its currency is `INR`.
+- Given the venue is created during onboarding, when the record is persisted,
+  then its authoritative status is `PENDING` and its currency is `INR`.
 - Given the first owner membership is created, when the venue is persisted, then the creator receives `OWNER` role.
 
 Primary Module: `identity`

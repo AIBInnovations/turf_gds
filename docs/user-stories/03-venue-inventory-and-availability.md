@@ -174,6 +174,15 @@ Notes: This is the v1 venue-sync mechanism.
 
 ## US-03.09 - Manage Flexible Venue Content
 
+Status: `SUPERSEDED_BY_AUTHORITATIVE_ERD`
+
+The live Eraser workspace does not define a `VenueContent` collection.
+Accordingly, this historical story cannot be implemented as written without
+violating the source-of-truth rule. The former routes and persistence model
+were removed on 2026-07-29. Venue and Court media remain embedded in their
+owning aggregates. Any replacement for flexible descriptive content requires
+an approved ERD change before implementation.
+
 Story ID: `US-03.09`
 As a: Venue Partner
 I want: to manage flexible descriptive content for my venue

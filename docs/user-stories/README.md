@@ -3,11 +3,13 @@
 Source artifacts:
 
 - SRS: `../turf-gds-srs-v0.9.md`
-- Production DB ERD: `../../turf-gds-production-erd.dsl`
+- Production DB ERD: Eraser workspace `CJ18BOmjmz5dXHe9I9gF`
+- Historical local ERD artifact: `../../turf-gds-production-erd.dsl`
 - Module architecture: `../turf-gds-user-centered-module-architecture.md`
 
-Conflict resolution: the repository's `turf-gds-production-erd.dsl` is the
-canonical persistence definition for v0.9. The SRS defines system constraints,
+Conflict resolution: the Eraser workspace `CJ18BOmjmz5dXHe9I9gF` is the
+canonical persistence definition for v0.9. The checked-in DSL predates the
+2026-07-29 migration and must not be used as a schema source. The SRS defines system constraints,
 the module architecture defines ownership, and user stories define observable
 behavior. A secondary artifact must be updated when it disagrees with this
 combined model; it must not introduce a parallel schema.
@@ -34,7 +36,7 @@ Module ownership guide:
 | Module | Main story areas |
 |---|---|
 | `identity` | Platform User, Venue User, and Booking Partner identity, authentication, authorization, KYC, API keys, usage, and webhook endpoint registration |
-| `venue` | Venues, courts, content, embedded media, pricing, fixed-slot/open-time inventory, embedded audit, and payout accounts |
+| `venue` | Venues, courts, embedded media, pricing, fixed-slot/open-time inventory, embedded audit, and payout accounts |
 | `contracts` | Partner–venue commercial and cancellation terms |
 | `booking` | Fixed-slot, open-time, and BOTH-mode holds, confirmation, separate cancellation records, idempotency, orchestration, and embedded audit |
 | `ledger` | Append-only balanced financial entries and reversals |

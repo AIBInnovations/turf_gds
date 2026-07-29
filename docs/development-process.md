@@ -55,10 +55,14 @@ The Venue Owner phase is developed in this sequence:
    memberships, roles/permissions, and KYC submission.
 2. **Venue** - venue profile, courts, pricing, operating hours, media,
    inventory, availability controls, and payout accounts.
-3. **Booking** - owner-scoped booking lists/details and permitted operational
+3. **Contracts** - effective-dated Partner-Venue commercial, settlement,
+   booking-mode, cancellation, refund, and resale terms. Because Booking
+   cannot be correct without an active contract, the minimal Admin
+   configuration surface is completed as a cross-actor prerequisite.
+4. **Booking** - owner-scoped booking lists/details and permitted operational
    actions.
-4. **Financial Close** - owner-scoped payout history and details.
-5. **Communications** - owner notifications and device-token lifecycle.
+5. **Financial Close** - owner-scoped payout history and details.
+6. **Communications** - owner notifications and device-token lifecycle.
 
 All reads and mutations must be scoped through the authenticated Venue Owner's
 active membership. Tests must prove that one owner cannot access or mutate
@@ -75,7 +79,17 @@ another owner's venue data.
   blocking and release, flexible content, and tokenized payout accounts are
   implemented with authorization, versioning, audit, persistence, route, and
   integration coverage.
-- Venue Owner / Booking, Financial Close, and Communications: pending.
+- Contracts: complete as of 2026-07-29. Admin configuration creates
+  transactional effective-dated versions while historical commercial and
+  cancellation terms remain unchanged. Active/as-of lookup, cancellation
+  snapshots, and booking-mode checks are available to downstream modules.
+- Venue Owner / Booking: complete as of 2026-07-29. Owner-scoped Booking lists
+  and details, date/Court/status filtering, bounded pagination, external
+  Partner references, cancellation outcomes, canonical persistence/indexes,
+  and cross-owner isolation are covered. Partner-only hold, confirmation,
+  commercial snapshot, cancellation, idempotency, audit, Ledger, and Outbox
+  transaction flows are covered. Owner inventory controls remain in Venue.
+- Venue Owner / Financial Close and Communications: pending.
 - Admin and Partner actor phases: frozen until Venue Owner completion, except
   for minimal dependencies required to exercise Venue Owner workflows.
 

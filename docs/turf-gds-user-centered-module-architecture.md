@@ -1,6 +1,7 @@
 # Turf Booking GDS — User-Centered Module Architecture
 
-Version 0.9 — aligned with the MongoDB-only production ERD.
+Version 0.9 — aligned on 2026-07-29 with the live Eraser MongoDB-only
+production ERD. The live Eraser workspace is authoritative for persistence.
 
 The architecture contains seven business modules around the system's users.
 Media and Communications are shared infrastructure capabilities because their
@@ -22,7 +23,7 @@ flowchart TB
     subgraph TOP["Business Modules"]
         direction LR
         ID["<b>IDENTITY</b><br/>Admin, Venue User and Partner identity<br/>Embedded owner sessions<br/>Roles and permissions<br/>KYC and KYC documents<br/>API keys and usage<br/>Webhook endpoint registration"]
-        VEN["<b>VENUE & INVENTORY</b><br/>Venues, courts and content<br/>Embedded venue/court media<br/>FIXED_SLOT · OPEN_TIME · BOTH<br/>Pricing and operating hours<br/>Durable Slot holds<br/>Interval availability<br/>Payout accounts"]
+        VEN["<b>VENUE & INVENTORY</b><br/>Venues and courts<br/>Embedded venue/court media<br/>FIXED_SLOT · OPEN_TIME · BOTH<br/>Pricing and operating hours<br/>Durable Slot holds<br/>Interval availability<br/>Payout accounts"]
         CON["<b>CONTRACTS</b><br/>Partner–venue agreements<br/>Commission and tax terms<br/>Settlement cycles<br/>Allowed booking modes<br/>Cancellation terms<br/>Effective-dated versions"]
     end
 
@@ -144,11 +145,10 @@ Venue owns:
 - `PricingRule`
 - `Slot`
 - `VenuePayoutAccount`
-- `VenueContent`
 
 Responsibilities:
 
-- Manage venue, court, pricing, operating-hours, and content data.
+- Manage venue, court, pricing, and operating-hours data.
 - Keep venue/court media metadata embedded.
 - Support `FIXED_SLOT`, `OPEN_TIME`, and `BOTH`.
 - Generate reusable fixed slots.

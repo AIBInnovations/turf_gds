@@ -76,8 +76,18 @@ Registration creates `VenueOwner`, the initial `Venue`, and the OWNER
 `scrypt`. Login returns an opaque token once and stores only its SHA-256 hash in
 the bounded `VenueOwner.sessions` array.
 
-New owners and venues start as `PENDING` and `PENDING_APPROVAL`. Pending owners
-can log in so they can complete onboarding and KYC; suspended owners cannot.
+New owners start as `ACTIVE` and their initial venues start as `PENDING`.
+Onboarding readiness is represented by KYC and Venue state; suspended owners
+cannot authenticate.
 
 The completed Identity endpoint and authentication reference is in
 `docs/identity-api.md`.
+
+The completed Venue Owner Venue and Booking endpoint reference is in
+`docs/venue-owner-api.md`.
+
+The Contracts module and Admin configuration API are documented in
+`docs/contracts-api.md`.
+
+The completed Partner Booking lifecycle is documented in
+`docs/booking-api.md`.
