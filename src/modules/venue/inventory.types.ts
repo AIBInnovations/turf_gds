@@ -1,18 +1,18 @@
-import type { Document, ObjectId } from 'mongodb';
+import type { ObjectId } from 'mongodb';
 
 export interface PricingRuleDocument {
   _id: ObjectId;
   court_id: ObjectId;
   name: string;
-  days_of_week: number[];
-  starts_time: string;
-  ends_time: string;
-  amount_minor: number;
+  day_of_week: number | null;
+  start_time: string | null;
+  end_time: string | null;
+  price_minor: number;
   currency: 'INR';
   effective_from: Date;
   effective_to: Date | null;
   priority: number;
-  status: 'ACTIVE' | 'INACTIVE';
+  active: boolean;
   created_at: Date;
   updated_at: Date;
 }
@@ -38,31 +38,22 @@ export interface SlotAuditDocument {
 export interface SlotDocument {
   _id: ObjectId;
   court_id: ObjectId;
+  venue_id: ObjectId;
   environment: 'SANDBOX' | 'PRODUCTION';
-  booking_mode: 'OPEN_TIME' | 'FIXED_SLOT';
+  booking_type: 'OPEN_TIME' | 'FIXED_SLOT';
   starts_at: Date;
   ends_at: Date;
-  price_amount_minor: number;
+  price_minor: number | null;
   currency: 'INR';
   status: SlotStatus;
   hold_id: string | null;
   hold_partner_id: ObjectId | null;
   hold_expires_at: Date | null;
   hold_created_at: Date | null;
-  generation_source: string;
+  source: 'SYSTEM_GENERATED' | 'OWNER_DASHBOARD' | 'ADMIN' | 'BOOKING';
+  booking_id: ObjectId | null;
   audit_history: SlotAuditDocument[];
   version: number;
-  created_at: Date;
-  updated_at: Date;
-}
-
-export interface VenueContentDocument {
-  _id: ObjectId;
-  venue_id: ObjectId;
-  content: Document;
-  version: number;
-  updated_by_type: 'ADMIN_USER' | 'VENUE_OWNER';
-  updated_by_id: ObjectId;
   created_at: Date;
   updated_at: Date;
 }
@@ -80,6 +71,8 @@ export interface VenuePayoutAccountDocument {
   verified_by: ObjectId | null;
   verified_at: Date | null;
   verification_failure_reason: string | null;
+  verification_method: 'PENNY_DROP' | 'MANUAL';
+  audit_history: unknown[];
   created_at: Date;
   updated_at: Date;
 }

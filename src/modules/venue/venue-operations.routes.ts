@@ -77,7 +77,7 @@ const venueOperationsRoutes: FastifyPluginAsync<
     };
     Body: Partial<PricingBody> & {
       effectiveTo?: string | null;
-      status?: 'ACTIVE' | 'INACTIVE';
+      active?: boolean;
     };
   }>(
     '/:venueId/courts/:courtId/pricing-rules/:pricingRuleId',
@@ -93,10 +93,7 @@ const venueOperationsRoutes: FastifyPluginAsync<
             effectiveTo: {
               anyOf: [dateTime, { type: 'null' }],
             },
-            status: {
-              type: 'string',
-              enum: ['ACTIVE', 'INACTIVE'],
-            },
+            active: { type: 'boolean' },
           },
         },
       },
@@ -260,57 +257,6 @@ const venueOperationsRoutes: FastifyPluginAsync<
     },
   );
 
-  fastify.get<{ Params: { venueId: string } }>(
-    '/:venueId/content',
-    {
-      preHandler: authenticate,
-      schema: { params: venueParams() },
-    },
-    async (request) => {
-      const owner = requireOwnerContext(request);
-      return options.service.getContent({
-        actorOwnerId: owner.ownerId,
-        venueId: request.params.venueId,
-      });
-    },
-  );
-
-  fastify.put<{
-    Params: { venueId: string };
-    Body: { version?: number; content: Record<string, unknown> };
-  }>(
-    '/:venueId/content',
-    {
-      preHandler: authenticate,
-      schema: {
-        params: venueParams(),
-        body: {
-          type: 'object',
-          additionalProperties: false,
-          required: ['content'],
-          properties: {
-            version: { type: 'integer', minimum: 1 },
-            content: {
-              type: 'object',
-              additionalProperties: true,
-            },
-          },
-        },
-      },
-    },
-    async (request) => {
-      const owner = requireOwnerContext(request);
-      return options.service.saveContent({
-        actorOwnerId: owner.ownerId,
-        venueId: request.params.venueId,
-        ...(request.body.version !== undefined
-          ? { expectedVersion: request.body.version }
-          : {}),
-        content: request.body.content,
-      });
-    },
-  );
-
   fastify.post<{
     Params: { venueId: string };
     Body: PayoutBody;
@@ -377,10 +323,10 @@ const venueOperationsRoutes: FastifyPluginAsync<
 
 interface PricingBody {
   name: string;
-  daysOfWeek: number[];
-  startsTime: string;
-  endsTime: string;
-  amountMinor: number;
+  dayOfWeek?: number | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  priceMinor: number;
   currency: string;
   effectiveFrom: string;
   effectiveTo?: string;
@@ -404,10 +350,7 @@ function pricingBodySchema(required: boolean) {
       ? {
           required: [
             'name',
-            'daysOfWeek',
-            'startsTime',
-            'endsTime',
-            'amountMinor',
+            'priceMinor',
             'currency',
             'effectiveFrom',
             'priority',
@@ -416,16 +359,15 @@ function pricingBodySchema(required: boolean) {
       : {}),
     properties: {
       name: text(2, 120),
-      daysOfWeek: {
-        type: 'array',
-        minItems: 1,
-        maxItems: 7,
-        uniqueItems: true,
-        items: { type: 'integer', minimum: 1, maximum: 7 },
+      dayOfWeek: {
+        anyOf: [
+          { type: 'integer', minimum: 1, maximum: 7 },
+          { type: 'null' },
+        ],
       },
-      startsTime: timeSchema(),
-      endsTime: timeSchema(),
-      amountMinor: {
+      startTime: { anyOf: [timeSchema(), { type: 'null' }] },
+      endTime: { anyOf: [timeSchema(), { type: 'null' }] },
+      priceMinor: {
         type: 'integer',
         minimum: 0,
         maximum: 100_000_000,

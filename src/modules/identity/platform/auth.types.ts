@@ -10,6 +10,7 @@ export interface AdminUserDocument {
   role: AdminRole;
   status: 'ACTIVE' | 'DISABLED';
   fcm_tokens: unknown[];
+  audit_history: unknown[];
   last_login_at: Date | null;
   created_at: Date;
   updated_at: Date;

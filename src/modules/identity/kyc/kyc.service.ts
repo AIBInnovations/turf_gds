@@ -5,8 +5,10 @@ import { AppError } from '../../../shared/errors/app-error.js';
 import type { MediaStorage } from '../../../shared/media/cloudinary-media-storage.js';
 import type { KycRepository } from './kyc.repository.js';
 import type {
+  KycDocumentType,
   KycStatus,
   KycSubjectType,
+  KycVerificationType,
   KycVerificationDocument,
 } from './kyc.types.js';
 
@@ -23,7 +25,7 @@ export interface KycService {
     filename: string;
     mimeType: string;
     buffer: Buffer;
-  }): Promise<{ documentId: string; status: 'ACTIVE' }>;
+  }): Promise<{ documentId: string; status: 'PENDING' }>;
   submit(input: {
     verificationId: string;
     subjectId: string;
@@ -67,19 +69,24 @@ export function createKycService(input: {
       verificationType,
     );
 
-    if (current?.status === 'DRAFT') {
-      return presentVerification(current);
-    }
-
     if (
-      current &&
-      ['SUBMITTED', 'IN_REVIEW'].includes(current.status)
+      current?.status === 'PENDING' &&
+      current.audit_history.some(
+        (event) =>
+          typeof event === 'object' &&
+          event !== null &&
+          'event_type' in event &&
+          event.event_type === 'KYC_SUBMITTED',
+      )
     ) {
       throw new AppError({
         code: 'KYC_ALREADY_IN_PROGRESS',
         message: 'The current KYC verification is already being reviewed',
         statusCode: 409,
       });
+    }
+    if (current?.status === 'PENDING') {
+      return presentVerification(current);
     }
 
     if (
@@ -125,7 +132,7 @@ export function createKycService(input: {
     if (
       !verification ||
       !verification.subject_id.equals(toObjectId(values.subjectId)) ||
-      verification.status !== 'DRAFT' ||
+      verification.status !== 'PENDING' ||
       !verification.is_current
     ) {
       throw verificationNotEditable();
@@ -144,22 +151,19 @@ export function createKycService(input: {
       await input.repository.insertDocument({
         _id: documentId,
         kyc_verification_id: verification._id,
-        document_type: normalizeType(values.documentType),
+        document_type: normalizeType(values.documentType, true),
         file: {
-          provider: 'CLOUDINARY',
           storage_key: uploaded.publicId,
-          resource_type: uploaded.resourceType,
-          delivery_type: uploaded.deliveryType,
-          format: uploaded.format ?? null,
-          bytes: uploaded.bytes,
-          checksum: uploaded.checksum ?? null,
           mime_type: values.mimeType.toLowerCase(),
-          original_filename: values.filename.slice(0, 255),
-          secure_url: uploaded.secureUrl,
+          size_bytes: uploaded.bytes,
+          checksum: uploaded.checksum ?? uploaded.publicId,
+          classification: values.filename.slice(0, 255),
+          status: 'ACTIVE',
+          created_at: timestamp,
         },
-        status: 'ACTIVE',
+        status: 'PENDING',
+        rejection_reason: null,
         created_at: timestamp,
-        updated_at: timestamp,
       });
     } catch (error) {
       await input.mediaStorage
@@ -168,7 +172,7 @@ export function createKycService(input: {
       throw error;
     }
 
-    return { documentId: documentId.toHexString(), status: 'ACTIVE' };
+    return { documentId: documentId.toHexString(), status: 'PENDING' };
   }
 
   async function submit(
@@ -297,15 +301,32 @@ function presentVerification(verification: KycVerificationDocument) {
     verificationType: verification.verification_type,
     status: verification.status,
     isCurrent: verification.is_current,
-    submittedAt: verification.submitted_at?.toISOString() ?? null,
     reviewedAt: verification.reviewed_at?.toISOString() ?? null,
     rejectionReason: verification.rejection_reason,
     expiresAt: verification.expires_at?.toISOString() ?? null,
   };
 }
 
-function normalizeType(value: string): string {
-  return value.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+function normalizeType(value: string): KycVerificationType;
+function normalizeType(value: string, document: true): KycDocumentType;
+function normalizeType(
+  value: string,
+  document = false,
+): KycVerificationType | KycDocumentType {
+  const normalized = value.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+  const allowed = document
+    ? ['PAN', 'AADHAAR', 'GST_CERTIFICATE', 'BUSINESS_REGISTRATION', 'ADDRESS_PROOF', 'ID_PROOF']
+    : ['IDENTITY', 'BUSINESS', 'ADDRESS'];
+  if (!allowed.includes(normalized)) {
+    throw new AppError({
+      code: 'INVALID_KYC_TYPE',
+      message: document
+        ? 'Document type is not supported'
+        : 'Verification type must be IDENTITY, BUSINESS, or ADDRESS',
+      statusCode: 400,
+    });
+  }
+  return normalized as KycVerificationType | KycDocumentType;
 }
 
 function toObjectId(value: string): ObjectId {

@@ -3,6 +3,11 @@ colorMode: pastel
 styleMode: plain
 direction: right
 
+// HISTORICAL PRE-MIGRATION ARTIFACT — NOT AUTHORITATIVE.
+// Use the live Eraser workspace CJ18BOmjmz5dXHe9I9gF for persisted collections,
+// fields, relationships, and states. This file remains only for traceability
+// and must not be used to generate validators or application code.
+
 title Turf Booking GDS - MongoDB Only Collection ERD v0.9
 
 notation crows-foot

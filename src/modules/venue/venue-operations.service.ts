@@ -1,4 +1,4 @@
-import { ObjectId, type Document } from 'mongodb';
+import { ObjectId } from 'mongodb';
 
 import type { OwnerAccessService } from '../identity/owner/owner-access.service.js';
 import type { DatabaseConnection } from '../../shared/database/database-connection.js';
@@ -8,7 +8,6 @@ import type { CourtDocument } from './court.types.js';
 import type {
   PricingRuleDocument,
   SlotDocument,
-  VenueContentDocument,
   VenuePayoutAccountDocument,
 } from './inventory.types.js';
 import type { VenueOperationsRepository } from './venue-operations.repository.js';
@@ -50,16 +49,6 @@ export interface VenueOperationsService {
     reason: string;
     correlationId: string;
   }): Promise<void | object>;
-  getContent(input: {
-    actorOwnerId: string;
-    venueId: string;
-  }): Promise<object>;
-  saveContent(input: {
-    actorOwnerId: string;
-    venueId: string;
-    expectedVersion?: number;
-    content: Document;
-  }): Promise<object>;
   addPayoutAccount(input: {
     actorOwnerId: string;
     venueId: string;
@@ -89,10 +78,10 @@ interface ScopedCourt {
 
 interface PricingInput extends ScopedCourt {
   name: string;
-  daysOfWeek: number[];
-  startsTime: string;
-  endsTime: string;
-  amountMinor: number;
+  dayOfWeek?: number | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  priceMinor: number;
   currency: string;
   effectiveFrom: string;
   effectiveTo?: string;
@@ -102,15 +91,15 @@ interface PricingInput extends ScopedCourt {
 interface PricingUpdateInput extends ScopedCourt {
   pricingRuleId: string;
   name?: string;
-  daysOfWeek?: number[];
-  startsTime?: string;
-  endsTime?: string;
-  amountMinor?: number;
+  dayOfWeek?: number | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  priceMinor?: number;
   currency?: string;
   effectiveFrom?: string;
   effectiveTo?: string | null;
   priority?: number;
-  status?: 'ACTIVE' | 'INACTIVE';
+  active?: boolean;
 }
 
 export function createVenueOperationsService(input: {
@@ -176,10 +165,10 @@ export function createVenueOperationsService(input: {
       venueId: values.venueId,
       courtId: values.courtId,
       name: values.name ?? existing.name,
-      daysOfWeek: values.daysOfWeek ?? existing.days_of_week,
-      startsTime: values.startsTime ?? existing.starts_time,
-      endsTime: values.endsTime ?? existing.ends_time,
-      amountMinor: values.amountMinor ?? existing.amount_minor,
+      dayOfWeek: values.dayOfWeek ?? existing.day_of_week,
+      startTime: values.startTime ?? existing.start_time,
+      endTime: values.endTime ?? existing.end_time,
+      priceMinor: values.priceMinor ?? existing.price_minor,
       currency: values.currency ?? existing.currency,
       effectiveFrom:
         values.effectiveFrom ?? existing.effective_from.toISOString(),
@@ -196,15 +185,15 @@ export function createVenueOperationsService(input: {
       courtId,
       {
         name: validated.name,
-        days_of_week: validated.days_of_week,
-        starts_time: validated.starts_time,
-        ends_time: validated.ends_time,
-        amount_minor: validated.amount_minor,
+        day_of_week: validated.day_of_week,
+        start_time: validated.start_time,
+        end_time: validated.end_time,
+        price_minor: validated.price_minor,
         currency: validated.currency,
         effective_from: validated.effective_from,
         effective_to: validated.effective_to,
         priority: validated.priority,
-        status: values.status ?? existing.status,
+        active: values.active ?? existing.active,
         updated_at: now(),
       },
     );
@@ -219,7 +208,7 @@ export function createVenueOperationsService(input: {
   ) {
     const court = await scopedCourt(values, 'MANAGE_AVAILABILITY');
     if (
-      court.status !== 'ACTIVE' ||
+      court.status !== 'AVAILABLE' ||
       !['FIXED_SLOT', 'BOTH'].includes(court.booking_mode)
     ) {
       return { created: 0 };
@@ -230,28 +219,31 @@ export function createVenueOperationsService(input: {
     }
     const dates = dateRange(values.dateFrom, values.dateTo, 31);
     const rules = (await input.repository.listPricingRules(court._id))
-      .filter((rule) => rule.status === 'ACTIVE')
+      .filter((rule) => rule.active)
       .sort((a, b) => b.priority - a.priority);
     const timestamp = now();
     const slots: SlotDocument[] = [];
     for (const date of dates) {
       const day = isoDay(date);
-      const hours = court.operating_hours.find(
+      const hours = court.operating_hours.entries.find(
         (item) => item.day_of_week === day,
       );
       if (!hours) continue;
-      let cursor = zonedToUtc(date, hours.opens_at, court.timezone);
-      const close = zonedToUtc(date, hours.closes_at, court.timezone);
+      let cursor = zonedToUtc(date, hours.opens_at, venue.timezone);
+      const close = zonedToUtc(date, hours.closes_at, venue.timezone);
       while (
         cursor.getTime() + court.min_booking_minutes * 60_000 <=
         close.getTime()
       ) {
-        const localTime = formatTime(cursor, court.timezone);
+        const localTime = formatTime(cursor, venue.timezone);
         const rule = rules.find(
           (candidate) =>
-            candidate.days_of_week.includes(day) &&
-            localTime >= candidate.starts_time &&
-            localTime < candidate.ends_time &&
+            (candidate.day_of_week === null ||
+              candidate.day_of_week === day) &&
+            (candidate.start_time === null ||
+              localTime >= candidate.start_time) &&
+            (candidate.end_time === null ||
+              localTime < candidate.end_time) &&
             cursor >= candidate.effective_from &&
             (!candidate.effective_to || cursor < candidate.effective_to),
         );
@@ -262,18 +254,20 @@ export function createVenueOperationsService(input: {
           slots.push({
             _id: new ObjectId(),
             court_id: court._id,
+            venue_id: venue._id,
             environment: venue.environment,
-            booking_mode: 'FIXED_SLOT',
+            booking_type: 'FIXED_SLOT',
             starts_at: cursor,
             ends_at: endsAt,
-            price_amount_minor: rule.amount_minor,
+            price_minor: rule.price_minor,
             currency: 'INR',
             status: 'AVAILABLE',
             hold_id: null,
             hold_partner_id: null,
             hold_expires_at: null,
             hold_created_at: null,
-            generation_source: 'OWNER_ROLLING_GENERATION',
+            source: 'SYSTEM_GENERATED',
+            booking_id: null,
             audit_history: [{
               event_type: 'SLOT_GENERATED',
               actor_type: 'VENUE_OWNER',
@@ -379,25 +373,27 @@ export function createVenueOperationsService(input: {
     }
     const startsAt = date(values.startsAt, 'startsAt');
     const endsAt = date(values.endsAt, 'endsAt');
-    validateInterval(court, startsAt, endsAt);
     const venue = await input.venueRepository.findById(oid(values.venueId));
     if (!venue) throw notFound('VENUE_NOT_FOUND', 'Venue was not found');
+    validateInterval(court, venue.timezone, startsAt, endsAt);
     const timestamp = now();
     const slot: SlotDocument = {
       _id: new ObjectId(),
       court_id: court._id,
+      venue_id: venue._id,
       environment: venue.environment,
-      booking_mode: 'OPEN_TIME',
+      booking_type: 'OPEN_TIME',
       starts_at: startsAt,
       ends_at: endsAt,
-      price_amount_minor: 0,
+      price_minor: null,
       currency: 'INR',
       status: 'BLOCKED',
       hold_id: null,
       hold_partner_id: null,
       hold_expires_at: null,
       hold_created_at: null,
-      generation_source: 'OWNER_MANUAL_BLOCK',
+      source: 'OWNER_DASHBOARD',
+      booking_id: null,
       audit_history: [{
         event_type: 'SLOT_BLOCKED',
         actor_type: 'VENUE_OWNER',
@@ -460,7 +456,7 @@ export function createVenueOperationsService(input: {
         'Only blocked inventory can be released',
       );
     }
-    if (slot.booking_mode === 'OPEN_TIME') {
+    if (slot.booking_type === 'OPEN_TIME') {
       const deleted = await input.repository.deleteOpenBlock({
         slotId: slot._id,
         courtId: slot.court_id,
@@ -486,61 +482,6 @@ export function createVenueOperationsService(input: {
       throw conflict('SLOT_VERSION_CONFLICT', 'Slot changed concurrently');
     }
     return presentSlot(updated);
-  }
-
-  async function getContent(
-    values: Parameters<VenueOperationsService['getContent']>[0],
-  ) {
-    await input.ownerAccessService.requireVenueMembership(
-      values.actorOwnerId,
-      values.venueId,
-    );
-    const content = await input.repository.getContent(oid(values.venueId));
-    if (!content) {
-      return { venueId: values.venueId, content: {}, version: 0 };
-    }
-    return presentContent(content);
-  }
-
-  async function saveContent(
-    values: Parameters<VenueOperationsService['saveContent']>[0],
-  ) {
-    await input.ownerAccessService.requirePermission(
-      values.actorOwnerId,
-      values.venueId,
-      'MANAGE_VENUE',
-    );
-    validateContent(values.content);
-    const venueId = oid(values.venueId);
-    const existing = await input.repository.getContent(venueId);
-    if (existing && values.expectedVersion === undefined) {
-      throw conflict(
-        'CONTENT_VERSION_REQUIRED',
-        'Content version is required for updates',
-      );
-    }
-    if (!existing && values.expectedVersion !== undefined) {
-      throw conflict(
-        'CONTENT_VERSION_CONFLICT',
-        'Venue content does not exist yet',
-      );
-    }
-    const saved = await input.repository.saveContent({
-      venueId,
-      ...(values.expectedVersion !== undefined
-        ? { expectedVersion: values.expectedVersion }
-        : {}),
-      content: values.content,
-      actorOwnerId: oid(values.actorOwnerId),
-      now: now(),
-    });
-    if (!saved) {
-      throw conflict(
-        'CONTENT_VERSION_CONFLICT',
-        'Venue content changed concurrently',
-      );
-    }
-    return presentContent(saved);
   }
 
   async function addPayoutAccount(
@@ -578,6 +519,8 @@ export function createVenueOperationsService(input: {
       verified_by: null,
       verified_at: null,
       verification_failure_reason: null,
+      verification_method: 'PENNY_DROP',
+      audit_history: [],
       created_at: timestamp,
       updated_at: timestamp,
     };
@@ -641,8 +584,6 @@ export function createVenueOperationsService(input: {
     listInventory,
     blockAvailability,
     releaseAvailability,
-    getContent,
-    saveContent,
     addPayoutAccount,
     listPayoutAccounts,
     searchAvailability,
@@ -654,15 +595,20 @@ function pricingDocument(
   createdAt: Date,
   id = new ObjectId(),
 ): PricingRuleDocument {
-  const days = [...new Set(input.daysOfWeek)].sort();
   if (
-    days.length === 0 ||
-    days.some((day) => !Number.isInteger(day) || day < 1 || day > 7) ||
-    !time(input.startsTime) ||
-    !time(input.endsTime) ||
-    input.startsTime >= input.endsTime ||
-    !Number.isSafeInteger(input.amountMinor) ||
-    input.amountMinor < 0 ||
+    (input.dayOfWeek !== undefined &&
+      input.dayOfWeek !== null &&
+      (!Number.isInteger(input.dayOfWeek) ||
+        input.dayOfWeek < 1 ||
+        input.dayOfWeek > 7)) ||
+    (input.startTime != null && !time(input.startTime)) ||
+    (input.endTime != null && !time(input.endTime)) ||
+    ((input.startTime === null) !== (input.endTime === null)) ||
+    (input.startTime != null &&
+      input.endTime != null &&
+      input.startTime >= input.endTime) ||
+    !Number.isSafeInteger(input.priceMinor) ||
+    input.priceMinor < 0 ||
     input.currency !== 'INR' ||
     !Number.isInteger(input.priority)
   ) {
@@ -682,15 +628,15 @@ function pricingDocument(
     _id: id,
     court_id: oid(input.courtId),
     name: required(input.name, 'name'),
-    days_of_week: days,
-    starts_time: input.startsTime,
-    ends_time: input.endsTime,
-    amount_minor: input.amountMinor,
+    day_of_week: input.dayOfWeek ?? null,
+    start_time: input.startTime ?? null,
+    end_time: input.endTime ?? null,
+    price_minor: input.priceMinor,
     currency: 'INR',
     effective_from: from,
     effective_to: to,
     priority: input.priority,
-    status: 'ACTIVE',
+    active: true,
     created_at: createdAt,
     updated_at: createdAt,
   };
@@ -698,14 +644,15 @@ function pricingDocument(
 
 function validateInterval(
   court: CourtDocument,
+  timezone: string,
   startsAt: Date,
   endsAt: Date,
 ): void {
   const minutes = (endsAt.getTime() - startsAt.getTime()) / 60_000;
-  const localStart = formatTime(startsAt, court.timezone);
-  const localEnd = formatTime(endsAt, court.timezone);
-  const hours = court.operating_hours.find(
-    (value) => value.day_of_week === isoDay(localDate(startsAt, court.timezone)),
+  const localStart = formatTime(startsAt, timezone);
+  const localEnd = formatTime(endsAt, timezone);
+  const hours = court.operating_hours.entries.find(
+    (value) => value.day_of_week === isoDay(localDate(startsAt, timezone)),
   );
   if (
     endsAt <= startsAt ||
@@ -802,40 +749,20 @@ function isoDay(day: string): number {
   return value === 0 ? 7 : value;
 }
 
-function validateContent(content: Document): void {
-  if (
-    !content ||
-    Array.isArray(content) ||
-    Buffer.byteLength(JSON.stringify(content), 'utf8') > 64 * 1024
-  ) {
-    throw invalid('INVALID_VENUE_CONTENT', 'Venue content must be an object under 64 KB');
-  }
-  const inspect = (value: unknown): void => {
-    if (!value || typeof value !== 'object') return;
-    for (const [key, child] of Object.entries(value)) {
-      if (key.startsWith('$') || key.includes('.')) {
-        throw invalid('INVALID_VENUE_CONTENT', 'Venue content contains an unsafe key');
-      }
-      inspect(child);
-    }
-  };
-  inspect(content);
-}
-
 function presentPricing(value: PricingRuleDocument) {
   return {
     id: value._id.toHexString(),
     courtId: value.court_id.toHexString(),
     name: value.name,
-    daysOfWeek: value.days_of_week,
-    startsTime: value.starts_time,
-    endsTime: value.ends_time,
-    amountMinor: value.amount_minor,
+    dayOfWeek: value.day_of_week,
+    startTime: value.start_time,
+    endTime: value.end_time,
+    priceMinor: value.price_minor,
     currency: value.currency,
     effectiveFrom: value.effective_from.toISOString(),
     effectiveTo: value.effective_to?.toISOString() ?? null,
     priority: value.priority,
-    status: value.status,
+    active: value.active,
   };
 }
 
@@ -844,23 +771,13 @@ function presentSlot(value: SlotDocument) {
     id: value._id.toHexString(),
     courtId: value.court_id.toHexString(),
     environment: value.environment,
-    bookingMode: value.booking_mode,
+    bookingType: value.booking_type,
     startsAt: value.starts_at.toISOString(),
     endsAt: value.ends_at.toISOString(),
-    priceAmountMinor: value.price_amount_minor,
+    priceMinor: value.price_minor,
     currency: value.currency,
     status: value.status,
     version: value.version,
-  };
-}
-
-function presentContent(value: VenueContentDocument) {
-  return {
-    id: value._id.toHexString(),
-    venueId: value.venue_id.toHexString(),
-    content: value.content,
-    version: value.version,
-    updatedAt: value.updated_at.toISOString(),
   };
 }
 
@@ -875,6 +792,7 @@ function presentPayout(value: VenuePayoutAccountDocument) {
     ifscCode: value.ifsc_code,
     status: value.status,
     verifiedAt: value.verified_at?.toISOString() ?? null,
+    verificationMethod: value.verification_method,
   };
 }
 

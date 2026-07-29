@@ -28,13 +28,15 @@ const bookingModeSchema = {
 
 const courtProperties = {
   name: { type: 'string', minLength: 2, maxLength: 120 },
-  sportTypes: {
-    type: 'array',
-    minItems: 1,
-    maxItems: 20,
-    uniqueItems: true,
-    items: { type: 'string', minLength: 1, maxLength: 50 },
+  sportType: {
+    type: 'string',
+    enum: [
+      'FOOTBALL', 'CRICKET', 'BADMINTON', 'TENNIS', 'PICKLEBALL',
+      'MULTI_SPORT', 'OTHER',
+    ],
   },
+  surfaceType: { type: 'string', minLength: 1, maxLength: 100 },
+  capacity: { type: 'integer', minimum: 1, maximum: 100000 },
   bookingMode: bookingModeSchema,
   minBookingMinutes: {
     type: 'integer',
@@ -46,7 +48,15 @@ const courtProperties = {
     minimum: 5,
     maximum: 1440,
   },
-  timezone: { type: 'string', minLength: 3, maxLength: 100 },
+  fixedSlotDurationMinutes: {
+    anyOf: [{ type: 'integer', minimum: 5 }, { type: 'null' }],
+  },
+  fixedSlotAnchorMinutes: {
+    anyOf: [
+      { type: 'integer', minimum: 0, maximum: 1439 },
+      { type: 'null' },
+    ],
+  },
 } as const;
 
 const courtOwnerRoutes: FastifyPluginAsync<CourtOwnerRoutesOptions> =
@@ -72,7 +82,9 @@ const courtOwnerRoutes: FastifyPluginAsync<CourtOwnerRoutesOptions> =
             additionalProperties: false,
             required: [
               'name',
-              'sportTypes',
+              'sportType',
+              'surfaceType',
+              'capacity',
               'bookingMode',
               'minBookingMinutes',
               'bookingIncrementMinutes',
@@ -152,7 +164,7 @@ const courtOwnerRoutes: FastifyPluginAsync<CourtOwnerRoutesOptions> =
               ...courtProperties,
               status: {
                 type: 'string',
-                enum: ['ACTIVE', 'INACTIVE'],
+                enum: ['AVAILABLE', 'UNAVAILABLE'],
               },
             },
           },

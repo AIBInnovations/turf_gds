@@ -66,12 +66,10 @@ export function createVenueRepository(
     const result = await database.db
       .collection<VenueDocument>('venues')
       .updateOne(
-        { _id: input.venueId, status: 'PENDING_APPROVAL' },
+        { _id: input.venueId, status: 'PENDING' },
         {
           $set: {
             status: 'ACTIVE',
-            approved_by: input.adminId,
-            approved_at: input.now,
             updated_at: input.now,
           },
           $inc: { version: 1 },

@@ -151,6 +151,7 @@ export function createAdminAuthService(input: {
         role: values.role,
         status: 'ACTIVE',
         fcm_tokens: [],
+        audit_history: [],
         last_login_at: null,
         created_at: timestamp,
         updated_at: timestamp,

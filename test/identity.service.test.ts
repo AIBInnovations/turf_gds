@@ -148,7 +148,7 @@ function createFakeRepository(
 
     async approveOwner(ownerId, adminId, approvedAt) {
       state.approvedOwner = { ownerId, adminId, approvedAt };
-      return state.owner?.status === 'PENDING';
+      return state.owner?.status === 'ACTIVE';
     },
   };
 
@@ -185,13 +185,15 @@ async function createOwner(
     phone_e164: '+919876543210',
     password_hash: await hashPassword(password),
     email_verified_at: null,
-    status: 'PENDING',
+    kyc_status: 'PENDING',
+    status: 'ACTIVE',
     failed_login_count: 0,
     locked_until: null,
     last_login_at: null,
     sessions: [],
     fcm_tokens: [],
     notifications: [],
+    audit_history: [],
     approved_by: null,
     approved_at: null,
     created_at: fixedNow,
@@ -242,8 +244,8 @@ test('registration prepares owner, venue, and owner membership result', async ()
     },
   });
 
-  assert.equal(result.ownerStatus, 'PENDING');
-  assert.equal(result.venueStatus, 'PENDING_APPROVAL');
+  assert.equal(result.ownerStatus, 'ACTIVE');
+  assert.equal(result.venueStatus, 'PENDING');
   assert.equal(fake.state.insertedOwner?.email, 'owner@example.com');
   assert.notEqual(
     fake.state.insertedOwner?.password_hash,
@@ -332,11 +334,12 @@ test('session validation rejects expired or revoked sessions', async () => {
   const sessionToken = 'expiring-session-token';
   owner.sessions.push({
     token_hash: hashSessionToken(sessionToken),
-    ip_address: '127.0.0.1',
+    ip_hash: '127.0.0.1',
     user_agent: 'identity-test',
-    created_at: fixedNow,
     expires_at: new Date('2026-07-27T08:00:00.000Z'),
+    last_seen_at: fixedNow,
     revoked_at: null,
+    created_at: fixedNow,
   });
 
   const fake = createFakeRepository(owner);
@@ -374,7 +377,6 @@ test('owner approval is delegated to the identity repository', async () => {
     role: 'OWNER',
     status: 'ACTIVE',
     created_at: fixedNow,
-    updated_at: fixedNow,
   };
 
   await service.approveVenueOwner({

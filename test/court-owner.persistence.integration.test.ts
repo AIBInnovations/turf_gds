@@ -103,7 +103,9 @@ test('Court persistence enforces venue isolation, unique names, versions, status
       venueId: first.venueId,
       correlationId: 'court-create-integration',
       name: 'Court Alpha',
-      sportTypes: ['football'],
+      sportType: 'FOOTBALL',
+      surfaceType: 'ARTIFICIAL_TURF',
+      capacity: 10,
       bookingMode: 'BOTH',
       minBookingMinutes: 60,
       bookingIncrementMinutes: 30,
@@ -116,7 +118,9 @@ test('Court persistence enforces venue isolation, unique names, versions, status
         venueId: first.venueId,
         correlationId: 'court-duplicate-integration',
         name: 'court alpha',
-        sportTypes: ['CRICKET'],
+        sportType: 'CRICKET',
+        surfaceType: 'CLAY',
+        capacity: 10,
         bookingMode: 'FIXED_SLOT',
         minBookingMinutes: 60,
         bookingIncrementMinutes: 30,
@@ -142,9 +146,9 @@ test('Court persistence enforces venue isolation, unique names, versions, status
       courtId: created.id,
       correlationId: 'court-update-integration',
       expectedVersion: 1,
-      status: 'INACTIVE',
+      status: 'UNAVAILABLE',
     });
-    assert.equal(updated.status, 'INACTIVE');
+    assert.equal(updated.status, 'UNAVAILABLE');
     assert.equal(updated.version, 2);
 
     await assert.rejects(

@@ -35,8 +35,6 @@ function venue(): VenueDocument {
     currency: 'INR',
     media: [],
     status: 'ACTIVE',
-    approved_by: null,
-    approved_at: null,
     audit_history: [],
     version: 1,
     created_at: fixedNow,
@@ -49,14 +47,17 @@ function court(): CourtDocument {
     _id: courtId,
     venue_id: venueId,
     name: 'Court One',
-    sport_types: ['FOOTBALL'],
+    sport_type: 'FOOTBALL',
+    surface_type: 'ARTIFICIAL_TURF',
+    capacity: 10,
     booking_mode: 'BOTH',
     min_booking_minutes: 60,
     booking_increment_minutes: 30,
-    operating_hours: [],
-    timezone: 'Asia/Kolkata',
+    operating_hours: { entries: [] },
+    fixed_slot_duration_minutes: null,
+    fixed_slot_anchor_minutes: null,
     media: [],
-    status: 'ACTIVE',
+    status: 'AVAILABLE',
     audit_history: [],
     version: 2,
     created_at: fixedNow,
@@ -201,7 +202,7 @@ function createFixture(options: {
   };
 }
 
-test('create Court normalizes sports and inherits the Venue timezone', async () => {
+test('create Court stores the decided sport, surface, and capacity', async () => {
   const fixture = createFixture();
 
   const result = await fixture.service.create({
@@ -209,15 +210,18 @@ test('create Court normalizes sports and inherits the Venue timezone', async () 
     venueId: venueId.toHexString(),
     correlationId: 'court-create',
     name: ' Court Two ',
-    sportTypes: ['football', 'Football', 'box cricket'],
+    sportType: 'FOOTBALL',
+    surfaceType: 'ARTIFICIAL_TURF',
+    capacity: 10,
     bookingMode: 'BOTH',
     minBookingMinutes: 60,
     bookingIncrementMinutes: 30,
   });
 
   assert.equal(result.name, 'Court Two');
-  assert.deepEqual(result.sportTypes, ['FOOTBALL', 'BOX_CRICKET']);
-  assert.equal(result.timezone, 'Asia/Kolkata');
+  assert.equal(result.sportType, 'FOOTBALL');
+  assert.equal(result.surfaceType, 'ARTIFICIAL_TURF');
+  assert.equal(result.capacity, 10);
   assert.equal(fixture.getInserted()?.audit_history[0]?.event_type, 'COURT_CREATED');
 });
 
@@ -230,7 +234,9 @@ test('Court duration rules reject invalid minimums and increments', async () => 
       venueId: venueId.toHexString(),
       correlationId: 'invalid-duration',
       name: 'Court Two',
-      sportTypes: ['FOOTBALL'],
+      sportType: 'FOOTBALL',
+      surfaceType: 'ARTIFICIAL_TURF',
+      capacity: 10,
       bookingMode: 'OPEN_TIME',
       minBookingMinutes: 75,
       bookingIncrementMinutes: 30,
@@ -250,7 +256,9 @@ test('duplicate Court names are mapped to a stable conflict', async () => {
       venueId: venueId.toHexString(),
       correlationId: 'duplicate-court',
       name: 'Court One',
-      sportTypes: ['FOOTBALL'],
+      sportType: 'FOOTBALL',
+      surfaceType: 'ARTIFICIAL_TURF',
+      capacity: 10,
       bookingMode: 'FIXED_SLOT',
       minBookingMinutes: 60,
       bookingIncrementMinutes: 30,
@@ -269,11 +277,11 @@ test('Court updates use optimistic versioning and can deactivate a Court', async
     courtId: courtId.toHexString(),
     correlationId: 'court-update',
     expectedVersion: 2,
-    status: 'INACTIVE',
+    status: 'UNAVAILABLE',
     bookingMode: 'FIXED_SLOT',
   });
 
-  assert.equal(result.status, 'INACTIVE');
+  assert.equal(result.status, 'UNAVAILABLE');
   assert.equal(result.bookingMode, 'FIXED_SLOT');
   assert.equal(result.version, 3);
 

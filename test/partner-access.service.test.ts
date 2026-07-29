@@ -52,13 +52,13 @@ function createFixture() {
     _id: new ObjectId('687f00000000000000000010'),
     legal_name: 'Booking Partner Private Limited',
     display_name: 'Booking Partner',
-    email: 'partner@example.com',
-    status: 'SANDBOX',
-    integration_review_status: 'NOT_STARTED',
-    sandbox_approved_by: new ObjectId('687f00000000000000000011'),
+    kyc_status: 'PENDING',
+    status: 'PENDING',
+    rate_limit_tier: 'STARTER',
     sandbox_approved_at: fixedNow,
     production_approved_by: null,
     production_approved_at: null,
+    audit_history: [],
     created_at: fixedNow,
     updated_at: fixedNow,
   };
@@ -144,7 +144,7 @@ test('issued Partner credentials authenticate a signed request', async () => {
   assert.equal(context.environment, 'SANDBOX');
   assert.deepEqual(context.scopes, ['bookings:read', 'webhooks:write']);
   assert.notEqual(
-    fixture.getStoredKey()?.secret_hash,
+    fixture.getStoredKey()?.key_hash,
     credentials.apiKey,
   );
   assert.notEqual(

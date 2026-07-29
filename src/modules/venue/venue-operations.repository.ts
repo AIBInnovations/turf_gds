@@ -1,10 +1,9 @@
-import { ObjectId, type ClientSession, type Document } from 'mongodb';
+import { type ClientSession, type ObjectId } from 'mongodb';
 
 import type { DatabaseConnection } from '../../shared/database/database-connection.js';
 import type {
   PricingRuleDocument,
   SlotDocument,
-  VenueContentDocument,
   VenuePayoutAccountDocument,
 } from './inventory.types.js';
 import type { CourtDocument } from './court.types.js';
@@ -61,14 +60,6 @@ export interface VenueOperationsRepository {
     expectedVersion: number;
   }): Promise<boolean>;
   findSlot(id: ObjectId, courtId: ObjectId): Promise<SlotDocument | null>;
-  getContent(venueId: ObjectId): Promise<VenueContentDocument | null>;
-  saveContent(input: {
-    venueId: ObjectId;
-    expectedVersion?: number;
-    content: Document;
-    actorOwnerId: ObjectId;
-    now: Date;
-  }): Promise<VenueContentDocument | null>;
   insertPayoutAccount(account: VenuePayoutAccountDocument): Promise<void>;
   listPayoutAccounts(
     venueId: ObjectId,
@@ -81,8 +72,6 @@ export function createVenueOperationsRepository(
   const pricing = () =>
     database.db.collection<PricingRuleDocument>('pricing_rules');
   const slots = () => database.db.collection<SlotDocument>('slots');
-  const contents = () =>
-    database.db.collection<VenueContentDocument>('venue_contents');
   const payoutAccounts = () =>
     database.db.collection<VenuePayoutAccountDocument>(
       'venue_payout_accounts',
@@ -118,7 +107,7 @@ export function createVenueOperationsRepository(
             filter: {
               court_id: slot.court_id,
               environment: slot.environment,
-              booking_mode: slot.booking_mode,
+              booking_type: slot.booking_type,
               starts_at: slot.starts_at,
               ends_at: slot.ends_at,
             },
@@ -145,7 +134,7 @@ export function createVenueOperationsRepository(
         {
           _id: input.slotId,
           court_id: input.courtId,
-          booking_mode: 'FIXED_SLOT',
+          booking_type: 'FIXED_SLOT',
           status: input.fromStatus,
           version: input.expectedVersion,
         },
@@ -192,7 +181,7 @@ export function createVenueOperationsRepository(
           _id: input.courtId,
           venue_id: input.venueId,
           version: input.expectedVersion,
-          status: 'ACTIVE',
+          status: 'AVAILABLE',
         },
         {
           $inc: { version: 1 },
@@ -222,7 +211,7 @@ export function createVenueOperationsRepository(
       const result = await slots().deleteOne({
         _id: input.slotId,
         court_id: input.courtId,
-        booking_mode: 'OPEN_TIME',
+        booking_type: 'OPEN_TIME',
         status: 'BLOCKED',
         version: input.expectedVersion,
       });
@@ -230,53 +219,6 @@ export function createVenueOperationsRepository(
     },
     findSlot(id, courtId) {
       return slots().findOne({ _id: id, court_id: courtId });
-    },
-    getContent(venueId) {
-      return contents().findOne({ venue_id: venueId });
-    },
-    async saveContent(input) {
-      if (input.expectedVersion === undefined) {
-        const content: VenueContentDocument = {
-          _id: new ObjectId(),
-          venue_id: input.venueId,
-          content: input.content,
-          version: 1,
-          updated_by_type: 'VENUE_OWNER',
-          updated_by_id: input.actorOwnerId,
-          created_at: input.now,
-          updated_at: input.now,
-        };
-        try {
-          await contents().insertOne(content);
-          return content;
-        } catch (error) {
-          if (
-            typeof error === 'object' &&
-            error !== null &&
-            'code' in error &&
-            error.code === 11_000
-          ) {
-            return null;
-          }
-          throw error;
-        }
-      }
-      return contents().findOneAndUpdate(
-        {
-          venue_id: input.venueId,
-          version: input.expectedVersion,
-        },
-        {
-          $set: {
-            content: input.content,
-            updated_by_type: 'VENUE_OWNER',
-            updated_by_id: input.actorOwnerId,
-            updated_at: input.now,
-          },
-          $inc: { version: 1 },
-        },
-        { returnDocument: 'after' },
-      );
     },
     async insertPayoutAccount(account) {
       await payoutAccounts().insertOne(account);

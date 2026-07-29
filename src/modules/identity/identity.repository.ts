@@ -135,7 +135,7 @@ export function createIdentityRepository(
     const updated = await owners().findOneAndUpdate(
       {
         _id: ownerId,
-        status: { $in: ['PENDING', 'ACTIVE'] },
+        status: 'ACTIVE',
       },
       [
         {

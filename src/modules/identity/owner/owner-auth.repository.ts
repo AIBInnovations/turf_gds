@@ -142,7 +142,7 @@ export function createIdentityRepository(
     const updated = await owners().findOneAndUpdate(
       {
         _id: ownerId,
-        status: { $in: ['PENDING', 'ACTIVE'] },
+        status: 'ACTIVE',
       },
       [
         {
@@ -206,10 +206,9 @@ export function createIdentityRepository(
     session: ClientSession,
   ): Promise<boolean> {
     const result = await owners().updateOne(
-      { _id: ownerId, status: 'PENDING' },
+      { _id: ownerId, status: 'ACTIVE' },
       {
         $set: {
-          status: 'ACTIVE',
           approved_by: adminId,
           approved_at: now,
           updated_at: now,
@@ -218,7 +217,7 @@ export function createIdentityRepository(
       { session },
     );
 
-    return result.modifiedCount > 0;
+    return result.matchedCount > 0;
   }
 
   return {

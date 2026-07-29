@@ -154,7 +154,6 @@ export function createOwnerAccessRepository(
         $set: {
           role: membership.role,
           status: 'ACTIVE',
-          updated_at: membership.updated_at,
         },
         $setOnInsert: {
           _id: membership._id,
@@ -169,7 +168,7 @@ export function createOwnerAccessRepository(
   async function revokeMembership(
     ownerId: ObjectId,
     venueId: ObjectId,
-    now: Date,
+    _now: Date,
   ): Promise<boolean> {
     const result = await memberships().updateOne(
       {
@@ -178,7 +177,7 @@ export function createOwnerAccessRepository(
         status: 'ACTIVE',
       },
       {
-        $set: { status: 'REVOKED', updated_at: now },
+        $set: { status: 'REVOKED' },
       },
     );
     return result.modifiedCount > 0;

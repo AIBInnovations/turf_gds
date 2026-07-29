@@ -1,5 +1,6 @@
 import type { AppConfig } from "../../config/env.js";
 import { ObjectId } from "mongodb";
+import { createHash } from "node:crypto";
 
 import type { DatabaseConnection } from "../../shared/database/database-connection.js";
 import {
@@ -26,8 +27,8 @@ export interface IdentityService {
     ownerId: string;
     venueId: string;
     membershipId: string;
-    ownerStatus: "PENDING";
-    venueStatus: "PENDING_APPROVAL";
+    ownerStatus: "ACTIVE";
+    venueStatus: "PENDING";
   }>;
   loginVenueOwner(input: LoginVenueOwnerInput): Promise<{
     sessionToken: string;
@@ -36,7 +37,7 @@ export interface IdentityService {
       id: string;
       legalName: string;
       email: string;
-      status: "PENDING" | "ACTIVE";
+      status: "ACTIVE";
     };
   }>;
   validateOwnerSession(input: {
@@ -99,13 +100,15 @@ export function createIdentityService(
             phone_e164: input.phoneE164.trim(),
             password_hash: passwordHash,
             email_verified_at: null,
-            status: "PENDING",
+            kyc_status: "PENDING",
+            status: "ACTIVE",
             failed_login_count: 0,
             locked_until: null,
             last_login_at: null,
             sessions: [],
             fcm_tokens: [],
             notifications: [],
+            audit_history: [],
             approved_by: null,
             approved_at: null,
             created_at: timestamp,
@@ -136,9 +139,7 @@ export function createIdentityService(
             },
             currency: "INR",
             media: [],
-            status: "PENDING_APPROVAL",
-            approved_by: null,
-            approved_at: null,
+            status: "PENDING",
             audit_history: [],
             version: 1,
             created_at: timestamp,
@@ -154,7 +155,6 @@ export function createIdentityService(
             role: "OWNER",
             status: "ACTIVE",
             created_at: timestamp,
-            updated_at: timestamp,
           },
           session,
         );
@@ -171,8 +171,8 @@ export function createIdentityService(
       ownerId: ownerId.toHexString(),
       venueId: venueId.toHexString(),
       membershipId: membershipId.toHexString(),
-      ownerStatus: "PENDING",
-      venueStatus: "PENDING_APPROVAL",
+      ownerStatus: "ACTIVE",
+      venueStatus: "PENDING",
     };
   }
 
@@ -236,11 +236,14 @@ export function createIdentityService(
       owner._id,
       {
         token_hash: hashSessionToken(sessionToken),
-        ip_address: input.ipAddress.slice(0, 64),
+        ip_hash: createHash("sha256")
+          .update(input.ipAddress.slice(0, 64))
+          .digest("hex"),
         user_agent: input.userAgent.slice(0, 512),
-        created_at: timestamp,
         expires_at: expiresAt,
+        last_seen_at: timestamp,
         revoked_at: null,
+        created_at: timestamp,
       },
       dependencies.authConfig.maxSessions,
       timestamp,

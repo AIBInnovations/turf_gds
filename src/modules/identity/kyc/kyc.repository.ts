@@ -5,6 +5,7 @@ import type {
   KycDocumentDocument,
   KycStatus,
   KycSubjectType,
+  KycVerificationType,
   KycVerificationDocument,
 } from './kyc.types.js';
 
@@ -12,14 +13,14 @@ export interface KycRepository {
   createDraft(input: {
     subjectType: KycSubjectType;
     subjectId: ObjectId;
-    verificationType: string;
+    verificationType: KycVerificationType;
     now: Date;
   }): Promise<KycVerificationDocument>;
   findVerification(id: ObjectId): Promise<KycVerificationDocument | null>;
   findCurrent(
     subjectType: KycSubjectType,
     subjectId: ObjectId,
-    verificationType: string,
+    verificationType: KycVerificationType,
     session?: ClientSession,
   ): Promise<KycVerificationDocument | null>;
   insertDocument(document: KycDocumentDocument): Promise<void>;
@@ -46,7 +47,7 @@ export function createKycRepository(
   async function createDraft(input: {
     subjectType: KycSubjectType;
     subjectId: ObjectId;
-    verificationType: string;
+    verificationType: KycVerificationType;
     now: Date;
   }): Promise<KycVerificationDocument> {
     return database.withTransaction(async ({ session }) => {
@@ -58,7 +59,7 @@ export function createKycRepository(
           is_current: true,
         },
         {
-          $set: { is_current: false, updated_at: input.now },
+          $set: { is_current: false },
         },
         ...(session ? [{ session }] : []),
       );
@@ -67,15 +68,14 @@ export function createKycRepository(
         subject_type: input.subjectType,
         subject_id: input.subjectId,
         verification_type: input.verificationType,
-        status: 'DRAFT',
+        status: 'PENDING',
         is_current: true,
-        submitted_at: null,
         reviewed_by: null,
         reviewed_at: null,
         rejection_reason: null,
         expires_at: null,
+        audit_history: [],
         created_at: input.now,
-        updated_at: input.now,
       };
       await verifications().insertOne(verification, { session });
       return verification;
@@ -104,22 +104,30 @@ export function createKycRepository(
     countActiveDocuments(verificationId) {
       return documents().countDocuments({
         kyc_verification_id: verificationId,
-        status: 'ACTIVE',
+        status: 'PENDING',
       });
     },
-    async submit(id, subjectId, now) {
+    async submit(id, subjectId, _now) {
       const result = await verifications().updateOne(
         {
           _id: id,
           subject_id: subjectId,
-          status: 'DRAFT',
+          status: 'PENDING',
           is_current: true,
         },
         {
           $set: {
-            status: 'SUBMITTED',
-            submitted_at: now,
-            updated_at: now,
+            status: 'PENDING',
+          },
+          $push: {
+            audit_history: {
+              event_type: 'KYC_SUBMITTED',
+              actor_type: inputActorType(),
+              actor_id: subjectId,
+              correlation_id: new ObjectId().toHexString(),
+              changes: {},
+              occurred_at: _now,
+            },
           },
         },
       );
@@ -129,7 +137,7 @@ export function createKycRepository(
       const result = await verifications().updateOne(
         {
           _id: input.id,
-          status: { $in: ['SUBMITTED', 'IN_REVIEW'] },
+          status: 'PENDING',
           is_current: true,
         },
         {
@@ -139,11 +147,14 @@ export function createKycRepository(
             reviewed_at: input.now,
             rejection_reason: input.rejectionReason,
             expires_at: input.expiresAt,
-            updated_at: input.now,
           },
         },
       );
       return result.modifiedCount > 0;
     },
   };
+}
+
+function inputActorType(): 'VENUE_OWNER_OR_PARTNER' {
+  return 'VENUE_OWNER_OR_PARTNER';
 }

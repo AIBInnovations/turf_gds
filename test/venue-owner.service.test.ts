@@ -32,8 +32,6 @@ function venueDocument(): VenueDocument {
     currency: 'INR',
     media: [],
     status: 'ACTIVE',
-    approved_by: null,
-    approved_at: null,
     audit_history: [],
     version: 3,
     created_at: fixedNow,

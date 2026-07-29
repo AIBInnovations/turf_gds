@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import 'dotenv/config';
+import { ObjectId } from 'mongodb';
 
 import type { AppConfig } from '../src/config/env.js';
 import { initializeIdentityPersistence } from '../src/modules/identity/persistence.js';
@@ -182,7 +183,16 @@ test('Venue Owner registration commits and rolls back as one MongoDB transaction
           verificationType: 'BUSINESS',
         })
       ).status,
-      'SUBMITTED',
+      'PENDING',
+    );
+    const submitted = await database.db
+      .collection('kyc_verifications')
+      .findOne({ _id: new ObjectId(verification.id) });
+    assert.ok(
+      submitted?.audit_history.some(
+        (event: { event_type?: string }) =>
+          event.event_type === 'KYC_SUBMITTED',
+      ),
     );
     await assert.rejects(
       kycService.getCurrent({

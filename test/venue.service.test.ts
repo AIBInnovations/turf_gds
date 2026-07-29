@@ -50,7 +50,7 @@ test('Venue creates the initial onboarding aggregate with canonical defaults', a
     undefined as never,
   );
 
-  assert.equal(insertedVenue?.status, 'PENDING_APPROVAL');
+  assert.equal(insertedVenue?.status, 'PENDING');
   assert.equal(insertedVenue?.currency, 'INR');
   assert.equal(insertedVenue?.environment, 'PRODUCTION');
   assert.deepEqual(insertedVenue?.geo.coordinates, [77.5946, 12.9716]);

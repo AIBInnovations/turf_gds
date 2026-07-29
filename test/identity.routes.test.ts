@@ -14,8 +14,8 @@ function createRouteTestService(): IdentityService {
         ownerId: '687f00000000000000000001',
         venueId: '687f00000000000000000002',
         membershipId: '687f00000000000000000003',
-        ownerStatus: 'PENDING',
-        venueStatus: 'PENDING_APPROVAL',
+        ownerStatus: 'ACTIVE',
+        venueStatus: 'PENDING',
       };
     },
 
@@ -27,7 +27,7 @@ function createRouteTestService(): IdentityService {
           id: '687f00000000000000000001',
           legalName: 'Turf Owner Private Limited',
           email: input.email,
-          status: 'PENDING',
+          status: 'ACTIVE',
         },
       };
     },
@@ -35,7 +35,7 @@ function createRouteTestService(): IdentityService {
     async validateOwnerSession() {
       return {
         ownerId: '687f00000000000000000001',
-        ownerStatus: 'PENDING',
+        ownerStatus: 'ACTIVE',
         membership: null,
       };
     },

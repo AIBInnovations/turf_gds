@@ -28,6 +28,7 @@ function ownerDocument(
     phone_e164: '+919876543210',
     password_hash: 'password-hash',
     email_verified_at: null,
+    kyc_status: 'PENDING',
     status: 'ACTIVE',
     failed_login_count: 0,
     locked_until: null,
@@ -35,6 +36,7 @@ function ownerDocument(
     sessions: [],
     fcm_tokens: [],
     notifications: [],
+    audit_history: [],
     approved_by: null,
     approved_at: null,
     created_at: timestamp,
@@ -54,7 +56,6 @@ function createService(options: {
     role: 'MANAGER',
     status: 'ACTIVE',
     created_at: new Date(),
-    updated_at: new Date(),
   };
   let savedMembership: VenueOwnerMembershipDocument | undefined;
   const owners = new Map<string, VenueOwnerDocument>([

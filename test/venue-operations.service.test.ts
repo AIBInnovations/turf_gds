@@ -9,7 +9,6 @@ import type { CourtDocument } from '../src/modules/venue/court.types.js';
 import type {
   PricingRuleDocument,
   SlotDocument,
-  VenueContentDocument,
   VenuePayoutAccountDocument,
 } from '../src/modules/venue/inventory.types.js';
 import type { VenueOperationsRepository } from '../src/modules/venue/venue-operations.repository.js';
@@ -28,7 +27,6 @@ function createFixture() {
   const pricing: PricingRuleDocument[] = [];
   const slots: SlotDocument[] = [];
   const payouts: VenuePayoutAccountDocument[] = [];
-  let content: VenueContentDocument | null = null;
   let courtVersion = 3;
 
   const venue: VenueDocument = {
@@ -48,8 +46,6 @@ function createFixture() {
     currency: 'INR',
     media: [],
     status: 'ACTIVE',
-    approved_by: null,
-    approved_at: null,
     audit_history: [],
     version: 1,
     created_at: fixedNow,
@@ -59,16 +55,19 @@ function createFixture() {
     _id: courtId,
     venue_id: venueId,
     name: 'Court One',
-    sport_types: ['FOOTBALL'],
+    sport_type: 'FOOTBALL',
+    surface_type: 'ARTIFICIAL_TURF',
+    capacity: 10,
     booking_mode: 'BOTH',
     min_booking_minutes: 60,
     booking_increment_minutes: 30,
-    operating_hours: [
+    operating_hours: { entries: [
       { day_of_week: 2, opens_at: '06:00', closes_at: '08:00' },
-    ],
-    timezone: 'Asia/Kolkata',
+    ] },
+    fixed_slot_duration_minutes: null,
+    fixed_slot_anchor_minutes: null,
     media: [],
-    status: 'ACTIVE',
+    status: 'AVAILABLE',
     audit_history: [],
     version: courtVersion,
     created_at: fixedNow,
@@ -105,7 +104,7 @@ function createFixture() {
           (candidate) =>
             candidate.court_id.equals(value.court_id) &&
             candidate.environment === value.environment &&
-            candidate.booking_mode === value.booking_mode &&
+            candidate.booking_type === value.booking_type &&
             candidate.starts_at.getTime() === value.starts_at.getTime() &&
             candidate.ends_at.getTime() === value.ends_at.getTime(),
         );
@@ -129,7 +128,7 @@ function createFixture() {
         (value) =>
           value._id.equals(input.slotId) &&
           value.court_id.equals(input.courtId) &&
-          value.booking_mode === 'FIXED_SLOT' &&
+          value.booking_type === 'FIXED_SLOT' &&
           value.status === input.fromStatus &&
           value.version === input.expectedVersion,
       );
@@ -165,7 +164,7 @@ function createFixture() {
         (value) =>
           value._id.equals(input.slotId) &&
           value.court_id.equals(input.courtId) &&
-          value.booking_mode === 'OPEN_TIME' &&
+          value.booking_type === 'OPEN_TIME' &&
           value.status === 'BLOCKED' &&
           value.version === input.expectedVersion,
       );
@@ -178,30 +177,6 @@ function createFixture() {
         (value) =>
           value._id.equals(id) && value.court_id.equals(requestedCourtId),
       ) ?? null;
-    },
-    async getContent(id) {
-      return content?.venue_id.equals(id) ? content : null;
-    },
-    async saveContent(input) {
-      if (input.expectedVersion === undefined) {
-        if (content) return null;
-        content = {
-          _id: new ObjectId(),
-          venue_id: input.venueId,
-          content: input.content,
-          version: 1,
-          updated_by_type: 'VENUE_OWNER',
-          updated_by_id: input.actorOwnerId,
-          created_at: input.now,
-          updated_at: input.now,
-        };
-        return content;
-      }
-      if (!content || content.version !== input.expectedVersion) return null;
-      content.content = input.content;
-      content.version += 1;
-      content.updated_at = input.now;
-      return content;
     },
     async insertPayoutAccount(value) {
       if (
@@ -330,22 +305,22 @@ test('pricing rules drive idempotent fixed-slot generation', async () => {
     actorOwnerId: ownerId.toHexString(),
     venueId: venueId.toHexString(),
     courtId: courtId.toHexString(),
-    daysOfWeek: [2],
-    startsTime: '06:00',
-    endsTime: '08:00',
+    dayOfWeek: 2,
+    startTime: '06:00',
+    endTime: '08:00',
     currency: 'INR',
     effectiveFrom: '2026-07-01T00:00:00.000Z',
   };
   await fixture.service.createPricingRule({
     ...common,
     name: 'Standard',
-    amountMinor: 1000,
+    priceMinor: 1000,
     priority: 1,
   });
   await fixture.service.createPricingRule({
     ...common,
     name: 'Peak override',
-    amountMinor: 1500,
+    priceMinor: 1500,
     priority: 10,
   });
 
@@ -369,7 +344,7 @@ test('pricing rules drive idempotent fixed-slot generation', async () => {
   assert.equal(first.created, 2);
   assert.equal(second.created, 0);
   assert.deepEqual(
-    fixture.slots.map((slot) => slot.price_amount_minor),
+    fixture.slots.map((slot) => slot.price_minor),
     [1500, 1500],
   );
 });
@@ -381,10 +356,10 @@ test('fixed inventory can only move AVAILABLE to BLOCKED and back by version', a
     venueId: venueId.toHexString(),
     courtId: courtId.toHexString(),
     name: 'Standard',
-    daysOfWeek: [2],
-    startsTime: '06:00',
-    endsTime: '08:00',
-    amountMinor: 1000,
+    dayOfWeek: 2,
+    startTime: '06:00',
+    endTime: '08:00',
+    priceMinor: 1000,
     currency: 'INR',
     effectiveFrom: '2026-07-01T00:00:00.000Z',
     priority: 1,
@@ -475,36 +450,6 @@ test('open-time blocks use the Court version mutex and reject overlap', async ()
     correlationId: 'open-release',
   });
   assert.equal(fixture.slots.length, 0);
-});
-
-test('Venue content is versioned and rejects unsafe MongoDB keys', async () => {
-  const fixture = createFixture();
-  const created = await fixture.service.saveContent({
-    actorOwnerId: ownerId.toHexString(),
-    venueId: venueId.toHexString(),
-    content: { amenities: ['Parking'], policies: { footwear: 'Studs' } },
-  }) as { version: number };
-  assert.equal(created.version, 1);
-
-  const updated = await fixture.service.saveContent({
-    actorOwnerId: ownerId.toHexString(),
-    venueId: venueId.toHexString(),
-    expectedVersion: 1,
-    content: { amenities: ['Parking', 'Lights'] },
-  }) as { version: number };
-  assert.equal(updated.version, 2);
-
-  await assert.rejects(
-    fixture.service.saveContent({
-      actorOwnerId: ownerId.toHexString(),
-      venueId: venueId.toHexString(),
-      expectedVersion: 2,
-      content: { '$where': 'unsafe' },
-    }),
-    (error: unknown) =>
-      error instanceof AppError &&
-      error.code === 'INVALID_VENUE_CONTENT',
-  );
 });
 
 test('payout accounts persist only tokenized metadata and await Admin verification', async () => {

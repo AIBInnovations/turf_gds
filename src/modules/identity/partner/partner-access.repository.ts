@@ -80,13 +80,21 @@ export function createPartnerAccessRepository(
     },
     async approveSandbox(partnerId, adminId, now) {
       const result = await partners().updateOne(
-        { _id: partnerId, status: 'ONBOARDING' },
+        { _id: partnerId, status: 'PENDING', sandbox_approved_at: null },
         {
           $set: {
-            status: 'SANDBOX',
-            sandbox_approved_by: adminId,
             sandbox_approved_at: now,
             updated_at: now,
+          },
+          $push: {
+            audit_history: {
+              event_type: 'SANDBOX_APPROVED',
+              actor_type: 'ADMIN',
+              actor_id: adminId,
+              correlation_id: new ObjectId().toHexString(),
+              changes: {},
+              occurred_at: now,
+            },
           },
         },
       );
@@ -96,8 +104,14 @@ export function createPartnerAccessRepository(
       const result = await partners().updateOne(
         {
           _id: partnerId,
-          status: 'SANDBOX',
-          integration_review_status: 'PASSED',
+          status: 'PENDING',
+          sandbox_approved_at: { $ne: null },
+          audit_history: {
+            $elemMatch: {
+              event_type: 'INTEGRATION_REVIEW',
+              'changes.status': 'PASSED',
+            },
+          },
         },
         {
           $set: {
@@ -105,6 +119,16 @@ export function createPartnerAccessRepository(
             production_approved_by: adminId,
             production_approved_at: now,
             updated_at: now,
+          },
+          $push: {
+            audit_history: {
+              event_type: 'PRODUCTION_APPROVED',
+              actor_type: 'ADMIN',
+              actor_id: adminId,
+              correlation_id: new ObjectId().toHexString(),
+              changes: { status: 'ACTIVE' },
+              occurred_at: now,
+            },
           },
         },
       );
@@ -114,12 +138,21 @@ export function createPartnerAccessRepository(
       const result = await partners().updateOne(
         {
           _id: partnerId,
-          status: { $in: ['SANDBOX', 'ACTIVE'] },
+          status: { $in: ['PENDING', 'ACTIVE'] },
         },
         {
           $set: {
-            integration_review_status: status,
             updated_at: now,
+          },
+          $push: {
+            audit_history: {
+              event_type: 'INTEGRATION_REVIEW',
+              actor_type: 'SYSTEM',
+              actor_id: null,
+              correlation_id: new ObjectId().toHexString(),
+              changes: { status },
+              occurred_at: now,
+            },
           },
         },
       );
@@ -162,16 +195,13 @@ export function createPartnerAccessRepository(
           $inc: {
             request_count: 1,
             error_count: input.statusCode >= 400 ? 1 : 0,
-            rate_limit_count: input.rateLimited ? 1 : 0,
+            rate_limited_count: input.rateLimited ? 1 : 0,
           },
           $max: {
             p95_latency_ms: Math.max(0, Math.round(input.latencyMs)),
           },
           $set: { updated_at: input.now },
-          $setOnInsert: {
-            _id: new ObjectId(),
-            created_at: input.now,
-          },
+          $setOnInsert: { _id: new ObjectId() },
         },
         { upsert: true },
       );
@@ -189,7 +219,7 @@ export function createPartnerAccessRepository(
     },
     async verifyWebhook(id, now) {
       const result = await webhooks().updateOne(
-        { _id: id, status: 'PENDING_VERIFICATION' },
+        { _id: id, status: 'PENDING' },
         {
           $set: {
             status: 'ACTIVE',

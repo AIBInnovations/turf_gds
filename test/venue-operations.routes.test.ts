@@ -67,14 +67,6 @@ function createFixture() {
       calls.releaseAvailability = input;
       return { id: input.slotId, status: 'AVAILABLE' };
     },
-    async getContent(input) {
-      calls.getContent = input;
-      return { venueId: input.venueId, content: {}, version: 0 };
-    },
-    async saveContent(input) {
-      calls.saveContent = input;
-      return { venueId: input.venueId, content: input.content, version: 1 };
-    },
     async addPayoutAccount(input) {
       calls.addPayoutAccount = input;
       return { id: 'account-id', status: 'PENDING' };
@@ -122,10 +114,10 @@ test('pricing and slot generation routes derive owner and correlation context', 
     headers,
     payload: {
       name: 'Standard',
-      daysOfWeek: [1, 2, 3, 4, 5],
-      startsTime: '06:00',
-      endsTime: '22:00',
-      amountMinor: 150000,
+      dayOfWeek: 1,
+      startTime: '06:00',
+      endTime: '22:00',
+      priceMinor: 150000,
       currency: 'INR',
       effectiveFrom: '2026-07-01T00:00:00.000Z',
       priority: 1,
@@ -180,7 +172,7 @@ test('inventory block schema requires exactly one fixed or open-time shape', asy
   await app.close();
 });
 
-test('content and payout routes never accept raw banking fields', async () => {
+test('unsupported content route is absent and payout route ignores raw banking fields', async () => {
   const fixture = createFixture();
   const app = await buildApp(fixture);
   const headers = { authorization: 'Bearer owner-session' };
@@ -205,7 +197,7 @@ test('content and payout routes never accept raw banking fields', async () => {
     },
   });
 
-  assert.equal(contentResponse.statusCode, 200);
+  assert.equal(contentResponse.statusCode, 404);
   assert.equal(rawBankResponse.statusCode, 201);
   const payoutCall = fixture.calls.addPayoutAccount as Record<
     string,

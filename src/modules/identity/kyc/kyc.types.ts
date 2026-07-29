@@ -1,49 +1,47 @@
 import type { ObjectId } from 'mongodb';
 
 export type KycSubjectType = 'VENUE_OWNER' | 'PARTNER';
-export type KycStatus =
-  | 'DRAFT'
-  | 'SUBMITTED'
-  | 'IN_REVIEW'
-  | 'VERIFIED'
-  | 'REJECTED'
-  | 'EXPIRED';
+export type KycStatus = 'PENDING' | 'VERIFIED' | 'REJECTED' | 'EXPIRED';
+export type KycVerificationType = 'IDENTITY' | 'BUSINESS' | 'ADDRESS';
+export type KycDocumentType =
+  | 'PAN'
+  | 'AADHAAR'
+  | 'GST_CERTIFICATE'
+  | 'BUSINESS_REGISTRATION'
+  | 'ADDRESS_PROOF'
+  | 'ID_PROOF';
 
 export interface KycVerificationDocument {
   _id: ObjectId;
   subject_type: KycSubjectType;
   subject_id: ObjectId;
-  verification_type: string;
+  verification_type: KycVerificationType;
   status: KycStatus;
   is_current: boolean;
-  submitted_at: Date | null;
   reviewed_by: ObjectId | null;
   reviewed_at: Date | null;
   rejection_reason: string | null;
   expires_at: Date | null;
+  audit_history: unknown[];
   created_at: Date;
-  updated_at: Date;
 }
 
 export interface KycFileDocument {
-  provider: 'CLOUDINARY';
   storage_key: string;
-  resource_type: string;
-  delivery_type: string;
-  format: string | null;
-  bytes: number;
-  checksum: string | null;
   mime_type: string;
-  original_filename: string;
-  secure_url: string;
+  size_bytes: number;
+  checksum: string;
+  classification: string;
+  status: 'ACTIVE' | 'DELETED';
+  created_at: Date;
 }
 
 export interface KycDocumentDocument {
   _id: ObjectId;
   kyc_verification_id: ObjectId;
-  document_type: string;
   file: KycFileDocument;
-  status: 'ACTIVE' | 'REJECTED' | 'DELETED';
+  document_type: KycDocumentType;
+  status: 'PENDING' | 'ACCEPTED' | 'REJECTED';
+  rejection_reason: string | null;
   created_at: Date;
-  updated_at: Date;
 }

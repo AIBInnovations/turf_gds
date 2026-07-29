@@ -32,6 +32,7 @@ async function createFixture(status: 'ACTIVE' | 'DISABLED' = 'ACTIVE') {
     role: 'ADMIN',
     status,
     fcm_tokens: [],
+    audit_history: [],
     last_login_at: null,
     created_at: fixedNow,
     updated_at: fixedNow,

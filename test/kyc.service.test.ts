@@ -26,15 +26,14 @@ function createFixture(options: {
     subject_type: 'VENUE_OWNER',
     subject_id: subjectId,
     verification_type: 'BUSINESS',
-    status: options.status ?? 'DRAFT',
+    status: options.status ?? 'PENDING',
     is_current: true,
-    submitted_at: null,
     reviewed_by: null,
     reviewed_at: null,
     rejection_reason: null,
     expires_at: options.expiresAt ?? null,
+    audit_history: [],
     created_at: fixedNow,
-    updated_at: fixedNow,
   };
   let insertedDocument: KycDocumentDocument | undefined;
   let deletedPublicId: string | undefined;
@@ -117,10 +116,10 @@ test('KYC upload stores protected Cloudinary metadata', async () => {
     buffer: Buffer.from('document'),
   });
 
-  assert.equal(result.status, 'ACTIVE');
+  assert.equal(result.status, 'PENDING');
   assert.equal(
-    fixture.getInsertedDocument()?.file.delivery_type,
-    'authenticated',
+    fixture.getInsertedDocument()?.file.status,
+    'ACTIVE',
   );
   assert.equal(
     fixture.getInsertedDocument()?.file.storage_key,
@@ -178,7 +177,10 @@ test('creating a draft is idempotent while the current draft is editable', async
 });
 
 test('a submitted KYC cannot be replaced by a new draft', async () => {
-  const fixture = createFixture({ status: 'SUBMITTED' });
+  const fixture = createFixture({ status: 'PENDING' });
+  fixture.verification.audit_history.push({
+    event_type: 'KYC_SUBMITTED',
+  });
 
   await assert.rejects(
     fixture.service.createDraft({
@@ -225,7 +227,7 @@ test('KYC submission requires at least one active document', async () => {
 });
 
 test('KYC review rejects an expiry that is not in the future', async () => {
-  const fixture = createFixture({ status: 'SUBMITTED' });
+  const fixture = createFixture({ status: 'PENDING' });
 
   await assert.rejects(
     fixture.service.review({

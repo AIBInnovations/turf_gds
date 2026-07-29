@@ -1,6 +1,7 @@
 import type { ObjectId } from 'mongodb';
 
-export type VenueOwnerStatus = 'PENDING' | 'ACTIVE' | 'SUSPENDED';
+export type VenueOwnerStatus = 'ACTIVE' | 'SUSPENDED';
+export type KycDerivedStatus = 'PENDING' | 'VERIFIED' | 'REJECTED' | 'EXPIRED';
 export type VenueMembershipRole = 'OWNER' | 'MANAGER' | 'STAFF';
 export const PERMISSIONS = [
   'MANAGE_VENUE',
@@ -16,11 +17,12 @@ export type VenuePermission = (typeof PERMISSIONS)[number];
 
 export interface OwnerSessionDocument {
   token_hash: string;
-  ip_address: string;
+  ip_hash: string;
   user_agent: string;
-  created_at: Date;
   expires_at: Date;
+  last_seen_at: Date;
   revoked_at: Date | null;
+  created_at: Date;
 }
 
 export interface VenueOwnerDocument {
@@ -30,6 +32,7 @@ export interface VenueOwnerDocument {
   phone_e164: string;
   password_hash: string;
   email_verified_at: Date | null;
+  kyc_status: KycDerivedStatus;
   status: VenueOwnerStatus;
   failed_login_count: number;
   locked_until: Date | null;
@@ -37,6 +40,7 @@ export interface VenueOwnerDocument {
   sessions: OwnerSessionDocument[];
   fcm_tokens: unknown[];
   notifications: unknown[];
+  audit_history: unknown[];
   approved_by: ObjectId | null;
   approved_at: Date | null;
   created_at: Date;
@@ -50,7 +54,6 @@ export interface VenueOwnerMembershipDocument {
   role: VenueMembershipRole;
   status: 'ACTIVE' | 'REVOKED';
   created_at: Date;
-  updated_at: Date;
 }
 
 export interface VenueRolePermissionDocument {

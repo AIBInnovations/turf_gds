@@ -16,7 +16,7 @@ import type { VenueDocument } from '../src/modules/venue/venue.types.js';
 import { MongoDatabaseConnection } from '../src/shared/database/database-connection.js';
 import { AppError } from '../src/shared/errors/app-error.js';
 
-test('Venue operations persistence enforces generation, versions, content, and tokenized payouts', async (context) => {
+test('Venue operations persistence enforces generation, versions, and tokenized payouts', async (context) => {
   const uri = process.env.MONGODB_URI;
   if (!uri) {
     context.skip('MONGODB_URI is not configured');
@@ -59,8 +59,6 @@ test('Venue operations persistence enforces generation, versions, content, and t
       currency: 'INR',
       media: [],
       status: 'ACTIVE',
-      approved_by: null,
-      approved_at: null,
       audit_history: [],
       version: 1,
       created_at: now,
@@ -70,16 +68,19 @@ test('Venue operations persistence enforces generation, versions, content, and t
       _id: courtId,
       venue_id: venueId,
       name: 'Inventory Court',
-      sport_types: ['FOOTBALL'],
+      sport_type: 'FOOTBALL',
+      surface_type: 'ARTIFICIAL_TURF',
+      capacity: 10,
       booking_mode: 'BOTH',
       min_booking_minutes: 60,
       booking_increment_minutes: 30,
-      operating_hours: [
+      operating_hours: { entries: [
         { day_of_week: 2, opens_at: '06:00', closes_at: '08:00' },
-      ],
-      timezone: 'Asia/Kolkata',
+      ] },
+      fixed_slot_duration_minutes: null,
+      fixed_slot_anchor_minutes: null,
       media: [],
-      status: 'ACTIVE',
+      status: 'AVAILABLE',
       audit_history: [],
       version: 1,
       created_at: now,
@@ -148,10 +149,10 @@ test('Venue operations persistence enforces generation, versions, content, and t
     await service.createPricingRule({
       ...scope,
       name: 'Weekday',
-      daysOfWeek: [2],
-      startsTime: '06:00',
-      endsTime: '08:00',
-      amountMinor: 125000,
+      dayOfWeek: 2,
+      startTime: '06:00',
+      endTime: '08:00',
+      priceMinor: 125000,
       currency: 'INR',
       effectiveFrom: '2026-07-01T00:00:00.000Z',
       priority: 1,
@@ -197,24 +198,6 @@ test('Venue operations persistence enforces generation, versions, content, and t
       correlationId: 'release',
     });
 
-    const createdContent = await service.saveContent({
-      actorOwnerId: ownerId.toHexString(),
-      venueId: venueId.toHexString(),
-      content: { amenities: ['Parking'] },
-    }) as { version: number };
-    assert.equal(createdContent.version, 1);
-    await assert.rejects(
-      service.saveContent({
-        actorOwnerId: ownerId.toHexString(),
-        venueId: venueId.toHexString(),
-        expectedVersion: 99,
-        content: { amenities: [] },
-      }),
-      (error: unknown) =>
-        error instanceof AppError &&
-        error.code === 'CONTENT_VERSION_CONFLICT',
-    );
-
     const payout = await service.addPayoutAccount({
       actorOwnerId: ownerId.toHexString(),
       venueId: venueId.toHexString(),
@@ -234,7 +217,7 @@ test('Venue operations persistence enforces generation, versions, content, and t
     const names = collections.map((value) => value.name);
     assert.equal(names.includes('pricing_rules'), true);
     assert.equal(names.includes('slots'), true);
-    assert.equal(names.includes('venue_contents'), true);
+    assert.equal(names.includes('venue_contents'), false);
     assert.equal(names.includes('venue_payout_accounts'), true);
   } finally {
     if (databaseName.startsWith('turf_gds_venue_ops_it_')) {

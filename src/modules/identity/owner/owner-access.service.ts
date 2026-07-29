@@ -232,7 +232,6 @@ export function createOwnerAccessService(input: {
       role: values.role,
       status: 'ACTIVE',
       created_at: timestamp,
-      updated_at: timestamp,
     });
     return {
       membershipId: membership._id.toHexString(),

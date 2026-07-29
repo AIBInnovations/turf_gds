@@ -8,6 +8,7 @@ import type {
   CourtBookingMode,
   CourtDocument,
   CourtOperatingHourDocument,
+  CourtSportType,
   CourtStatus,
 } from './court.types.js';
 import type { VenueRepository } from './venue.repository.js';
@@ -32,11 +33,14 @@ export interface CreateCourtInput {
   venueId: string;
   correlationId: string;
   name: string;
-  sportTypes: string[];
+  sportType: CourtSportType;
+  surfaceType: string;
+  capacity: number;
   bookingMode: CourtBookingMode;
   minBookingMinutes: number;
   bookingIncrementMinutes: number;
-  timezone?: string;
+  fixedSlotDurationMinutes?: number | null;
+  fixedSlotAnchorMinutes?: number | null;
 }
 
 export interface UpdateCourtInput {
@@ -46,11 +50,14 @@ export interface UpdateCourtInput {
   correlationId: string;
   expectedVersion: number;
   name?: string;
-  sportTypes?: string[];
+  sportType?: CourtSportType;
+  surfaceType?: string;
+  capacity?: number;
   bookingMode?: CourtBookingMode;
   minBookingMinutes?: number;
   bookingIncrementMinutes?: number;
-  timezone?: string;
+  fixedSlotDurationMinutes?: number | null;
+  fixedSlotAnchorMinutes?: number | null;
   status?: CourtStatus;
 }
 
@@ -119,16 +126,19 @@ export function createCourtOwnerService(input: {
       _id: new ObjectId(),
       venue_id: venueId,
       name: normalizeName(values.name),
-      sport_types: normalizeSportTypes(values.sportTypes),
+      sport_type: normalizeSportType(values.sportType),
+      surface_type: normalizeSurface(values.surfaceType),
+      capacity: normalizeCapacity(values.capacity),
+      status: 'AVAILABLE',
       booking_mode: assertBookingMode(values.bookingMode),
       min_booking_minutes: values.minBookingMinutes,
       booking_increment_minutes: values.bookingIncrementMinutes,
-      operating_hours: [],
-      timezone: values.timezone
-        ? normalizeTimeZone(values.timezone)
-        : venue.timezone,
+      operating_hours: { entries: [] },
+      fixed_slot_duration_minutes:
+        values.fixedSlotDurationMinutes ?? null,
+      fixed_slot_anchor_minutes:
+        values.fixedSlotAnchorMinutes ?? null,
       media: [],
-      status: 'ACTIVE',
       audit_history: [{
         event_type: 'COURT_CREATED',
         actor_type: 'VENUE_OWNER',
@@ -136,11 +146,14 @@ export function createCourtOwnerService(input: {
         correlation_id: values.correlationId,
         changed_fields: [
           'name',
-          'sport_types',
+          'sport_type',
+          'surface_type',
+          'capacity',
           'booking_mode',
           'min_booking_minutes',
           'booking_increment_minutes',
-          'timezone',
+          'fixed_slot_duration_minutes',
+          'fixed_slot_anchor_minutes',
           'status',
         ],
         occurred_at: timestamp,
@@ -372,7 +385,7 @@ export function createCourtOwnerService(input: {
       expectedVersion: values.expectedVersion,
       actorOwnerId: toObjectId(values.actorOwnerId),
       correlationId: values.correlationId,
-      changes: { operating_hours: operatingHours },
+      changes: { operating_hours: { entries: operatingHours } },
       changedFields: ['operating_hours'],
       now: now(),
     });
@@ -397,11 +410,14 @@ function normalizeCourtChanges(
 ): {
   changes: {
     name?: string;
-    sport_types?: string[];
+    sport_type?: CourtSportType;
+    surface_type?: string;
+    capacity?: number;
     booking_mode?: CourtBookingMode;
     min_booking_minutes?: number;
     booking_increment_minutes?: number;
-    timezone?: string;
+    fixed_slot_duration_minutes?: number | null;
+    fixed_slot_anchor_minutes?: number | null;
     status?: CourtStatus;
   };
   changedFields: string[];
@@ -413,9 +429,17 @@ function normalizeCourtChanges(
     changes.name = normalizeName(input.name);
     changedFields.push('name');
   }
-  if (input.sportTypes !== undefined) {
-    changes.sport_types = normalizeSportTypes(input.sportTypes);
-    changedFields.push('sport_types');
+  if (input.sportType !== undefined) {
+    changes.sport_type = normalizeSportType(input.sportType);
+    changedFields.push('sport_type');
+  }
+  if (input.surfaceType !== undefined) {
+    changes.surface_type = normalizeSurface(input.surfaceType);
+    changedFields.push('surface_type');
+  }
+  if (input.capacity !== undefined) {
+    changes.capacity = normalizeCapacity(input.capacity);
+    changedFields.push('capacity');
   }
   if (input.bookingMode !== undefined) {
     changes.booking_mode = assertBookingMode(input.bookingMode);
@@ -429,9 +453,13 @@ function normalizeCourtChanges(
     changes.booking_increment_minutes = input.bookingIncrementMinutes;
     changedFields.push('booking_increment_minutes');
   }
-  if (input.timezone !== undefined) {
-    changes.timezone = normalizeTimeZone(input.timezone);
-    changedFields.push('timezone');
+  if (input.fixedSlotDurationMinutes !== undefined) {
+    changes.fixed_slot_duration_minutes = input.fixedSlotDurationMinutes;
+    changedFields.push('fixed_slot_duration_minutes');
+  }
+  if (input.fixedSlotAnchorMinutes !== undefined) {
+    changes.fixed_slot_anchor_minutes = input.fixedSlotAnchorMinutes;
+    changedFields.push('fixed_slot_anchor_minutes');
   }
   if (input.status !== undefined) {
     changes.status = input.status;
@@ -466,24 +494,42 @@ function normalizeName(value: string): string {
   return name;
 }
 
-function normalizeSportTypes(values: string[]): string[] {
-  const sports = [
-    ...new Set(
-      values
-        .map((value) =>
-          value.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_'),
-        )
-        .filter(Boolean),
-    ),
+function normalizeSportType(value: CourtSportType): CourtSportType {
+  const allowed: CourtSportType[] = [
+    'FOOTBALL', 'CRICKET', 'BADMINTON', 'TENNIS', 'PICKLEBALL',
+    'MULTI_SPORT', 'OTHER',
   ];
-  if (sports.length === 0 || sports.length > 20) {
+  if (!allowed.includes(value)) {
     throw new AppError({
-      code: 'INVALID_SPORT_TYPES',
-      message: 'At least one and at most 20 sport types are required',
+      code: 'INVALID_SPORT_TYPE',
+      message: 'Court sport type is invalid',
       statusCode: 400,
     });
   }
-  return sports;
+  return value;
+}
+
+function normalizeSurface(value: string): string {
+  const result = value.trim();
+  if (!result || result.length > 100) {
+    throw new AppError({
+      code: 'INVALID_SURFACE_TYPE',
+      message: 'Court surface type is required',
+      statusCode: 400,
+    });
+  }
+  return result;
+}
+
+function normalizeCapacity(value: number): number {
+  if (!Number.isInteger(value) || value < 1 || value > 100_000) {
+    throw new AppError({
+      code: 'INVALID_COURT_CAPACITY',
+      message: 'Court capacity must be a positive integer',
+      statusCode: 400,
+    });
+  }
+  return value;
 }
 
 function assertBookingMode(value: CourtBookingMode): CourtBookingMode {
@@ -565,35 +611,24 @@ function isTime(value: string): boolean {
   return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value);
 }
 
-function normalizeTimeZone(value: string): string {
-  const timezone = value.trim();
-  try {
-    new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format();
-  } catch {
-    throw new AppError({
-      code: 'INVALID_TIMEZONE',
-      message: 'Court timezone must be a valid IANA timezone',
-      statusCode: 400,
-    });
-  }
-  return timezone;
-}
-
 function presentCourt(court: CourtDocument) {
   return {
     id: court._id.toHexString(),
     venueId: court.venue_id.toHexString(),
     name: court.name,
-    sportTypes: court.sport_types,
+    sportType: court.sport_type,
+    surfaceType: court.surface_type,
+    capacity: court.capacity,
     bookingMode: court.booking_mode,
     minBookingMinutes: court.min_booking_minutes,
     bookingIncrementMinutes: court.booking_increment_minutes,
-    operatingHours: court.operating_hours.map((hours) => ({
+    operatingHours: court.operating_hours.entries.map((hours) => ({
       dayOfWeek: hours.day_of_week,
       opensAt: hours.opens_at,
       closesAt: hours.closes_at,
     })),
-    timezone: court.timezone,
+    fixedSlotDurationMinutes: court.fixed_slot_duration_minutes,
+    fixedSlotAnchorMinutes: court.fixed_slot_anchor_minutes,
     media: court.media.map((media) => ({
       storageKey: media.storage_key,
       resourceType: media.resource_type,

@@ -47,9 +47,7 @@ export interface VenueDocument {
   };
   currency: 'INR';
   media: VenueMediaDocument[];
-  status: 'DRAFT' | 'PENDING_APPROVAL' | 'ACTIVE' | 'SUSPENDED';
-  approved_by: ObjectId | null;
-  approved_at: Date | null;
+  status: 'PENDING' | 'ACTIVE' | 'SUSPENDED';
   audit_history: VenueAuditDocument[];
   version: number;
   created_at: Date;

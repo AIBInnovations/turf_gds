@@ -5,6 +5,7 @@ import type {
   CourtBookingMode,
   CourtDocument,
   CourtOperatingHourDocument,
+  CourtSportType,
   CourtStatus,
 } from './court.types.js';
 import type { VenueMediaDocument } from './venue.types.js';
@@ -24,13 +25,16 @@ export interface CourtRepository {
     correlationId: string;
     changes: {
       name?: string;
-      sport_types?: string[];
+      sport_type?: CourtSportType;
+      surface_type?: string;
+      capacity?: number;
       booking_mode?: CourtBookingMode;
       min_booking_minutes?: number;
       booking_increment_minutes?: number;
-      timezone?: string;
+      fixed_slot_duration_minutes?: number | null;
+      fixed_slot_anchor_minutes?: number | null;
       status?: CourtStatus;
-      operating_hours?: CourtOperatingHourDocument[];
+      operating_hours?: { entries: CourtOperatingHourDocument[] };
     };
     changedFields: string[];
     now: Date;

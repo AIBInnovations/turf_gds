@@ -19,7 +19,7 @@ export interface PartnerAccessService {
     legalName: string;
     displayName: string;
     email: string;
-  }): Promise<{ partnerId: string; status: 'ONBOARDING' }>;
+  }): Promise<{ partnerId: string; status: 'PENDING' }>;
   approveSandbox(input: {
     partnerId: string;
     adminId: string;
@@ -73,7 +73,7 @@ export interface PartnerAccessService {
     subscribedEvents: string[];
   }): Promise<{
     webhookId: string;
-    status: 'PENDING_VERIFICATION';
+    status: 'PENDING';
     signingSecret: string;
   }>;
   verifyWebhook(webhookId: string): Promise<void>;
@@ -101,13 +101,13 @@ export function createPartnerAccessService(input: {
       _id: partnerId,
       legal_name: values.legalName.trim(),
       display_name: values.displayName.trim(),
-      email: values.email.trim().toLowerCase(),
-      status: 'ONBOARDING',
-      integration_review_status: 'NOT_STARTED',
-      sandbox_approved_by: null,
+      kyc_status: 'PENDING',
+      status: 'PENDING',
+      rate_limit_tier: 'STARTER',
       sandbox_approved_at: null,
       production_approved_by: null,
       production_approved_at: null,
+      audit_history: [],
       created_at: timestamp,
       updated_at: timestamp,
     });
@@ -119,7 +119,7 @@ export function createPartnerAccessService(input: {
         statusCode: 409,
       });
     }
-    return { partnerId: partnerId.toHexString(), status: 'ONBOARDING' };
+    return { partnerId: partnerId.toHexString(), status: 'PENDING' };
   }
 
   async function approveSandbox(
@@ -172,7 +172,7 @@ export function createPartnerAccessService(input: {
       !partner ||
       partner.status === 'SUSPENDED' ||
       (values.environment === 'SANDBOX' &&
-        !['SANDBOX', 'ACTIVE'].includes(partner.status)) ||
+        !partner.sandbox_approved_at) ||
       (values.environment === 'PRODUCTION' &&
         (partner.status !== 'ACTIVE' ||
           !partner.production_approved_at))
@@ -211,9 +211,9 @@ export function createPartnerAccessService(input: {
       partner_id: partnerId,
       environment: values.environment,
       key_prefix: generated.prefix,
-      secret_hash: hashCredential(generated.apiKey),
+      key_hash: hashCredential(generated.apiKey),
       signing_secret_hash: hashCredential(signingSecret),
-      scopes,
+      scopes: { values: scopes },
       status: 'ACTIVE',
       last_used_at: null,
       expires_at: values.expiresAt ? new Date(values.expiresAt) : null,
@@ -268,7 +268,7 @@ export function createPartnerAccessService(input: {
       !key ||
       key.status !== 'ACTIVE' ||
       (key.expires_at && key.expires_at <= now()) ||
-      hashCredential(values.apiKey) !== key.secret_hash
+      hashCredential(values.apiKey) !== key.key_hash
     ) {
       throw invalidPartnerAuthentication();
     }
@@ -310,7 +310,7 @@ export function createPartnerAccessService(input: {
       partnerId: key.partner_id.toHexString(),
       keyId: key._id.toHexString(),
       environment: key.environment,
-      scopes: key.scopes,
+      scopes: key.scopes.values,
     };
   }
 
@@ -358,10 +358,7 @@ export function createPartnerAccessService(input: {
       environment: values.environment,
       url: parsedUrl.toString(),
       signing_secret_hash: hashCredential(signingSecret),
-      subscribed_events: [
-        ...new Set(values.subscribedEvents.map(normalizeScope)),
-      ].sort(),
-      status: 'PENDING_VERIFICATION',
+      status: 'PENDING',
       verified_at: null,
       created_at: timestamp,
       updated_at: timestamp,
@@ -377,7 +374,7 @@ export function createPartnerAccessService(input: {
 
     return {
       webhookId: webhookId.toHexString(),
-      status: 'PENDING_VERIFICATION',
+      status: 'PENDING',
       signingSecret,
     };
   }
