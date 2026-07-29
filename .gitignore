@@ -8,4 +8,5 @@ dist/
 coverage/
 .mongodb-data/
 *.log
+*.pid
 .DS_Store
