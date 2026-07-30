@@ -61,7 +61,8 @@ The Venue Owner phase is developed in this sequence:
    configuration surface is completed as a cross-actor prerequisite.
 4. **Booking** - owner-scoped booking lists/details and permitted operational
    actions.
-5. **Financial Close** - owner-scoped payout history and details.
+5. **Financial Close** - Admin Settlement/Reconciliation and payout
+   orchestration plus owner-scoped Settlement/Payout history and details.
 6. **Communications** - owner notifications and device-token lifecycle.
 
 All reads and mutations must be scoped through the authenticated Venue Owner's
@@ -73,10 +74,12 @@ another owner's venue data.
 - Venue Owner / Identity: complete as of 2026-07-28. Registration transaction,
   login/session security, profile, memberships, permissions, KYC submission,
   route validation, MongoDB rollback, and cross-owner isolation are covered by
-  the regression suite.
+  the regression suite. Hardened on 2026-07-30 with Platform User JWTs,
+  centralized `ADMIN` mutation authorization, correlated bounded audits,
+  atomic KYC review/derived status updates, and session last-seen tracking.
 - Venue Owner / Venue: complete as of 2026-07-28. Venue and Court management,
   media, operating hours, pricing, rolling fixed inventory, manual fixed/open
-  blocking and release, flexible content, and tokenized payout accounts are
+  blocking and release, and tokenized payout accounts are
   implemented with authorization, versioning, audit, persistence, route, and
   integration coverage.
 - Contracts: complete as of 2026-07-29. Admin configuration creates
@@ -89,17 +92,43 @@ another owner's venue data.
   and cross-owner isolation are covered. Partner-only hold, confirmation,
   commercial snapshot, cancellation, idempotency, audit, Ledger, and Outbox
   transaction flows are covered. Owner inventory controls remain in Venue.
-- Venue Owner / Financial Close and Communications: pending.
-- Admin and Partner actor phases: frozen until Venue Owner completion, except
-  for minimal dependencies required to exercise Venue Owner workflows.
+- Ledger: complete as of 2026-07-30 for balanced Booking journals,
+  residual-safe partial reversals, evidenced adjustments, append-only service
+  boundaries, strict persistence, and conditional one-time Settlement/Payout
+  allocation. Financial Close adjustment orchestration remains deferred.
+- Venue Owner / Financial Close: complete as of 2026-07-30 for Settlement and
+  Reconciliation, Admin payout-account verification, idempotent Venue payout
+  creation/manual results, transactional Ledger/Outbox linkage, owner finance
+  history, permission enforcement, masking, filters, pagination, and
+  cross-owner isolation. Adjustments, Partner statements, and Invoice
+  workflows remain deferred.
+- Shared Communications / Epic 07: complete as of 2026-07-30. Transactional
+  event routing, subscription snapshots, dedicated worker leases and recovery,
+  bounded Partner webhook attempts, SSRF-safe signed delivery, permission-based
+  Owner inbox notifications, device-token lifecycle, optional FCM, and
+  Admin/OPS monitoring and retry are implemented.
+- Admin / Epic 08: complete as of 2026-07-30 for Platform User authentication,
+  Venue/Court support operations, Ledger-backed reporting and bounded CSV
+  exports, cross-module dispute inspection/notes, inventory-health monitoring,
+  strict role policy, optimistic concurrency, and Admin audit context.
+- Partner actor phase begins after the Admin regression gate passes.
+
+## Consolidated Verification Record
+
+The 2026-07-30 completion run passed TypeScript typechecking, the production
+build, all 159 automated unit/route/MongoDB replica-set integration tests with
+zero skips, and the expanded isolated cURL suite. The cURL run covers implemented
+Platform, Identity/KYC, Venue, Inventory, payout-account, Partner access,
+Contracts, Booking, Ledger effects, Financial Close, owner finance, and webhook
+and Communications flows. See `final-curl-test-report-2026-07-30.md` for
+request-level evidence, negative cases, edge conditions, and end-to-end
+user/data flows.
 
 ## Later Phases
 
-After Venue Owner completion:
+After Admin Epic 08 completion:
 
-- build and test the Admin API module-by-module, including approvals,
-  operations, contracts, support, reporting, and financial workflows;
-- then build and test the Partner API module-by-module, including credentials,
+- build and test the Partner API module-by-module, including credentials,
   availability, booking lifecycle, idempotency, reporting, and webhooks.
 
 The canonical ERD, SRS invariants, and module ownership boundaries remain in

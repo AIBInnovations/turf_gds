@@ -44,6 +44,8 @@ npm run typecheck
 npm test
 npm run build
 npm start
+npm run worker:dev
+npm run worker:start
 ```
 
 ## Media boundary
@@ -83,6 +85,10 @@ cannot authenticate.
 The completed Identity endpoint and authentication reference is in
 `docs/identity-api.md`.
 
+Authentication is actor-specific: Venue Owners use revocable opaque Bearer
+sessions, Platform Users use short-lived HS256 JWT Bearer tokens, and Partners
+use environment-scoped API keys with HMAC-signed requests.
+
 The completed Venue Owner Venue and Booking endpoint reference is in
 `docs/venue-owner-api.md`.
 
@@ -91,3 +97,22 @@ The Contracts module and Admin configuration API are documented in
 
 The completed Partner Booking lifecycle is documented in
 `docs/booking-api.md`.
+
+The append-only, balanced Ledger posting boundary and its settlement-allocation
+rules are documented in `docs/ledger-module.md`.
+
+The completed Venue Owner Financial Close Settlement, Reconciliation, payout,
+and owner history API is documented in
+`docs/financial-close-api.md`.
+
+The consolidated release verification, including every cURL request, expected
+status, actual status, redacted evidence, edge cases, and user/data flows, is in
+`docs/final-curl-test-report-2026-07-30.md`.
+
+The completed transactional Outbox worker, Partner webhook delivery, Owner
+notification/device APIs, optional FCM adapter, and Admin monitoring surface
+are documented in `docs/communications-api.md`.
+
+The completed Epic 08 Venue/Court operations, Ledger-backed reports and CSV
+exports, dispute view, and inventory-health API are documented in
+`docs/admin-api.md`.

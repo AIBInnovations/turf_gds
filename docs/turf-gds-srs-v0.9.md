@@ -90,7 +90,15 @@ To prevent double booking:
 
 ## 5.1 Embedded Sessions, FCM Tokens, And Media
 
+- Platform Users authenticate with short-lived HS256 JWT Bearer tokens. The
+  service validates issuer, audience, subject, token ID, role, not-before and
+  expiry claims, then reloads the current `AdminUser` before authorization.
+- Platform mutations require the `ADMIN` role unless a story explicitly
+  delegates that mutation. `OPS` and `SUPPORT` are read-only by default.
 - `VenueOwner.sessions` embeds a bounded array of hashed dashboard sessions. The auth service must prune expired and revoked entries because MongoDB TTL indexes cannot remove individual array elements.
+- Booking Partners authenticate with an environment-scoped API key and HMAC
+  signature over timestamp, method, path, and raw-body digest; route scopes
+  must be checked after authentication.
 - `AdminUser.fcm_tokens` and `VenueOwner.fcm_tokens` store per-device token documents (`token`, `device_id`, `platform`, timestamps). Tokens must be removed when FCM reports them invalid.
 - `VenueOwner.notifications` stores a bounded recent dashboard-notification inbox on the owner document.
 - Venue and court media metadata is embedded in `Venue.media` and `Court.media`. The binary files remain in object storage.
@@ -98,6 +106,15 @@ To prevent double booking:
 - Mutable business aggregates store bounded `audit_history` arrays instead of using a general audit collection.
 - `OutboxEvent.webhook_deliveries` stores per-endpoint delivery state and bounded request/response attempts.
 - `OutboxEvent.partner_id`, `venue_id`, and `webhook_endpoint_ids` provide explicit routing relationships while `aggregate_type + aggregate_id` remains the polymorphic source identity.
+- `WebhookEndpoint.subscribed_event_types` stores one to twenty normalized
+  Partner wire event names; enqueue snapshots only active,
+  environment-matched endpoints subscribed to the event.
+- Communications runs as a dedicated process. It claims events with bounded
+  MongoDB leases, recovers expired claims, signs outbound HTTPS payloads, and
+  rejects private or reserved webhook destinations.
+- Owner notifications are inserted durably before optional FCM push. Booking
+  recipients require `VIEW_BOOKINGS`; payout recipients require
+  `VIEW_FINANCE`.
 - Every outbox event carries an `environment` and must target endpoints in the same environment.
 - Workers atomically claim events by changing `PENDING` to `PROCESSING` and setting `locked_by` and `locked_until`. Expired claims can be recovered.
 
@@ -185,7 +202,6 @@ Primary MongoDB collections:
 - `Payout`
 - `Invoice`
 - `OutboxEvent`
-- `VenueContent`
 
 Removed from the prior model:
 
@@ -233,7 +249,6 @@ Required unique indexes:
 - `Payout(settlement_id, venue_id)`
 - `Invoice.invoice_number`
 - `OutboxEvent(aggregate_type, aggregate_id, event_type, correlation_id)`
-- `VenueContent.venue_id`
 
 Required non-unique indexes:
 
@@ -265,6 +280,30 @@ Embedded notifications, audit histories, webhook deliveries, and delivery attemp
 - No booking mode outside both `Court.booking_mode` and `PartnerVenueContract.allowed_booking_modes`.
 - No cancellation rule changes outside contract update/re-contract.
 - No mutable ledger entries.
+- Ledger journals must balance before insertion; partial-refund rounding must
+  preserve equal debit and credit totals.
+- Ledger corrections are new reversal or documented adjustment entries.
+- Only `settlement_id` and `payout_id` may be conditionally linked once after
+  insertion.
 - No payout unless settlement is completed, KYC is verified, and payout account is verified.
+- Financial mutations are `ADMIN`-only; `OPS` and `SUPPORT` financial access is read-only.
+- Payout KYC is supplied by the Venue's canonical active `OWNER` membership holder and must be current, unexpired, verified, and `BUSINESS`.
+- Manual payout outcomes move `PENDING` directly to `PAID` or `FAILED`; `PROCESSING` is reserved for future provider integration.
+- Owner finance reads require active membership plus `VIEW_FINANCE`, expose only Venue-specific totals/allocations, and mask payout-account secrets.
 - No sandbox-production data mixing.
 - No raw bank account or card data stored in MongoDB.
+
+The Venue Owner Financial Close completion slice implements Settlement,
+Reconciliation, payout-account verification, Payout, and owner finance
+history. Settlement adjustments (`US-05.04`), Partner statements
+(`US-05.05`), and Invoice workflows (`US-06.04`/`US-06.05`) are deferred.
+Communications delivery is implemented by the dedicated Epic 07 worker.
+Invoice persistence nevertheless uses
+`subtotal_minor`, `tax_amount_minor`, `total_minor`, and nullable
+`document_uri`.
+
+Epic 08 Admin operations use Platform User JWTs and a strict role matrix.
+`ADMIN` may perform versioned Venue/Court support mutations, append dispute
+notes, and export bounded synchronous CSV. `ADMIN`, `OPS`, and `SUPPORT` may
+read environment-scoped Booking/Ledger reports, cross-module dispute views,
+and derived inventory health. Admin owns no business collection.

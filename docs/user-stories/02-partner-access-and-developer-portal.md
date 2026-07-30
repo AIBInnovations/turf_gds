@@ -9,7 +9,7 @@ So that: I can integrate with the GDS Partner API.
 
 Acceptance Criteria:
 
-- Given a partner submits legal and display information, when the request is valid, then a `Partner` is created with `ONBOARDING` status.
+- Given a partner submits legal and display information, when the request is valid, then a `Partner` is created with `PENDING` status.
 - Given the partner is created, when sandbox access is allowed, then sandbox approval metadata can be recorded.
 - Given duplicate legal identity is detected, when application is submitted, then the system blocks duplicate onboarding.
 
@@ -72,6 +72,9 @@ So that: I can receive booking and slot-conflict events.
 Acceptance Criteria:
 
 - Given a partner submits a webhook URL, when saved, then `WebhookEndpoint` is created for the partner and environment.
+- Given a partner selects event subscriptions, when the endpoint is created or
+  updated, then one to twenty normalized values are persisted in
+  `WebhookEndpoint.subscribed_event_types`.
 - Given the URL is already configured for that partner and environment, when submitted again, then duplicate creation is blocked.
 - Given verification succeeds, when the endpoint is marked verified, then status becomes `ACTIVE`.
 - Given an endpoint is disabled, when events are delivered, then disabled endpoints are skipped.

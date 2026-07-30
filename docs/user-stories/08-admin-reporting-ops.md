@@ -1,5 +1,9 @@
 # Epic 08 - Admin Orchestration Reporting And Operations
 
+Implementation status: complete for v1. Admin owns no collection; mutations
+delegate to the owning module and cross-module reporting remains read-only.
+CSV exports are synchronous and bounded. Invoice reporting remains deferred.
+
 ## US-08.01 - Platform Admin Login
 
 Story ID: `US-08.01`

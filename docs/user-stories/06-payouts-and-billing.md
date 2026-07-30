@@ -31,8 +31,8 @@ So that: payout history is traceable.
 
 Acceptance Criteria:
 
-- Given a payout is processing, when bank transfer succeeds, then status becomes `PAID` and provider reference and paid timestamp are saved.
-- Given a payout fails, when failure is recorded, then status becomes `FAILED` and failure reason is required.
+- Given a manual payout is `PENDING`, when Admin records transfer success, then status moves directly to `PAID` and bank reference and paid timestamp are saved.
+- Given a manual payout is `PENDING`, when Admin records failure, then status moves directly to `FAILED` and failure reason is required.
 - Given payout status changes, when committed, then an owner notification event is enqueued where applicable.
 - Given payout history is viewed, when loaded, then venue owners see only payouts for their venues.
 
@@ -41,7 +41,9 @@ Supporting Modules: `shared/communications`, `identity`, `admin`
 Data: `Payout`, `OutboxEvent`, `VenueOwner.notifications`
 API/UI: Admin payout console; Owner Dashboard payout history
 Priority: `P1`
-Notes: Bank reference should be unique per practical payment provider constraints.
+Notes: `PROCESSING` is reserved for a future provider integration. Manual
+results intentionally bypass it. Bank reference is unique per environment when
+present.
 
 ## US-06.03 - Venue Partner Payout History
 
@@ -83,7 +85,8 @@ Supporting Modules: `admin`
 Data: `Invoice`, `Settlement`
 API/UI: Admin billing console
 Priority: `P1`
-Notes: GDS does not generate customer invoices.
+Notes: Deferred from the Venue Owner Financial Close completion slice. GDS
+does not generate customer invoices.
 
 ## US-06.05 - Partner Invoice Access
 
@@ -103,4 +106,6 @@ Supporting Modules: `identity`
 Data: `Invoice`, `Settlement`, `Partner`
 API/UI: Developer portal invoice section
 Priority: `P2`
-Notes: File rendering or downloadable invoice documents are out of scope until a protected document-storage design is added.
+Notes: Deferred from the Venue Owner Financial Close completion slice. File
+rendering or downloadable invoice documents are out of scope until a protected
+document-storage design is added.

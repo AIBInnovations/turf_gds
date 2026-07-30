@@ -150,12 +150,13 @@ WebhookEndpoint [icon: link, color: blue] {
   environment enum {SANDBOX, PRODUCTION}
   url string
   signing_secret_hash string
-  subscribed_events string[]
-  status enum {PENDING_VERIFICATION, ACTIVE, DISABLED}
+  subscribed_event_types string[]
+  status enum {PENDING, ACTIVE, DISABLED}
   verified_at date nullable
   created_at date
   updated_at date
   // Unique: partner_id + environment + url
+  // subscribed_event_types: 1..20 normalized Partner wire event names
 }
 
 // VENUE AND INVENTORY
@@ -170,9 +171,7 @@ Venue [icon: home, color: green] {
   geo point
   currency string
   media document[]
-  status enum {DRAFT, PENDING_APPROVAL, ACTIVE, SUSPENDED}
-  approved_by objectId ref AdminUser nullable
-  approved_at date nullable
+  status enum {PENDING, ACTIVE, SUSPENDED}
   audit_history document[]
   version int
   created_at date
@@ -183,14 +182,17 @@ Court [icon: square, color: green] {
   _id objectId pk
   venue_id objectId ref Venue
   name string
-  sport_types string[]
+  sport_type enum {FOOTBALL, CRICKET, BADMINTON, TENNIS, PICKLEBALL, MULTI_SPORT, OTHER}
+  surface_type string
+  capacity int
   booking_mode enum {OPEN_TIME, FIXED_SLOT, BOTH}
   min_booking_minutes int
   booking_increment_minutes int
-  operating_hours document[]
-  timezone string
+  operating_hours document
+  fixed_slot_duration_minutes int nullable
+  fixed_slot_anchor_minutes int nullable
   media document[]
-  status enum {ACTIVE, INACTIVE}
+  status enum {AVAILABLE, UNAVAILABLE}
   audit_history document[]
   version int
   created_at date
@@ -252,18 +254,6 @@ VenuePayoutAccount [icon: landmark, color: green] {
   verification_failure_reason string nullable
   created_at date
   updated_at date
-}
-
-VenueContent [icon: image, color: green] {
-  _id objectId pk
-  venue_id objectId ref Venue
-  content document
-  version int
-  updated_by_type enum {ADMIN_USER, VENUE_OWNER}
-  updated_by_id objectId
-  created_at date
-  updated_at date
-  // Unique: venue_id
 }
 
 // CONTRACTS
@@ -355,23 +345,24 @@ ApiIdempotencyRecord [icon: shield, color: yellow] {
 
 LedgerEntry [icon: book-open, color: red] {
   _id objectId pk
-  journal_id string
   booking_id objectId ref Booking
   partner_id objectId ref Partner
   venue_id objectId ref Venue
   contract_id objectId ref PartnerVenueContract
+  settlement_id objectId ref Settlement nullable
+  payout_id objectId ref Payout nullable
+  reverses_entry_id objectId ref LedgerEntry nullable
   environment enum {SANDBOX, PRODUCTION}
-  entry_type enum {BOOKING, COMMISSION, TAX, REVERSAL}
-  account_code string
+  entry_type enum {BOOKING, COMMISSION, TAX, REFUND, REVERSAL, ADJUSTMENT}
   direction enum {DEBIT, CREDIT}
   amount_minor long
   currency string
-  reverses_entry_id objectId ref LedgerEntry nullable
-  settlement_id objectId ref Settlement nullable
-  payout_id objectId ref Payout nullable
-  posted_at date
+  effective_at date
+  correlation_id string
+  metadata document nullable
   created_at date
-  // Append-only; settlement_id and payout_id are conditional one-time links
+  // Append-only by service rule and restricted DB permissions
+  // settlement_id and payout_id are conditional one-time links
 }
 
 // FINANCIAL CLOSE
@@ -382,10 +373,16 @@ Settlement [icon: layers, color: red] {
   environment enum {SANDBOX, PRODUCTION}
   period_start date
   period_end date
+  cycle enum {T_PLUS_N, WEEKLY, MONTHLY}
+  due_at date
   currency string
-  expected_amount_minor long
-  state enum {DRAFT, PENDING_FUNDS, RECONCILING, RECONCILED, COMPLETED}
-  completed_by objectId ref AdminUser nullable
+  gross_amount_minor long
+  commission_amount_minor long
+  tax_amount_minor long
+  refund_amount_minor long
+  net_amount_minor long
+  status enum {DRAFT, PENDING_FUNDS, RECONCILING, RECONCILED, COMPLETED, FAILED, REVERSED}
+  audit_history document[]
   completed_at date nullable
   created_at date
   updated_at date
@@ -395,6 +392,7 @@ Settlement [icon: layers, color: red] {
 Reconciliation [icon: refresh-cw, color: red] {
   _id objectId pk
   settlement_id objectId ref Settlement
+  environment enum {SANDBOX, PRODUCTION}
   reported_amount_minor long
   bank_reference string nullable
   evidence_uri string nullable
@@ -403,6 +401,7 @@ Reconciliation [icon: refresh-cw, color: red] {
   reconciled_at date nullable
   notes string nullable
   attempt_history document[]
+  audit_history document[]
   created_at date
   updated_at date
   // Partial unique: settlement_id + bank_reference where bank_reference exists
@@ -413,14 +412,16 @@ Payout [icon: send, color: red] {
   settlement_id objectId ref Settlement
   venue_id objectId ref Venue
   payout_account_id objectId ref VenuePayoutAccount
+  environment enum {SANDBOX, PRODUCTION}
   idempotency_key string unique
   amount_minor long
   currency string
-  status enum {PENDING, PROCESSING, PAID, FAILED}
-  provider_reference string nullable
+  status enum {PENDING, PROCESSING, PAID, FAILED, REVERSED}
+  bank_reference string nullable
   failure_reason string nullable
-  initiated_at date
+  initiated_at date nullable
   paid_at date nullable
+  audit_history document[]
   created_at date
   updated_at date
   // Unique: settlement_id + venue_id
@@ -429,16 +430,17 @@ Payout [icon: send, color: red] {
 Invoice [icon: file-text, color: red] {
   _id objectId pk
   settlement_id objectId ref Settlement
-  partner_id objectId ref Partner
+  environment enum {SANDBOX, PRODUCTION}
   invoice_number string unique
+  type enum {TAX_INVOICE, CREDIT_NOTE, DEBIT_NOTE}
   subtotal_minor long
-  tax_minor long
+  tax_amount_minor long
   total_minor long
   currency string
   status enum {DRAFT, ISSUED, VOID}
+  document_uri string nullable
   issued_at date nullable
   created_at date
-  updated_at date
 }
 
 // SHARED COMMUNICATIONS
@@ -457,6 +459,7 @@ OutboxEvent [icon: radio, color: gray] {
   payload document
   webhook_deliveries document[]
   status enum {PENDING, PROCESSING, PUBLISHED, FAILED}
+  attempts int
   available_at date
   locked_by string nullable
   locked_until date nullable
@@ -464,6 +467,8 @@ OutboxEvent [icon: radio, color: gray] {
   created_at date
   updated_at date
   // Unique: aggregate_type + aggregate_id + event_type + correlation_id
+  // webhook_endpoint_ids and webhook_deliveries are capped at 20
+  // each embedded delivery contains at most 8 bounded attempts
 }
 
 // REFERENCES
@@ -471,7 +476,6 @@ OutboxEvent [icon: radio, color: gray] {
 AdminUser._id < VenueOwner.approved_by
 AdminUser._id < KycVerification.reviewed_by
 AdminUser._id < Partner.production_approved_by
-AdminUser._id < Venue.approved_by
 AdminUser._id < VenuePayoutAccount.verified_by
 AdminUser._id < PartnerVenueContract.created_by
 AdminUser._id < Settlement.completed_by
@@ -496,7 +500,6 @@ Partner._id < OutboxEvent.partner_id
 
 Venue._id < Court.venue_id
 Venue._id < VenuePayoutAccount.venue_id
-Venue._id < VenueContent.venue_id
 Venue._id < PartnerVenueContract.venue_id
 Venue._id < Booking.venue_id
 Venue._id < LedgerEntry.venue_id

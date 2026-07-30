@@ -36,9 +36,16 @@ explicit product decision and delivery/token model before implementation.
 
 | Method | Route | Authentication | Purpose |
 |---|---|---|---|
-| POST | `/auth/admin/login` | Public | Issue a signed, expiring admin token |
-| GET | `/auth/admin/me` | Admin Bearer token | Resolve current admin identity |
-| POST | `/admin/onboarding/venues/:venueId/approve` | Admin Bearer token | Activate a KYC-verified owner and Venue; body: `ownerId` |
+| POST | `/auth/admin/login` | Public | Issue an expiring HS256 JWT |
+| GET | `/auth/admin/me` | Platform User JWT | Resolve current identity and role |
+| POST | `/admin/onboarding/venues/:venueId/approve` | `ADMIN` JWT | Activate a KYC-verified owner and Venue; body: `ownerId` |
+
+Admin access tokens are standards-shaped JWTs with an `HS256` header and
+validated `iss`, `aud`, `sub`, `jti`, `actor`, `role`, `iat`, `nbf`, and `exp`
+claims. Authentication also reloads the `AdminUser`, so disabled users and
+changed roles take effect before token expiry. `OPS` and `SUPPORT` may use
+explicitly read-only Platform User routes; privileged mutations require the
+`ADMIN` role.
 
 Create the first Admin with environment variables:
 
@@ -63,27 +70,40 @@ npm run admin:create
 | POST | `/kyc/owner/verifications/:id/documents?documentType=...` | Owner | Upload protected multipart document |
 | POST | `/kyc/owner/verifications/:id/submit` | Owner | Submit draft for review |
 | GET | `/kyc/owner/verifications/current/:type` | Owner | Get current verification |
-| PATCH | `/kyc/admin/verifications/:id/review` | Admin | Verify or reject |
-| POST | `/kyc/admin/partners/:partnerId/verifications` | Admin | Create Partner KYC draft |
-| POST | `/kyc/admin/partners/:partnerId/verifications/:id/documents?documentType=...` | Admin | Upload Partner KYC document |
-| POST | `/kyc/admin/partners/:partnerId/verifications/:id/submit` | Admin | Submit Partner KYC |
+| PATCH | `/kyc/admin/verifications/:id/review` | `ADMIN` | Verify or reject |
+| POST | `/kyc/admin/partners/:partnerId/verifications` | `ADMIN` | Create Partner KYC draft |
+| POST | `/kyc/admin/partners/:partnerId/verifications/:id/documents?documentType=...` | `ADMIN` | Upload Partner KYC document |
+| POST | `/kyc/admin/partners/:partnerId/verifications/:id/submit` | `ADMIN` | Submit Partner KYC |
 
 KYC bytes use authenticated Cloudinary delivery. MongoDB stores protected
-metadata in `KycDocument.file`.
+metadata in `KycDocument.file` with `SENSITIVE` classification. Review is
+allowed only after a current verification has been submitted with at least one
+active document. Verification, document outcome, derived Owner/Partner KYC
+status, and bounded audit history are updated atomically.
 
 ## Partner access
 
 | Method | Route | Authentication | Purpose |
 |---|---|---|---|
 | POST | `/partners/applications` | Public | Submit Partner application |
-| POST | `/partners/admin/:partnerId/approve-sandbox` | Admin | Approve sandbox access |
-| PATCH | `/partners/admin/:partnerId/integration-review` | Admin | Record go-live review |
-| POST | `/partners/admin/:partnerId/approve-production` | Admin | Approve production after BUSINESS KYC |
-| POST | `/partners/admin/:partnerId/keys` | Admin | Issue environment-specific credentials |
-| DELETE | `/partners/admin/keys/:keyId` | Admin | Revoke a key |
+| POST | `/partners/admin/:partnerId/approve-sandbox` | `ADMIN` | Approve sandbox access |
+| PATCH | `/partners/admin/:partnerId/integration-review` | `ADMIN` | Record go-live review |
+| POST | `/partners/admin/:partnerId/approve-production` | `ADMIN` | Approve production after BUSINESS KYC |
+| POST | `/partners/admin/:partnerId/keys` | `ADMIN` | Issue environment-specific credentials |
+| DELETE | `/partners/admin/keys/:keyId` | `ADMIN` | Revoke a key |
 | POST | `/partners/webhooks` | Partner HMAC | Register environment-matched webhook |
+| PUT | `/partners/webhooks/:webhookId/subscriptions` | Partner HMAC | Replace persisted event subscriptions |
 | DELETE | `/partners/webhooks/:webhookId` | Partner HMAC | Disable webhook |
-| POST | `/partners/admin/webhooks/:webhookId/verify` | Admin | Mark verified webhook active |
+| POST | `/partners/admin/webhooks/:webhookId/verify` | `ADMIN` | Mark verified webhook active |
+
+Venue Owner device registration is part of the Communications completion:
+`PUT` and `DELETE /auth/venue-owners/devices/:deviceId`. See
+`communications-api.md` for the inbox, delivery worker, and monitoring
+contracts.
+
+The Partner application accepts only the legal and display fields defined by
+the authoritative ERD. Partner API clients are integration identities rather
+than password-login users.
 
 API keys and signing secrets are returned once. MongoDB stores their hashes.
 Sandbox and production keys can coexist.

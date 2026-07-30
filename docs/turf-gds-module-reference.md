@@ -61,7 +61,7 @@ business-data owners:
 | Module | Owned collections |
 |---|---|
 | `identity` | `AdminUser`, `VenueOwner`, `VenueOwnerMembership`, `VenueRolePermission`, `KycVerification`, `KycDocument`, `Partner`, `PartnerApiKey`, `ApiUsageDaily`, `WebhookEndpoint` |
-| `venue` | `Venue`, `Court`, `PricingRule`, `Slot`, `VenuePayoutAccount`, `VenueContent` |
+| `venue` | `Venue`, `Court`, `PricingRule`, `Slot`, `VenuePayoutAccount` |
 | `contracts` | `PartnerVenueContract` |
 | `booking` | `Booking`, `BookingCancellation`, `ApiIdempotencyRecord` |
 | `ledger` | `LedgerEntry` |
@@ -78,6 +78,8 @@ Identity answers who is acting and whether that actor may perform an action.
 Responsibilities:
 
 - Register and authenticate Platform Users, Venue Users, and Booking Partners.
+- Issue short-lived standards-compliant HS256 JWTs for Platform Users and
+  revalidate their current account status and role on every request.
 - Maintain bounded hashed sessions in `VenueOwner.sessions`.
 - Maintain device tokens and the bounded notification inbox embedded in
   `VenueOwner`.
@@ -98,12 +100,17 @@ Embedded ownership:
 Rules:
 
 - `AdminUser` is the internal staff identity; `PlatformUser` is not used.
+- Privileged mutations require the `ADMIN` role. `OPS` and `SUPPORT` are
+  restricted to explicitly read-only capabilities.
 - Owner sessions are embedded and explicitly pruned; no separate
   `VenueOwnerSession` collection exists.
 - KYC file metadata is embedded in `KycDocument.file`; no general
   `MediaAsset` collection exists.
 - Only one current KYC verification may exist for a subject and verification
   type.
+- KYC review requires a submitted current verification with an active
+  document and atomically updates verification, document, derived subject
+  status, and bounded audit history.
 - Production key issuance requires verified business KYC and completed go-live
   review.
 - Webhook endpoint and credential environments must never cross.
@@ -124,6 +131,10 @@ Public capabilities:
 ### 4.2 `venue`
 
 Venue owns venue configuration and bookable inventory.
+
+Code is separated into `profile`, `courts`, `inventory`, and
+`payout-accounts` subdomains under `src/modules/venue`. Payout-account
+verification and tokenized banking metadata are not owned by Inventory.
 
 Responsibilities:
 
@@ -166,7 +177,6 @@ Public capabilities:
 - `holdAvailability()`
 - `blockAvailability()`
 - `releaseAvailability()`
-- `saveVenueContent()`
 
 ### 4.3 `contracts`
 
@@ -239,6 +249,9 @@ Ledger is the append-only financial record.
 Responsibilities:
 
 - Post balanced booking, commission, tax, and reversal entries.
+- Allocate partial-refund rounding residuals without unbalancing a journal.
+- Validate one Booking/Partner/Venue/Contract/environment scope per journal.
+- Post documented, actor-attributed balanced adjustments.
 - Link Ledger entries directly to one Settlement and one Payout.
 - Preserve immutable financial history.
 
@@ -247,12 +260,15 @@ Rules:
 - Entries are never edited or deleted.
 - Corrections use new reversal entries.
 - `settlement_id` and `payout_id` are linked conditionally.
+- Reversal references are validated and cannot be repeated by the Ledger
+  service.
 - `SettlementItem` and `PayoutItem` do not exist in v1.
 
 Public capabilities:
 
-- `postEntries()`
-- `reverseEntry()`
+- `postBooking()`
+- `postCancellation()`
+- `postAdjustment()`
 - `linkToSettlement()`
 - `linkToPayout()`
 
@@ -267,9 +283,13 @@ Responsibilities:
 - Retain detailed reconciliation attempts in
   `Reconciliation.attempt_history`.
 - Complete Settlements only after reconciliation.
-- Validate KYC and payout-account gates.
-- Initiate Venue payouts.
-- Generate B2B Partner invoices.
+- Verify Venue-owned payout accounts through Admin review.
+- Validate canonical active Owner BUSINESS KYC and payout-account gates.
+- Create idempotent Venue payouts, allocate Ledger entries transactionally,
+  and record manual results.
+- Expose owner-scoped Settlement and Payout history with masked account and
+  booking-allocation details.
+- Maintain Invoice persistence; Invoice workflows are deferred.
 
 Rules:
 
@@ -281,6 +301,8 @@ Rules:
   bank-transaction recording.
 - Payout requires a completed Settlement, verified KYC, and a verified payout
   account.
+- Manual Payout results move from `PENDING` directly to `PAID` or `FAILED`;
+  `PROCESSING` is reserved for provider integration.
 - Ledger entries link directly to Settlement and Payout.
 - Customer invoices are out of scope.
 
@@ -290,8 +312,14 @@ Public capabilities:
 - `recordReconciliation()`
 - `recordReconciliationAttempt()`
 - `completeSettlement()`
+- `verifyPayoutAccount()`
 - `initiatePayout()`
-- `generateInvoice()`
+- `recordPayoutResult()`
+- `listOwnerSettlements()`
+- `listOwnerPayouts()`
+
+Deferred capabilities: settlement adjustment, Partner statements, and Invoice
+service/routes.
 
 ### 4.7 `admin`
 
@@ -307,6 +335,8 @@ Responsibilities:
 - Settlement, Reconciliation, Payout, and Invoice operations.
 - Communications monitoring and retry operations.
 - Cross-module read-only reporting.
+- Synchronous bounded CSV export, Booking dispute aggregation, and derived
+  inventory-health monitoring.
 
 Every mutation must call the public capability of the owning module.
 
@@ -355,12 +385,16 @@ Admin calls Identity and Venue services; it never writes either collection.
 ### `shared/communications`
 
 - Append Outbox events transactionally.
-- Claim and recover pending events.
+- Run a dedicated worker that atomically claims and recovers leased events.
 - Create bounded embedded Venue User notifications.
-- Deliver Partner webhooks.
+- Maintain bounded embedded Owner FCM device tokens and remove invalid tokens.
+- Deliver subscribed, environment-matched Partner webhooks using signed,
+  SSRF-safe HTTPS requests and bounded retry backoff.
 - Store delivery state and bounded attempts in
   `OutboxEvent.webhook_deliveries`.
 - Enforce environment-matched routing.
+- Expose Owner inbox/device APIs and Platform monitoring. ADMIN and OPS may
+  retry failed deliveries; SUPPORT is read-only.
 
 ### `shared/observability`
 

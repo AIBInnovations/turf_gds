@@ -196,6 +196,9 @@ Ledger owns `LedgerEntry`.
 Responsibilities:
 
 - Post balanced booking, commission, tax, and reversal entries.
+- Preserve balance across partial-refund rounding.
+- Validate reversal identity and financial scope.
+- Post documented balanced adjustment entries.
 - Preserve append-only financial history.
 - Link entries directly to Settlement and Payout.
 - Prevent general update and delete access.
@@ -217,9 +220,17 @@ Responsibilities:
   separate Reconciliation record.
 - Keep detailed retries in `Reconciliation.attempt_history`.
 - Complete Settlement after successful reconciliation.
-- Enforce KYC and payout-account gates.
-- Initiate Venue payouts.
-- Generate B2B Partner invoices.
+- Enforce canonical active Owner BUSINESS KYC and verified payout-account
+  gates.
+- Create idempotent Venue payouts and record direct manual success/failure
+  results.
+- Expose strictly Venue-scoped owner Settlement/Payout history with masked
+  account data and booking-level allocations.
+- Insert Financial Close Outbox events transactionally.
+
+Settlement adjustments, Partner statements, and Invoice routes/services remain
+deferred. Communications consumes the transactional events through its
+dedicated worker.
 
 ### 7. Admin Orchestration
 
@@ -233,8 +244,13 @@ Responsibilities:
 - Settlement, Reconciliation, Payout, and Invoice operations.
 - Communications delivery monitoring.
 - Cross-module read-only reporting.
+- Versioned Venue/Court support mutations delegated to Venue.
+- Ledger-backed reports, bounded synchronous CSV, Booking dispute aggregation,
+  and derived inventory-health monitoring.
 
 Admin always calls the capability of the module that owns the data.
+`ADMIN` owns mutations and exports; `OPS` and `SUPPORT` retain read-only
+operational views, except for the explicit OPS Communications retry action.
 
 ## Shared Infrastructure
 
@@ -274,7 +290,12 @@ Redis is never persistent truth.
 - Store webhook delivery state and attempts in
   `OutboxEvent.webhook_deliveries`.
 - Store dashboard notifications in `VenueOwner.notifications`.
-- Retry delivery with backoff.
+- Store bounded device registrations in `VenueOwner.fcm_tokens` and use an
+  optional FCM adapter after durable inbox insertion.
+- Run a dedicated MongoDB-leased worker with crash recovery and bounded
+  exponential retry.
+- Sign outbound Partner webhooks and pin validated public DNS destinations to
+  prevent SSRF and redirect bypass.
 - Enforce environment-matched routing.
 
 ### Observability

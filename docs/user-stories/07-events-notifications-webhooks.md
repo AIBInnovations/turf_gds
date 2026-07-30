@@ -1,5 +1,8 @@
 # Epic 07 - Shared Communications Infrastructure
 
+Implementation status: complete as of 2026-07-30. The API and worker behavior
+are documented in `../communications-api.md`.
+
 This epic covers the `shared/communications` infrastructure submodule. It is not
 a business module: Booking, Financial Close, and Venue decide which domain
 events occurred, while Communications reliably transports those events to Venue
@@ -114,3 +117,8 @@ Data: `OutboxEvent`, `OutboxEvent.webhook_deliveries`
 API/UI: Background worker
 Priority: `P0`
 Notes: Worker must be idempotent.
+
+Implementation note: the production worker is a dedicated process. It uses
+60-second MongoDB leases, bounded exponential backoff, signed SSRF-safe HTTPS
+delivery, and at-least-once event semantics. ADMIN and OPS can manually retry a
+terminal failure; SUPPORT has monitoring-only access.

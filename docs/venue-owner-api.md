@@ -82,12 +82,16 @@ timestamp.
 
 | Method | Route | Permission | Purpose |
 |---|---|---|---|
-| POST | `/owner/venues/:venueId/payout-accounts` | `VIEW_FINANCE` | Add tokenized payout metadata |
+| POST | `/owner/venues/:venueId/payout-accounts` | `MANAGE_VENUE` | Add tokenized payout metadata |
 | GET | `/owner/venues/:venueId/payout-accounts` | `VIEW_FINANCE` | List masked payout accounts |
 
 The API accepts a vault token and last four digits; it never accepts, persists,
-or returns a raw account number. New accounts remain `PENDING`. Admin
-verification fields remain empty until the later Admin API phase.
+or returns a raw account number. New accounts remain `PENDING`. Verification
+is recorded only by an authenticated `ADMIN`; `OPS` and `SUPPORT`
+cannot verify accounts. `PENNY_DROP` identifies the evidence source and
+`MANUAL` supports an authorized documented review. The API does not claim to
+be a bank-account vault: tokenization occurs at the configured vault boundary,
+and GDS deliberately never accepts raw account numbers.
 
 ## Bookings
 

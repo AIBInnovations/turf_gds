@@ -190,14 +190,15 @@ So that: Booking Partners receive current venue information without changing the
 
 Acceptance Criteria:
 
-- Given an owner has `MANAGE_VENUE`, when content is saved, then the owning venue's single `VenueContent` record is created or versioned.
+- This story is superseded for v1 because the authoritative ERD has no
+  `VenueContent` collection or content mutation route.
 - Given content includes supported media, when bytes are uploaded, then Shared Media returns metadata that is embedded in the owning content or Venue aggregate.
 - Given content changes, when persisted, then `updated_by_type`, `updated_by_id`, and version are recorded.
 - Given a second content record is created for the same venue, when persisted, then the unique venue index prevents duplication.
 
 Primary Module: `venue`
 Supporting Modules: `identity`, `shared/media`, `shared/db`
-Data: `VenueContent`, `Venue`
+Data: `Venue`
 API/UI: Owner Dashboard venue content editor
 Priority: `P1`
-Notes: VenueContent is the flexible one-to-one venue content aggregate defined by ERD v0.9.
+Notes: Deferred until an approved ERD change introduces a content aggregate.
