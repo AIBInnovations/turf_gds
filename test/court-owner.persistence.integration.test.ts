@@ -11,12 +11,12 @@ import { createIdentityRepository } from '../src/modules/identity/owner/owner-au
 import { createIdentityService } from '../src/modules/identity/owner/owner-auth.service.js';
 import { createOwnerAccessRepository } from '../src/modules/identity/owner/owner-access.repository.js';
 import { createOwnerAccessService } from '../src/modules/identity/owner/owner-access.service.js';
-import { createCourtOwnerService } from '../src/modules/venue/court-owner.service.js';
-import { createCourtRepository } from '../src/modules/venue/court.repository.js';
-import type { CourtDocument } from '../src/modules/venue/court.types.js';
-import { initializeVenuePersistence } from '../src/modules/venue/venue.persistence.js';
-import { createVenueRepository } from '../src/modules/venue/venue.repository.js';
-import { createVenueService } from '../src/modules/venue/venue.service.js';
+import { createCourtOwnerService } from '../src/modules/venue/courts/court-owner.service.js';
+import { createCourtRepository } from '../src/modules/venue/courts/court.repository.js';
+import type { CourtDocument } from '../src/modules/venue/courts/court.types.js';
+import { initializeVenuePersistence } from '../src/modules/venue/profile/venue.persistence.js';
+import { createVenueRepository } from '../src/modules/venue/profile/venue.repository.js';
+import { createVenueService } from '../src/modules/venue/profile/venue.service.js';
 import { MongoDatabaseConnection } from '../src/shared/database/database-connection.js';
 import { AppError } from '../src/shared/errors/app-error.js';
 import type { MediaStorage } from '../src/shared/media/cloudinary-media-storage.js';

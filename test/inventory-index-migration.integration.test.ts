@@ -3,7 +3,7 @@ import { test } from 'node:test';
 
 import 'dotenv/config';
 
-import { initializeInventoryPersistence } from '../src/modules/venue/inventory.persistence.js';
+import { initializeInventoryPersistence } from '../src/modules/venue/inventory/inventory.persistence.js';
 import { MongoDatabaseConnection } from '../src/shared/database/database-connection.js';
 
 test('Inventory startup replaces a legacy named Pricing index without dropping data', async (context) => {

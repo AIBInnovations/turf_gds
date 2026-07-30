@@ -19,14 +19,15 @@ import type { PartnerDocument } from '../src/modules/identity/partner/partner-ac
 import { initializeIdentityPersistence } from '../src/modules/identity/persistence.js';
 import { initializeLedgerPersistence } from '../src/modules/ledger/ledger.persistence.js';
 import { createLedgerRepository } from '../src/modules/ledger/ledger.repository.js';
-import type { CourtDocument } from '../src/modules/venue/court.types.js';
-import { initializeInventoryPersistence } from '../src/modules/venue/inventory.persistence.js';
+import { createLedgerService } from '../src/modules/ledger/ledger.service.js';
+import type { CourtDocument } from '../src/modules/venue/courts/court.types.js';
+import { initializeInventoryPersistence } from '../src/modules/venue/inventory/inventory.persistence.js';
 import type {
   PricingRuleDocument,
   SlotDocument,
-} from '../src/modules/venue/inventory.types.js';
-import { initializeVenuePersistence } from '../src/modules/venue/venue.persistence.js';
-import type { VenueDocument } from '../src/modules/venue/venue.types.js';
+} from '../src/modules/venue/inventory/inventory.types.js';
+import { initializeVenuePersistence } from '../src/modules/venue/profile/venue.persistence.js';
+import type { VenueDocument } from '../src/modules/venue/profile/venue.types.js';
 import { MongoDatabaseConnection } from '../src/shared/database/database-connection.js';
 import { AppError } from '../src/shared/errors/app-error.js';
 
@@ -63,7 +64,7 @@ test('Booking lifecycle atomically holds, confirms, snapshots, cancels, audits, 
     const ids = await seed(database, clock);
     const service = createBookingLifecycleService({
       repository: createBookingLifecycleRepository(database),
-      ledgerRepository: createLedgerRepository(database),
+      ledgerService: createLedgerService(createLedgerRepository(database)),
       outboxRepository: createOutboxRepository(database),
       database,
       now: () => clock,
@@ -275,7 +276,7 @@ test('open-time holds enforce hours, duration, overlap, environment, and expiry 
     const ids = await seed(database, clock);
     const service = createBookingLifecycleService({
       repository: createBookingLifecycleRepository(database),
-      ledgerRepository: createLedgerRepository(database),
+      ledgerService: createLedgerService(createLedgerRepository(database)),
       outboxRepository: createOutboxRepository(database),
       database,
       now: () => clock,

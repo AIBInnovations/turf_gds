@@ -16,9 +16,9 @@ import { createIdentityRepository } from '../src/modules/identity/owner/owner-au
 import { createIdentityService } from '../src/modules/identity/owner/owner-auth.service.js';
 import { createOwnerAccessRepository } from '../src/modules/identity/owner/owner-access.repository.js';
 import { createOwnerAccessService } from '../src/modules/identity/owner/owner-access.service.js';
-import { initializeVenuePersistence } from '../src/modules/venue/venue.persistence.js';
-import { createVenueRepository } from '../src/modules/venue/venue.repository.js';
-import { createVenueService } from '../src/modules/venue/venue.service.js';
+import { initializeVenuePersistence } from '../src/modules/venue/profile/venue.persistence.js';
+import { createVenueRepository } from '../src/modules/venue/profile/venue.repository.js';
+import { createVenueService } from '../src/modules/venue/profile/venue.service.js';
 import type { AppConfig } from '../src/config/env.js';
 import { MongoDatabaseConnection } from '../src/shared/database/database-connection.js';
 import { AppError } from '../src/shared/errors/app-error.js';

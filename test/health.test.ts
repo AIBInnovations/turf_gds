@@ -46,6 +46,16 @@ const testConfig: AppConfig = {
     apiSecret: 'test-secret',
     folder: 'turf-gds/test',
   },
+  communications: {
+    pollIntervalMs: 1_000,
+    batchSize: 20,
+    leaseSeconds: 60,
+    requestTimeoutMs: 10_000,
+    maxWebhookAttempts: 8,
+    retryBaseSeconds: 30,
+    retryMaxSeconds: 3_600,
+  },
+  fcm: { enabled: false },
 };
 
 class FakeDatabase implements DatabaseConnection {

@@ -100,6 +100,9 @@ function createFixture() {
     async verifyWebhook() {
       return true;
     },
+    async replaceWebhookSubscriptions() {
+      return true;
+    },
     async disableWebhook() {
       return true;
     },

@@ -11,11 +11,11 @@ import { createIdentityRepository } from '../src/modules/identity/owner/owner-au
 import { createIdentityService } from '../src/modules/identity/owner/owner-auth.service.js';
 import { createOwnerAccessRepository } from '../src/modules/identity/owner/owner-access.repository.js';
 import { createOwnerAccessService } from '../src/modules/identity/owner/owner-access.service.js';
-import { initializeVenuePersistence } from '../src/modules/venue/venue.persistence.js';
-import { createVenueOwnerService } from '../src/modules/venue/venue-owner.service.js';
-import { createVenueRepository } from '../src/modules/venue/venue.repository.js';
-import { createVenueService } from '../src/modules/venue/venue.service.js';
-import type { VenueDocument } from '../src/modules/venue/venue.types.js';
+import { initializeVenuePersistence } from '../src/modules/venue/profile/venue.persistence.js';
+import { createVenueOwnerService } from '../src/modules/venue/profile/venue-owner.service.js';
+import { createVenueRepository } from '../src/modules/venue/profile/venue.repository.js';
+import { createVenueService } from '../src/modules/venue/profile/venue.service.js';
+import type { VenueDocument } from '../src/modules/venue/profile/venue.types.js';
 import { MongoDatabaseConnection } from '../src/shared/database/database-connection.js';
 import { AppError } from '../src/shared/errors/app-error.js';
 import type { MediaStorage } from '../src/shared/media/cloudinary-media-storage.js';

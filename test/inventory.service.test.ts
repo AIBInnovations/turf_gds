@@ -4,17 +4,16 @@ import { test } from 'node:test';
 import { ObjectId, type ClientSession, type Db } from 'mongodb';
 
 import type { OwnerAccessService } from '../src/modules/identity/owner/owner-access.service.js';
-import type { CourtRepository } from '../src/modules/venue/court.repository.js';
-import type { CourtDocument } from '../src/modules/venue/court.types.js';
+import type { CourtRepository } from '../src/modules/venue/courts/court.repository.js';
+import type { CourtDocument } from '../src/modules/venue/courts/court.types.js';
 import type {
   PricingRuleDocument,
   SlotDocument,
-  VenuePayoutAccountDocument,
-} from '../src/modules/venue/inventory.types.js';
-import type { VenueOperationsRepository } from '../src/modules/venue/venue-operations.repository.js';
-import { createVenueOperationsService } from '../src/modules/venue/venue-operations.service.js';
-import type { VenueRepository } from '../src/modules/venue/venue.repository.js';
-import type { VenueDocument } from '../src/modules/venue/venue.types.js';
+} from '../src/modules/venue/inventory/inventory.types.js';
+import type { InventoryRepository } from '../src/modules/venue/inventory/inventory.repository.js';
+import { createInventoryService } from '../src/modules/venue/inventory/inventory.service.js';
+import type { VenueRepository } from '../src/modules/venue/profile/venue.repository.js';
+import type { VenueDocument } from '../src/modules/venue/profile/venue.types.js';
 import type { DatabaseConnection } from '../src/shared/database/database-connection.js';
 import { AppError } from '../src/shared/errors/app-error.js';
 
@@ -26,7 +25,6 @@ const fixedNow = new Date('2026-07-28T00:00:00.000Z');
 function createFixture() {
   const pricing: PricingRuleDocument[] = [];
   const slots: SlotDocument[] = [];
-  const payouts: VenuePayoutAccountDocument[] = [];
   let courtVersion = 3;
 
   const venue: VenueDocument = {
@@ -74,7 +72,7 @@ function createFixture() {
     updated_at: fixedNow,
   };
 
-  const repository: VenueOperationsRepository = {
+  const repository: InventoryRepository = {
     async insertPricingRule(value) {
       pricing.push(value);
     },
@@ -178,20 +176,6 @@ function createFixture() {
           value._id.equals(id) && value.court_id.equals(requestedCourtId),
       ) ?? null;
     },
-    async insertPayoutAccount(value) {
-      if (
-        payouts.some(
-          (candidate) =>
-            candidate.vault_account_token === value.vault_account_token,
-        )
-      ) {
-        throw { code: 11_000 };
-      }
-      payouts.push(value);
-    },
-    async listPayoutAccounts(id) {
-      return payouts.filter((value) => value.venue_id.equals(id));
-    },
   };
 
   const ownerAccessService: OwnerAccessService = {
@@ -285,7 +269,7 @@ function createFixture() {
   };
 
   return {
-    service: createVenueOperationsService({
+    service: createInventoryService({
       repository,
       venueRepository,
       courtRepository,
@@ -294,7 +278,6 @@ function createFixture() {
       now: () => fixedNow,
     }),
     slots,
-    payouts,
     getCourtVersion: () => courtVersion,
   };
 }
@@ -450,23 +433,4 @@ test('open-time blocks use the Court version mutex and reject overlap', async ()
     correlationId: 'open-release',
   });
   assert.equal(fixture.slots.length, 0);
-});
-
-test('payout accounts persist only tokenized metadata and await Admin verification', async () => {
-  const fixture = createFixture();
-  const account = await fixture.service.addPayoutAccount({
-    actorOwnerId: ownerId.toHexString(),
-    venueId: venueId.toHexString(),
-    accountHolderName: 'Venue Operations Pvt Ltd',
-    vaultProvider: 'bank-vault',
-    vaultAccountToken: 'tok_account_123456',
-    accountLast4: '6789',
-    bankName: 'Example Bank',
-    ifscCode: 'ABCD0123456',
-  }) as Record<string, unknown>;
-
-  assert.equal(account.status, 'PENDING');
-  assert.equal(account.accountLast4, '6789');
-  assert.equal('vaultAccountToken' in account, false);
-  assert.equal(fixture.payouts[0]?.verified_by, null);
 });

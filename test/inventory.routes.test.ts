@@ -4,8 +4,8 @@ import { test } from 'node:test';
 import Fastify from 'fastify';
 
 import type { OwnerAccessService } from '../src/modules/identity/owner/owner-access.service.js';
-import venueOperationsRoutes from '../src/modules/venue/venue-operations.routes.js';
-import type { VenueOperationsService } from '../src/modules/venue/venue-operations.service.js';
+import inventoryRoutes from '../src/modules/venue/inventory/inventory.routes.js';
+import type { InventoryService } from '../src/modules/venue/inventory/inventory.service.js';
 import errorHandlerPlugin from '../src/plugins/error-handler.js';
 
 const ownerId = '687f00000000000000000110';
@@ -38,7 +38,7 @@ function createFixture() {
     },
     async revokeMember() {},
   };
-  const service: VenueOperationsService = {
+  const service: InventoryService = {
     async createPricingRule(input) {
       calls.createPricingRule = input;
       return { id: 'rule-id' };
@@ -67,14 +67,6 @@ function createFixture() {
       calls.releaseAvailability = input;
       return { id: input.slotId, status: 'AVAILABLE' };
     },
-    async addPayoutAccount(input) {
-      calls.addPayoutAccount = input;
-      return { id: 'account-id', status: 'PENDING' };
-    },
-    async listPayoutAccounts(input) {
-      calls.listPayoutAccounts = input;
-      return [];
-    },
     async searchAvailability() {
       return [];
     },
@@ -85,14 +77,14 @@ function createFixture() {
 async function buildApp(fixture: ReturnType<typeof createFixture>) {
   const app = Fastify({ logger: false });
   await app.register(errorHandlerPlugin);
-  await app.register(venueOperationsRoutes, {
+  await app.register(inventoryRoutes, {
     service: fixture.service,
     ownerAccessService: fixture.ownerAccessService,
   });
   return app;
 }
 
-test('Venue operations routes require a Venue Owner session', async () => {
+test('Inventory routes require a Venue Owner session', async () => {
   const fixture = createFixture();
   const app = await buildApp(fixture);
   const response = await app.inject(
@@ -172,7 +164,7 @@ test('inventory block schema requires exactly one fixed or open-time shape', asy
   await app.close();
 });
 
-test('unsupported content route is absent and payout route ignores raw banking fields', async () => {
+test('unsupported content route is absent from inventory', async () => {
   const fixture = createFixture();
   const app = await buildApp(fixture);
   const headers = { authorization: 'Bearer owner-session' };
@@ -182,27 +174,6 @@ test('unsupported content route is absent and payout route ignores raw banking f
     headers,
     payload: { content: { amenities: ['Parking'] } },
   });
-  const rawBankResponse = await app.inject({
-    method: 'POST',
-    url: `/${venueId}/payout-accounts`,
-    headers,
-    payload: {
-      accountHolderName: 'Venue Owner',
-      vaultProvider: 'bank-vault',
-      vaultAccountToken: 'tok_account_123456',
-      accountLast4: '6789',
-      accountNumber: '123456789',
-      bankName: 'Example Bank',
-      ifscCode: 'ABCD0123456',
-    },
-  });
-
   assert.equal(contentResponse.statusCode, 404);
-  assert.equal(rawBankResponse.statusCode, 201);
-  const payoutCall = fixture.calls.addPayoutAccount as Record<
-    string,
-    unknown
-  >;
-  assert.equal('accountNumber' in payoutCall, false);
   await app.close();
 });

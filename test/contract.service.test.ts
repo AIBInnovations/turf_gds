@@ -10,7 +10,7 @@ import {
 } from '../src/modules/contracts/contract.service.js';
 import type { PartnerVenueContractDocument } from '../src/modules/contracts/contract.types.js';
 import type { PartnerDocument } from '../src/modules/identity/partner/partner-access.types.js';
-import type { VenueDocument } from '../src/modules/venue/venue.types.js';
+import type { VenueDocument } from '../src/modules/venue/profile/venue.types.js';
 import type {
   DatabaseConnection,
   TransactionContext,

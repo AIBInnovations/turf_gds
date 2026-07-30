@@ -5,8 +5,8 @@ import multipart from '@fastify/multipart';
 import Fastify from 'fastify';
 
 import type { OwnerAccessService } from '../src/modules/identity/owner/owner-access.service.js';
-import courtOwnerRoutes from '../src/modules/venue/court-owner.routes.js';
-import type { CourtOwnerService } from '../src/modules/venue/court-owner.service.js';
+import courtOwnerRoutes from '../src/modules/venue/courts/court-owner.routes.js';
+import type { CourtOwnerService } from '../src/modules/venue/courts/court-owner.service.js';
 import errorHandlerPlugin from '../src/plugins/error-handler.js';
 
 const ownerId = '687f00000000000000000090';

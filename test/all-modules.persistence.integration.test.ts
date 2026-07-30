@@ -10,8 +10,8 @@ import { initializeContractPersistence } from '../src/modules/contracts/contract
 import { initializeFinancialClosePersistence } from '../src/modules/financial-close/financial-close.persistence.js';
 import { initializeIdentityPersistence } from '../src/modules/identity/persistence.js';
 import { initializeLedgerPersistence } from '../src/modules/ledger/ledger.persistence.js';
-import { initializeInventoryPersistence } from '../src/modules/venue/inventory.persistence.js';
-import { initializeVenuePersistence } from '../src/modules/venue/venue.persistence.js';
+import { initializeInventoryPersistence } from '../src/modules/venue/inventory/inventory.persistence.js';
+import { initializeVenuePersistence } from '../src/modules/venue/profile/venue.persistence.js';
 import { MongoDatabaseConnection } from '../src/shared/database/database-connection.js';
 
 const expectedCollections = [
@@ -98,11 +98,14 @@ test('all authoritative ERD collections initialize with strict validators and no
 
     const requiredIndexes: Array<[string, string]> = [
       ['ledger_entries', 'ix_ledger_correlation'],
+      ['ledger_entries', 'ix_ledger_payout'],
+      ['ledger_entries', 'ix_ledger_unsettled_batch'],
       ['settlements', 'uq_settlement_period'],
-      ['reconciliations', 'uq_reconciliation_settlement'],
+      ['reconciliations', 'uq_reconciliation_bank_reference'],
       ['payouts', 'uq_payout_idempotency'],
+      ['payouts', 'uq_payout_settlement_venue'],
       ['invoices', 'uq_invoice_number'],
-      ['outbox_events', 'uq_outbox_aggregate_version'],
+      ['outbox_events', 'uq_outbox_event_identity'],
     ];
     for (const [collection, indexName] of requiredIndexes) {
       const indexes = await database.db.collection(collection).indexes();

@@ -3,9 +3,9 @@ import { test } from 'node:test';
 
 import { ObjectId } from 'mongodb';
 
-import type { VenueRepository } from '../src/modules/venue/venue.repository.js';
-import { createVenueService } from '../src/modules/venue/venue.service.js';
-import type { VenueDocument } from '../src/modules/venue/venue.types.js';
+import type { VenueRepository } from '../src/modules/venue/profile/venue.repository.js';
+import { createVenueService } from '../src/modules/venue/profile/venue.service.js';
+import type { VenueDocument } from '../src/modules/venue/profile/venue.types.js';
 
 const fixedNow = new Date('2026-07-28T08:00:00.000Z');
 

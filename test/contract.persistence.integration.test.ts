@@ -10,8 +10,8 @@ import { createContractService } from '../src/modules/contracts/contract.service
 import type { PartnerVenueContractDocument } from '../src/modules/contracts/contract.types.js';
 import type { PartnerDocument } from '../src/modules/identity/partner/partner-access.types.js';
 import { initializeIdentityPersistence } from '../src/modules/identity/persistence.js';
-import { initializeVenuePersistence } from '../src/modules/venue/venue.persistence.js';
-import type { VenueDocument } from '../src/modules/venue/venue.types.js';
+import { initializeVenuePersistence } from '../src/modules/venue/profile/venue.persistence.js';
+import type { VenueDocument } from '../src/modules/venue/profile/venue.types.js';
 import { MongoDatabaseConnection } from '../src/shared/database/database-connection.js';
 import { AppError } from '../src/shared/errors/app-error.js';
 

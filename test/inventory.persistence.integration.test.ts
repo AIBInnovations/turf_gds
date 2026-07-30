@@ -6,17 +6,19 @@ import 'dotenv/config';
 import { ObjectId } from 'mongodb';
 
 import type { OwnerAccessService } from '../src/modules/identity/owner/owner-access.service.js';
-import { createCourtRepository } from '../src/modules/venue/court.repository.js';
-import type { CourtDocument } from '../src/modules/venue/court.types.js';
-import { initializeVenuePersistence } from '../src/modules/venue/venue.persistence.js';
-import { createVenueOperationsRepository } from '../src/modules/venue/venue-operations.repository.js';
-import { createVenueOperationsService } from '../src/modules/venue/venue-operations.service.js';
-import { createVenueRepository } from '../src/modules/venue/venue.repository.js';
-import type { VenueDocument } from '../src/modules/venue/venue.types.js';
+import { createCourtRepository } from '../src/modules/venue/courts/court.repository.js';
+import type { CourtDocument } from '../src/modules/venue/courts/court.types.js';
+import { initializeVenuePersistence } from '../src/modules/venue/profile/venue.persistence.js';
+import { createInventoryRepository } from '../src/modules/venue/inventory/inventory.repository.js';
+import { createInventoryService } from '../src/modules/venue/inventory/inventory.service.js';
+import { createPayoutAccountRepository } from '../src/modules/venue/payout-accounts/payout-account.repository.js';
+import { createPayoutAccountService } from '../src/modules/venue/payout-accounts/payout-account.service.js';
+import { createVenueRepository } from '../src/modules/venue/profile/venue.repository.js';
+import type { VenueDocument } from '../src/modules/venue/profile/venue.types.js';
 import { MongoDatabaseConnection } from '../src/shared/database/database-connection.js';
 import { AppError } from '../src/shared/errors/app-error.js';
 
-test('Venue operations persistence enforces generation, versions, and tokenized payouts', async (context) => {
+test('Inventory and payout-account persistence enforce their independent boundaries', async (context) => {
   const uri = process.env.MONGODB_URI;
   if (!uri) {
     context.skip('MONGODB_URI is not configured');
@@ -132,12 +134,17 @@ test('Venue operations persistence enforces generation, versions, and tokenized 
       },
       async revokeMember() {},
     };
-    const service = createVenueOperationsService({
-      repository: createVenueOperationsRepository(database),
+    const service = createInventoryService({
+      repository: createInventoryRepository(database),
       venueRepository: createVenueRepository(database),
       courtRepository: createCourtRepository(database),
       ownerAccessService,
       database,
+      now: () => now,
+    });
+    const payoutAccountService = createPayoutAccountService({
+      repository: createPayoutAccountRepository(database),
+      ownerAccessService,
       now: () => now,
     });
     const scope = {
@@ -198,7 +205,7 @@ test('Venue operations persistence enforces generation, versions, and tokenized 
       correlationId: 'release',
     });
 
-    const payout = await service.addPayoutAccount({
+    const payout = await payoutAccountService.add({
       actorOwnerId: ownerId.toHexString(),
       venueId: venueId.toHexString(),
       accountHolderName: 'Inventory Venue Pvt Ltd',

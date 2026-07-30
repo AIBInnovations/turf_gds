@@ -4,11 +4,11 @@ import { test } from 'node:test';
 import { ObjectId } from 'mongodb';
 
 import type { OwnerAccessService } from '../src/modules/identity/owner/owner-access.service.js';
-import type { CourtRepository } from '../src/modules/venue/court.repository.js';
-import { createCourtOwnerService } from '../src/modules/venue/court-owner.service.js';
-import type { CourtDocument } from '../src/modules/venue/court.types.js';
-import type { VenueRepository } from '../src/modules/venue/venue.repository.js';
-import type { VenueDocument } from '../src/modules/venue/venue.types.js';
+import type { CourtRepository } from '../src/modules/venue/courts/court.repository.js';
+import { createCourtOwnerService } from '../src/modules/venue/courts/court-owner.service.js';
+import type { CourtDocument } from '../src/modules/venue/courts/court.types.js';
+import type { VenueRepository } from '../src/modules/venue/profile/venue.repository.js';
+import type { VenueDocument } from '../src/modules/venue/profile/venue.types.js';
 import { AppError } from '../src/shared/errors/app-error.js';
 import type { MediaStorage } from '../src/shared/media/cloudinary-media-storage.js';
 

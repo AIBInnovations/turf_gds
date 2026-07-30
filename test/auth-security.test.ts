@@ -11,13 +11,13 @@ import {
   verifyHmacSignature,
 } from '../src/shared/auth/partner-signature.js';
 import {
-  createSignedToken,
-  verifySignedToken,
-} from '../src/shared/auth/signed-token.js';
+  createAdminJwt,
+  verifyAdminJwt,
+} from '../src/shared/auth/admin-jwt.js';
 
-test('admin signed tokens verify and reject tampering or expiry', () => {
+test('admin JWTs are standards-shaped and reject tampering or expiry', () => {
   const secret = 'test-admin-secret-with-at-least-32-characters';
-  const token = createSignedToken(
+  const token = createAdminJwt(
     {
       sub: '687f00000000000000000001',
       actor: 'ADMIN',
@@ -28,9 +28,16 @@ test('admin signed tokens verify and reject tampering or expiry', () => {
     secret,
   );
 
-  assert.equal(verifySignedToken(token, secret, 1_500)?.role, 'ADMIN');
-  assert.equal(verifySignedToken(`${token}x`, secret, 1_500), undefined);
-  assert.equal(verifySignedToken(token, secret, 2_000), undefined);
+  assert.equal(token.split('.').length, 3);
+  assert.deepEqual(
+    JSON.parse(
+      Buffer.from(token.split('.')[0]!, 'base64url').toString('utf8'),
+    ),
+    { alg: 'HS256', typ: 'JWT' },
+  );
+  assert.equal(verifyAdminJwt(token, secret, 1_500)?.role, 'ADMIN');
+  assert.equal(verifyAdminJwt(`${token}x`, secret, 1_500), undefined);
+  assert.equal(verifyAdminJwt(token, secret, 2_000), undefined);
 });
 
 test('partner credentials expose a prefix without storing raw secrets', () => {

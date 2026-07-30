@@ -12,12 +12,12 @@ import { createIdentityRepository } from '../src/modules/identity/owner/owner-au
 import { createIdentityService } from '../src/modules/identity/owner/owner-auth.service.js';
 import { createOwnerAccessRepository } from '../src/modules/identity/owner/owner-access.repository.js';
 import { createOwnerAccessService } from '../src/modules/identity/owner/owner-access.service.js';
-import { initializeVenuePersistence } from '../src/modules/venue/venue.persistence.js';
-import { createVenueRepository } from '../src/modules/venue/venue.repository.js';
+import { initializeVenuePersistence } from '../src/modules/venue/profile/venue.persistence.js';
+import { createVenueRepository } from '../src/modules/venue/profile/venue.repository.js';
 import {
   createVenueService,
   type VenueService,
-} from '../src/modules/venue/venue.service.js';
+} from '../src/modules/venue/profile/venue.service.js';
 import { MongoDatabaseConnection } from '../src/shared/database/database-connection.js';
 import { AppError } from '../src/shared/errors/app-error.js';
 import type { MediaStorage } from '../src/shared/media/cloudinary-media-storage.js';
@@ -58,7 +58,28 @@ test('Venue Owner registration commits and rolls back as one MongoDB transaction
       return;
     }
 
+    await database.db.collection('admin_users').insertOne({
+      _id: new ObjectId(),
+      email: 'legacy-audit-admin@example.com',
+      password_hash: 'legacy',
+      display_name: 'Legacy Audit Admin',
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      fcm_tokens: [],
+      audit_history: Array.from({ length: 101 }, (_, index) => ({ index })),
+      last_login_at: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
     await initializeIdentityPersistence(database.db);
+    assert.equal(
+      (
+        await database.db.collection('admin_users').findOne({
+          email: 'legacy-audit-admin@example.com',
+        })
+      )?.audit_history.length,
+      100,
+    );
     await initializeVenuePersistence(database.db);
 
     const venueService = createVenueService({
@@ -174,6 +195,7 @@ test('Venue Owner registration commits and rolls back as one MongoDB transaction
     await kycService.submit({
       verificationId: verification.id,
       subjectId: result.ownerId,
+      correlationId: 'identity-integration-submit',
     });
     assert.equal(
       (
@@ -194,6 +216,28 @@ test('Venue Owner registration commits and rolls back as one MongoDB transaction
           event.event_type === 'KYC_SUBMITTED',
       ),
     );
+    await kycService.review({
+      verificationId: verification.id,
+      adminId: new ObjectId().toHexString(),
+      status: 'VERIFIED',
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+      correlationId: 'identity-integration-review',
+    });
+    const [reviewed, kycDocument, reviewedOwner] = await Promise.all([
+      database.db.collection('kyc_verifications').findOne({
+        _id: new ObjectId(verification.id),
+      }),
+      database.db.collection('kyc_documents').findOne({
+        kyc_verification_id: new ObjectId(verification.id),
+      }),
+      database.db.collection('venue_owners').findOne({
+        _id: new ObjectId(result.ownerId),
+      }),
+    ]);
+    assert.equal(reviewed?.status, 'VERIFIED');
+    assert.equal(kycDocument?.status, 'ACCEPTED');
+    assert.equal(kycDocument?.file.classification, 'SENSITIVE');
+    assert.equal(reviewedOwner?.kyc_status, 'VERIFIED');
     await assert.rejects(
       kycService.getCurrent({
         subjectType: 'VENUE_OWNER',

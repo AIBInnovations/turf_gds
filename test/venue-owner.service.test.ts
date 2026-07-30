@@ -4,9 +4,9 @@ import { test } from 'node:test';
 import { ObjectId } from 'mongodb';
 
 import type { OwnerAccessService } from '../src/modules/identity/owner/owner-access.service.js';
-import type { VenueRepository } from '../src/modules/venue/venue.repository.js';
-import { createVenueOwnerService } from '../src/modules/venue/venue-owner.service.js';
-import type { VenueDocument } from '../src/modules/venue/venue.types.js';
+import type { VenueRepository } from '../src/modules/venue/profile/venue.repository.js';
+import { createVenueOwnerService } from '../src/modules/venue/profile/venue-owner.service.js';
+import type { VenueDocument } from '../src/modules/venue/profile/venue.types.js';
 import { AppError } from '../src/shared/errors/app-error.js';
 import type { MediaStorage } from '../src/shared/media/cloudinary-media-storage.js';
 

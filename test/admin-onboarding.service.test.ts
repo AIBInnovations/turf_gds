@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { createAdminOnboardingService } from '../src/modules/admin/onboarding/onboarding.service.js';
 import type { KycService } from '../src/modules/identity/kyc/kyc.service.js';
 import type { IdentityService } from '../src/modules/identity/owner/owner-auth.service.js';
-import type { VenueService } from '../src/modules/venue/venue.service.js';
+import type { VenueService } from '../src/modules/venue/profile/venue.service.js';
 import type { DatabaseConnection } from '../src/shared/database/database-connection.js';
 import { AppError } from '../src/shared/errors/app-error.js';
 

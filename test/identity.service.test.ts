@@ -14,7 +14,7 @@ import type {
 import type {
   CreateInitialVenueInput,
   VenueService,
-} from '../src/modules/venue/venue.service.js';
+} from '../src/modules/venue/profile/venue.service.js';
 import {
   hashPassword,
   verifyPassword,
@@ -131,6 +131,8 @@ function createFakeRepository(
         : null;
     },
 
+    async touchSession() {},
+
     async findMembershipByOwnerAndVenue(ownerId, venueId) {
       if (!state.membership) {
         return null;
@@ -146,7 +148,7 @@ function createFakeRepository(
       return null;
     },
 
-    async approveOwner(ownerId, adminId, approvedAt) {
+    async approveOwner(ownerId, adminId, _correlationId, approvedAt) {
       state.approvedOwner = { ownerId, adminId, approvedAt };
       return state.owner?.status === 'ACTIVE';
     },
@@ -383,6 +385,7 @@ test('owner approval is delegated to the identity repository', async () => {
     ownerId: owner._id.toHexString(),
     venueId: venueId.toHexString(),
     adminId: adminId.toHexString(),
+    correlationId: 'approve-owner',
   }, undefined as never);
 
   assert.equal(fake.state.approvedOwner?.ownerId.equals(owner._id), true);
@@ -404,6 +407,7 @@ test('owner approval rejects malformed identifiers', async () => {
       ownerId: 'invalid-owner-id',
       venueId: 'invalid-venue-id',
       adminId: 'invalid-admin-id',
+      correlationId: 'invalid-approval',
     }, undefined as never),
     (error: unknown) =>
       error instanceof AppError && error.code === 'INVALID_ID',

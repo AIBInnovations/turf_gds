@@ -129,6 +129,10 @@ test('KYC upload stores protected Cloudinary metadata', async () => {
     fixture.getInsertedDocument()?.file.checksum,
     'etag-value',
   );
+  assert.equal(
+    fixture.getInsertedDocument()?.file.classification,
+    'SENSITIVE',
+  );
 });
 
 test('KYC upload deletes Cloudinary bytes when MongoDB insert fails', async () => {
@@ -156,6 +160,7 @@ test('KYC rejection requires a reason', async () => {
       verificationId: fixture.verification._id.toHexString(),
       adminId: new ObjectId().toHexString(),
       status: 'REJECTED',
+      correlationId: 'reject-without-reason',
     }),
     (error: unknown) =>
       error instanceof AppError &&
@@ -219,6 +224,7 @@ test('KYC submission requires at least one active document', async () => {
     fixture.service.submit({
       verificationId: fixture.verification._id.toHexString(),
       subjectId: fixture.subjectId.toHexString(),
+      correlationId: 'submit-without-document',
     }),
     (error: unknown) =>
       error instanceof AppError &&
@@ -235,8 +241,34 @@ test('KYC review rejects an expiry that is not in the future', async () => {
       adminId: new ObjectId().toHexString(),
       status: 'VERIFIED',
       expiresAt: fixedNow.toISOString(),
+      correlationId: 'invalid-expiry',
     }),
     (error: unknown) =>
       error instanceof AppError && error.code === 'INVALID_KYC_EXPIRY',
   );
+});
+
+test('KYC review requires a submitted current verification with documents', async () => {
+  const fixture = createFixture({ documentCount: 1 });
+
+  await assert.rejects(
+    fixture.service.review({
+      verificationId: fixture.verification._id.toHexString(),
+      adminId: new ObjectId().toHexString(),
+      status: 'VERIFIED',
+      correlationId: 'review-before-submit',
+    }),
+    (error: unknown) =>
+      error instanceof AppError && error.code === 'KYC_REVIEW_NOT_READY',
+  );
+
+  fixture.verification.audit_history.push({
+    event_type: 'KYC_SUBMITTED',
+  });
+  await fixture.service.review({
+    verificationId: fixture.verification._id.toHexString(),
+    adminId: new ObjectId().toHexString(),
+    status: 'VERIFIED',
+    correlationId: 'review-submitted',
+  });
 });
