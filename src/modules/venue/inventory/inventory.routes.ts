@@ -1,14 +1,14 @@
 import type { FastifyPluginAsync } from 'fastify';
 
-import type { OwnerAccessService } from '../identity/owner/owner-access.service.js';
+import type { OwnerAccessService } from '../../identity/owner/owner-access.service.js';
 import {
   createOwnerAuthenticationHook,
   requireOwnerContext,
-} from '../identity/shared/auth-context.js';
-import type { VenueOperationsService } from './venue-operations.service.js';
+} from '../../identity/shared/auth-context.js';
+import type { InventoryService } from './inventory.service.js';
 
-export interface VenueOperationsRoutesOptions {
-  service: VenueOperationsService;
+export interface InventoryRoutesOptions {
+  service: InventoryService;
   ownerAccessService: OwnerAccessService;
 }
 
@@ -22,8 +22,8 @@ const dateTime = {
   format: 'date-time',
 } as const;
 
-const venueOperationsRoutes: FastifyPluginAsync<
-  VenueOperationsRoutesOptions
+const inventoryRoutes: FastifyPluginAsync<
+  InventoryRoutesOptions
 > = async (fastify, options) => {
   const authenticate = createOwnerAuthenticationHook(
     options.ownerAccessService,
@@ -257,68 +257,6 @@ const venueOperationsRoutes: FastifyPluginAsync<
     },
   );
 
-  fastify.post<{
-    Params: { venueId: string };
-    Body: PayoutBody;
-  }>(
-    '/:venueId/payout-accounts',
-    {
-      preHandler: authenticate,
-      schema: {
-        params: venueParams(),
-        body: {
-          type: 'object',
-          additionalProperties: false,
-          required: [
-            'accountHolderName',
-            'vaultProvider',
-            'vaultAccountToken',
-            'accountLast4',
-            'bankName',
-            'ifscCode',
-          ],
-          properties: {
-            accountHolderName: text(2, 160),
-            vaultProvider: text(2, 80),
-            vaultAccountToken: text(12, 500),
-            accountLast4: {
-              type: 'string',
-              pattern: '^[0-9]{4}$',
-            },
-            bankName: text(2, 160),
-            ifscCode: {
-              type: 'string',
-              pattern: '^[A-Za-z]{4}0[A-Za-z0-9]{6}$',
-            },
-          },
-        },
-      },
-    },
-    async (request, reply) => {
-      const owner = requireOwnerContext(request);
-      const result = await options.service.addPayoutAccount({
-        actorOwnerId: owner.ownerId,
-        venueId: request.params.venueId,
-        ...request.body,
-      });
-      return reply.status(201).send(result);
-    },
-  );
-
-  fastify.get<{ Params: { venueId: string } }>(
-    '/:venueId/payout-accounts',
-    {
-      preHandler: authenticate,
-      schema: { params: venueParams() },
-    },
-    async (request) => {
-      const owner = requireOwnerContext(request);
-      return options.service.listPayoutAccounts({
-        actorOwnerId: owner.ownerId,
-        venueId: request.params.venueId,
-      });
-    },
-  );
 };
 
 interface PricingBody {
@@ -331,15 +269,6 @@ interface PricingBody {
   effectiveFrom: string;
   effectiveTo?: string;
   priority: number;
-}
-
-interface PayoutBody {
-  accountHolderName: string;
-  vaultProvider: string;
-  vaultAccountToken: string;
-  accountLast4: string;
-  bankName: string;
-  ifscCode: string;
 }
 
 function pricingBodySchema(required: boolean) {
@@ -381,15 +310,6 @@ function pricingBodySchema(required: boolean) {
         maximum: 1000,
       },
     },
-  } as const;
-}
-
-function venueParams() {
-  return {
-    type: 'object',
-    additionalProperties: false,
-    required: ['venueId'],
-    properties: { venueId: objectId },
   } as const;
 }
 
@@ -439,4 +359,4 @@ function text(minLength: number, maxLength: number) {
   return { type: 'string', minLength, maxLength } as const;
 }
 
-export default venueOperationsRoutes;
+export default inventoryRoutes;

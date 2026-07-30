@@ -1,6 +1,6 @@
 import type { ClientSession, ObjectId } from 'mongodb';
 
-import type { DatabaseConnection } from '../../shared/database/database-connection.js';
+import type { DatabaseConnection } from '../../../shared/database/database-connection.js';
 import type {
   AddressDocument,
   VenueDocument,

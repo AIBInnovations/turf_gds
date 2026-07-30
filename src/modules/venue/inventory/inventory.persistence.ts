@@ -121,42 +121,9 @@ const slotValidator: Document = {
   },
 };
 
-const payoutAccountValidator: Document = {
-  $jsonSchema: {
-    bsonType: 'object',
-    additionalProperties: false,
-    required: [
-      '_id', 'venue_id', 'account_holder_name', 'vault_provider',
-      'vault_account_token', 'account_last4', 'bank_name', 'ifsc_code',
-      'status', 'verified_by', 'verified_at',
-      'verification_failure_reason', 'verification_method',
-      'audit_history', 'created_at', 'updated_at',
-    ],
-    properties: {
-      _id: { bsonType: 'objectId' },
-      venue_id: { bsonType: 'objectId' },
-      account_holder_name: { bsonType: 'string' },
-      vault_provider: { bsonType: 'string' },
-      vault_account_token: { bsonType: 'string' },
-      account_last4: { bsonType: 'string', pattern: '^[0-9]{4}$' },
-      bank_name: { bsonType: 'string' },
-      ifsc_code: { bsonType: 'string' },
-      status: { enum: ['PENDING', 'VERIFIED', 'DISABLED'] },
-      verified_by: { bsonType: ['objectId', 'null'] },
-      verified_at: { bsonType: ['date', 'null'] },
-      verification_failure_reason: { bsonType: ['string', 'null'] },
-      verification_method: { enum: ['PENNY_DROP', 'MANUAL'] },
-      audit_history: { bsonType: 'array' },
-      created_at: { bsonType: 'date' },
-      updated_at: { bsonType: 'date' },
-    },
-  },
-};
-
 export async function initializeInventoryPersistence(db: Db): Promise<void> {
   await ensure(db, 'pricing_rules', pricingRuleValidator);
   await ensure(db, 'slots', slotValidator);
-  await ensure(db, 'venue_payout_accounts', payoutAccountValidator);
 
   await ensureIndex(db, 'pricing_rules',
     { court_id: 1, active: 1, priority: -1 },
@@ -175,6 +142,10 @@ export async function initializeInventoryPersistence(db: Db): Promise<void> {
     { name: 'ix_slots_expired_holds' },
   );
   await ensureIndex(db, 'slots',
+    { venue_id: 1, environment: 1, status: 1, starts_at: 1, ends_at: 1 },
+    { name: 'ix_slots_admin_inventory_health' },
+  );
+  await ensureIndex(db, 'slots',
     { hold_id: 1 },
     {
       unique: true,
@@ -189,13 +160,5 @@ export async function initializeInventoryPersistence(db: Db): Promise<void> {
       partialFilterExpression: { booking_id: { $type: 'objectId' } },
       name: 'uq_slots_booking_id',
     },
-  );
-  await ensureIndex(db, 'venue_payout_accounts',
-    { vault_account_token: 1 },
-    { unique: true, name: 'uq_payout_vault_token' },
-  );
-  await ensureIndex(db, 'venue_payout_accounts',
-    { venue_id: 1, status: 1 },
-    { name: 'ix_payout_accounts_venue_status' },
   );
 }

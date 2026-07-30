@@ -11,12 +11,31 @@ import { createBookingLifecycleService } from './modules/booking/booking-lifecyc
 import { initializeContractPersistence } from './modules/contracts/contract.persistence.js';
 import { initializeOutboxPersistence } from './shared/communications/outbox.persistence.js';
 import { createOutboxRepository } from './shared/communications/outbox.repository.js';
+import { createCommunicationsRepository } from './shared/communications/communications.repository.js';
+import { createCommunicationsService } from './shared/communications/communications.service.js';
+import type { CommunicationsService } from './shared/communications/communications.service.js';
+import {
+  createFirebasePushDelivery,
+  type PushDelivery,
+} from './shared/communications/push-delivery.js';
+import {
+  createSecureWebhookTransport,
+  type WebhookTransport,
+} from './shared/communications/webhook-transport.js';
 import { initializeFinancialClosePersistence } from './modules/financial-close/financial-close.persistence.js';
+import { createFinancialCloseRepository } from './modules/financial-close/financial-close.repository.js';
+import { createFinancialCloseService } from './modules/financial-close/financial-close.service.js';
 import { initializeLedgerPersistence } from './modules/ledger/ledger.persistence.js';
 import { createLedgerRepository } from './modules/ledger/ledger.repository.js';
+import { createLedgerService } from './modules/ledger/ledger.service.js';
 import { createContractRepository } from './modules/contracts/contract.repository.js';
 import { createContractService } from './modules/contracts/contract.service.js';
 import { createAdminOnboardingService } from './modules/admin/onboarding/onboarding.service.js';
+import { createAdminVenueService } from './modules/venue/admin-venue.service.js';
+import {
+  createAdminEpic08Service,
+  type AdminEpic08Service,
+} from './modules/admin/epic08/admin-epic08.service.js';
 import { createAdminAuthRepository } from './modules/identity/platform/auth.repository.js';
 import { createAdminAuthService } from './modules/identity/platform/auth.service.js';
 import { createKycRepository } from './modules/identity/kyc/kyc.repository.js';
@@ -31,14 +50,16 @@ import { createOwnerAccessService } from './modules/identity/owner/owner-access.
 import { createPartnerAccessRepository } from './modules/identity/partner/partner-access.repository.js';
 import { createPartnerAccessService } from './modules/identity/partner/partner-access.service.js';
 import { initializeIdentityPersistence } from './modules/identity/persistence.js';
-import { initializeVenuePersistence } from './modules/venue/venue.persistence.js';
-import { createCourtOwnerService } from './modules/venue/court-owner.service.js';
-import { createCourtRepository } from './modules/venue/court.repository.js';
-import { createVenueRepository } from './modules/venue/venue.repository.js';
-import { createVenueOwnerService } from './modules/venue/venue-owner.service.js';
-import { createVenueService } from './modules/venue/venue.service.js';
-import { createVenueOperationsRepository } from './modules/venue/venue-operations.repository.js';
-import { createVenueOperationsService } from './modules/venue/venue-operations.service.js';
+import { initializeVenuePersistence } from './modules/venue/profile/venue.persistence.js';
+import { createCourtOwnerService } from './modules/venue/courts/court-owner.service.js';
+import { createCourtRepository } from './modules/venue/courts/court.repository.js';
+import { createVenueRepository } from './modules/venue/profile/venue.repository.js';
+import { createVenueOwnerService } from './modules/venue/profile/venue-owner.service.js';
+import { createVenueService } from './modules/venue/profile/venue.service.js';
+import { createInventoryRepository } from './modules/venue/inventory/inventory.repository.js';
+import { createInventoryService } from './modules/venue/inventory/inventory.service.js';
+import { createPayoutAccountRepository } from './modules/venue/payout-accounts/payout-account.repository.js';
+import { createPayoutAccountService } from './modules/venue/payout-accounts/payout-account.service.js';
 import cloudinaryPlugin from './plugins/cloudinary.js';
 import errorHandlerPlugin from './plugins/error-handler.js';
 import mongodbPlugin from './plugins/mongodb.js';
@@ -53,6 +74,10 @@ export interface BuildAppOptions {
   database?: DatabaseConnection;
   mediaStorage?: MediaStorage;
   identityService?: IdentityService;
+  pushDelivery?: PushDelivery;
+  webhookTransport?: WebhookTransport;
+  communicationsService?: CommunicationsService;
+  adminEpic08Service?: AdminEpic08Service;
 }
 
 export async function buildApp(
@@ -132,12 +157,16 @@ export async function buildApp(
     ownerAccessService,
     mediaStorage: app.mediaStorage,
   });
-  const venueOperationsService = createVenueOperationsService({
-    repository: createVenueOperationsRepository(app.database),
+  const inventoryService = createInventoryService({
+    repository: createInventoryRepository(app.database),
     venueRepository: createVenueRepository(app.database),
     courtRepository: createCourtRepository(app.database),
     ownerAccessService,
     database: app.database,
+  });
+  const payoutAccountService = createPayoutAccountService({
+    repository: createPayoutAccountRepository(app.database),
+    ownerAccessService,
   });
   const adminAuthService = createAdminAuthService({
     repository: createAdminAuthRepository(app.database),
@@ -163,9 +192,12 @@ export async function buildApp(
     repository: createOwnerBookingRepository(app.database),
     ownerAccessService,
   });
+  const ledgerService = createLedgerService(
+    createLedgerRepository(app.database),
+  );
   const bookingLifecycleService = createBookingLifecycleService({
     repository: createBookingLifecycleRepository(app.database),
-    ledgerRepository: createLedgerRepository(app.database),
+    ledgerService,
     outboxRepository: createOutboxRepository(app.database),
     database: app.database,
   });
@@ -182,6 +214,36 @@ export async function buildApp(
     repository: createContractRepository(app.database),
     database: app.database,
   });
+  const financialCloseService = createFinancialCloseService({
+    repository: createFinancialCloseRepository(app.database),
+    ledgerService,
+    outboxRepository: createOutboxRepository(app.database),
+    ownerAccessService,
+    database: app.database,
+  });
+  const communicationsService =
+    options.communicationsService ??
+    createCommunicationsService({
+      repository: createCommunicationsRepository(app.database),
+      webhookTransport:
+        options.webhookTransport ?? createSecureWebhookTransport(),
+      pushDelivery:
+        options.pushDelivery ?? createFirebasePushDelivery(config.fcm),
+      authConfig: config.auth,
+      config: config.communications,
+    });
+  const adminEpic08Service =
+    options.adminEpic08Service ??
+    createAdminEpic08Service({
+      database: app.database,
+      venues: createAdminVenueService({
+        database: app.database,
+        identityService,
+        venueService,
+      }),
+      minimumCoverageDays:
+        config.adminOperations?.inventoryMinimumCoverageDays ?? 7,
+    });
 
   await app.register(apiV1Routes, {
     prefix: '/api/v1',
@@ -193,10 +255,14 @@ export async function buildApp(
     partnerAccessService,
     venueOwnerService,
     courtOwnerService,
-    venueOperationsService,
+    inventoryService,
+    payoutAccountService,
     ownerBookingService,
     bookingLifecycleService,
     contractService,
+    financialCloseService,
+    communicationsService,
+    adminEpic08Service,
   });
 
   return app;

@@ -60,7 +60,32 @@ export async function initializeLedgerPersistence(db: Db): Promise<void> {
     { name: 'ix_ledger_settlement_venue' },
   );
   await db.collection(name).createIndex(
+    { payout_id: 1 },
+    { name: 'ix_ledger_payout' },
+  );
+  await db.collection(name).createIndex(
+    { partner_id: 1, environment: 1, settlement_id: 1, effective_at: 1 },
+    { name: 'ix_ledger_unsettled_batch' },
+  );
+  await db.collection(name).createIndex(
+    { reverses_entry_id: 1 },
+    {
+      partialFilterExpression: { reverses_entry_id: { $type: 'objectId' } },
+      name: 'ix_ledger_reversal_reference',
+    },
+  );
+  await db.collection(name).createIndex(
     { correlation_id: 1 },
     { name: 'ix_ledger_correlation' },
+  );
+  await db.collection(name).createIndex(
+    {
+      environment: 1,
+      effective_at: 1,
+      venue_id: 1,
+      partner_id: 1,
+      entry_type: 1,
+    },
+    { name: 'ix_ledger_admin_revenue_report' },
   );
 }

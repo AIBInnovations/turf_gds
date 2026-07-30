@@ -2,7 +2,7 @@ import type { ClientSession, Filter, ObjectId } from 'mongodb';
 
 import type { DatabaseConnection } from '../../shared/database/database-connection.js';
 import type { PartnerDocument } from '../identity/partner/partner-access.types.js';
-import type { VenueDocument } from '../venue/venue.types.js';
+import type { VenueDocument } from '../venue/profile/venue.types.js';
 import type { PartnerVenueContractDocument } from './contract.types.js';
 
 export interface ContractRepository {

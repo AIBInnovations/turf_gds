@@ -1,6 +1,6 @@
 import type { ObjectId } from 'mongodb';
 
-import type { DatabaseConnection } from '../../shared/database/database-connection.js';
+import type { DatabaseConnection } from '../../../shared/database/database-connection.js';
 import type {
   CourtBookingMode,
   CourtDocument,
@@ -8,7 +8,7 @@ import type {
   CourtSportType,
   CourtStatus,
 } from './court.types.js';
-import type { VenueMediaDocument } from './venue.types.js';
+import type { VenueMediaDocument } from '../profile/venue.types.js';
 
 export interface CourtRepository {
   insert(court: CourtDocument): Promise<void>;

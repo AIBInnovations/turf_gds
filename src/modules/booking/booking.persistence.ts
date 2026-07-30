@@ -130,6 +130,14 @@ export async function initializeBookingPersistence(db: Db): Promise<void> {
     { venue_id: 1, starts_at: -1, _id: -1 },
     { name: 'ix_booking_owner_list' },
   );
+  await db.collection('bookings').createIndex(
+    { partner_id: 1, environment: 1, status: 1, starts_at: -1, _id: -1 },
+    { name: 'ix_booking_admin_partner_report' },
+  );
+  await db.collection('bookings').createIndex(
+    { venue_id: 1, environment: 1, status: 1, starts_at: -1, _id: -1 },
+    { name: 'ix_booking_admin_venue_report' },
+  );
   await db.collection('booking_cancellations').createIndex(
     { booking_id: 1 },
     { unique: true, name: 'uq_booking_cancellation_booking' },

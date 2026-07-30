@@ -6,13 +6,13 @@ import type {
 
 import type { DatabaseConnection } from '../../shared/database/database-connection.js';
 import type { PartnerVenueContractDocument } from '../contracts/contract.types.js';
-import type { CourtDocument } from '../venue/court.types.js';
+import type { CourtDocument } from '../venue/courts/court.types.js';
 import type {
   PricingRuleDocument,
   SlotDocument,
   SlotStatus,
-} from '../venue/inventory.types.js';
-import type { VenueDocument } from '../venue/venue.types.js';
+} from '../venue/inventory/inventory.types.js';
+import type { VenueDocument } from '../venue/profile/venue.types.js';
 import type {
   ApiIdempotencyRecordDocument,
   BookingCancellationDocument,

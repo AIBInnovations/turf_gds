@@ -15,16 +15,20 @@ export interface PartnerAccessRepository {
   approveSandbox(
     partnerId: ObjectId,
     adminId: ObjectId,
+    correlationId: string,
     now: Date,
   ): Promise<boolean>;
   approveProduction(
     partnerId: ObjectId,
     adminId: ObjectId,
+    correlationId: string,
     now: Date,
   ): Promise<boolean>;
   setIntegrationReviewStatus(
     partnerId: ObjectId,
+    adminId: ObjectId,
     status: 'PENDING' | 'PASSED' | 'FAILED',
+    correlationId: string,
     now: Date,
   ): Promise<boolean>;
   insertApiKey(key: PartnerApiKeyDocument): Promise<void>;
@@ -43,6 +47,13 @@ export interface PartnerAccessRepository {
   }): Promise<void>;
   insertWebhook(endpoint: WebhookEndpointDocument): Promise<boolean>;
   verifyWebhook(id: ObjectId, now: Date): Promise<boolean>;
+  replaceWebhookSubscriptions(
+    id: ObjectId,
+    partnerId: ObjectId,
+    environment: PartnerEnvironment,
+    subscribedEventTypes: WebhookEndpointDocument['subscribed_event_types'],
+    now: Date,
+  ): Promise<boolean>;
   disableWebhook(
     id: ObjectId,
     partnerId: ObjectId,
@@ -78,7 +89,7 @@ export function createPartnerAccessRepository(
     findPartner(id) {
       return partners().findOne({ _id: id });
     },
-    async approveSandbox(partnerId, adminId, now) {
+    async approveSandbox(partnerId, adminId, correlationId, now) {
       const result = await partners().updateOne(
         { _id: partnerId, status: 'PENDING', sandbox_approved_at: null },
         {
@@ -86,21 +97,19 @@ export function createPartnerAccessRepository(
             sandbox_approved_at: now,
             updated_at: now,
           },
-          $push: {
-            audit_history: {
-              event_type: 'SANDBOX_APPROVED',
-              actor_type: 'ADMIN',
-              actor_id: adminId,
-              correlation_id: new ObjectId().toHexString(),
-              changes: {},
-              occurred_at: now,
-            },
-          },
+          $push: { audit_history: boundedAudit({
+            event_type: 'SANDBOX_APPROVED',
+            actor_type: 'ADMIN',
+            actor_id: adminId,
+            correlation_id: correlationId,
+            changes: {},
+            occurred_at: now,
+          }) },
         },
       );
       return result.modifiedCount > 0;
     },
-    async approveProduction(partnerId, adminId, now) {
+    async approveProduction(partnerId, adminId, correlationId, now) {
       const result = await partners().updateOne(
         {
           _id: partnerId,
@@ -120,21 +129,25 @@ export function createPartnerAccessRepository(
             production_approved_at: now,
             updated_at: now,
           },
-          $push: {
-            audit_history: {
-              event_type: 'PRODUCTION_APPROVED',
-              actor_type: 'ADMIN',
-              actor_id: adminId,
-              correlation_id: new ObjectId().toHexString(),
-              changes: { status: 'ACTIVE' },
-              occurred_at: now,
-            },
-          },
+          $push: { audit_history: boundedAudit({
+            event_type: 'PRODUCTION_APPROVED',
+            actor_type: 'ADMIN',
+            actor_id: adminId,
+            correlation_id: correlationId,
+            changes: { status: 'ACTIVE' },
+            occurred_at: now,
+          }) },
         },
       );
       return result.modifiedCount > 0;
     },
-    async setIntegrationReviewStatus(partnerId, status, now) {
+    async setIntegrationReviewStatus(
+      partnerId,
+      adminId,
+      status,
+      correlationId,
+      now,
+    ) {
       const result = await partners().updateOne(
         {
           _id: partnerId,
@@ -144,16 +157,14 @@ export function createPartnerAccessRepository(
           $set: {
             updated_at: now,
           },
-          $push: {
-            audit_history: {
-              event_type: 'INTEGRATION_REVIEW',
-              actor_type: 'SYSTEM',
-              actor_id: null,
-              correlation_id: new ObjectId().toHexString(),
-              changes: { status },
-              occurred_at: now,
-            },
-          },
+          $push: { audit_history: boundedAudit({
+            event_type: 'INTEGRATION_REVIEW',
+            actor_type: 'ADMIN',
+            actor_id: adminId,
+            correlation_id: correlationId,
+            changes: { status },
+            occurred_at: now,
+          }) },
         },
       );
       return result.matchedCount > 0;
@@ -230,6 +241,29 @@ export function createPartnerAccessRepository(
       );
       return result.modifiedCount > 0;
     },
+    async replaceWebhookSubscriptions(
+      id,
+      partnerId,
+      environment,
+      subscribedEventTypes,
+      now,
+    ) {
+      const result = await webhooks().updateOne(
+        {
+          _id: id,
+          partner_id: partnerId,
+          environment,
+          status: { $ne: 'DISABLED' },
+        },
+        {
+          $set: {
+            subscribed_event_types: subscribedEventTypes,
+            updated_at: now,
+          },
+        },
+      );
+      return result.matchedCount > 0;
+    },
     async disableWebhook(id, partnerId, environment, now) {
       const result = await webhooks().updateOne(
         {
@@ -254,4 +288,8 @@ function isDuplicateKeyError(error: unknown): boolean {
     'code' in error &&
     error.code === 11_000
   );
+}
+
+function boundedAudit(event: Record<string, unknown>) {
+  return { $each: [event], $slice: -100 };
 }

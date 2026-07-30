@@ -7,6 +7,40 @@ import {
   type VenueMembershipRole,
   type VenuePermission,
 } from './owner/owner.types.js';
+import { EXTERNAL_EVENT_TYPES } from '../../shared/communications/communications.types.js';
+
+const fcmTokenSchema: Document = {
+  bsonType: 'object',
+  additionalProperties: false,
+  required: ['token', 'device_id', 'platform', 'last_seen_at', 'created_at'],
+  properties: {
+    token: { bsonType: 'string', minLength: 20, maxLength: 4_096 },
+    device_id: { bsonType: 'string', minLength: 1, maxLength: 200 },
+    platform: { enum: ['ANDROID', 'IOS', 'WEB'] },
+    last_seen_at: { bsonType: 'date' },
+    created_at: { bsonType: 'date' },
+  },
+};
+
+const ownerNotificationSchema: Document = {
+  bsonType: 'object',
+  additionalProperties: false,
+  required: [
+    'notification_type', 'aggregate_type', 'aggregate_id', 'venue_id',
+    'payload', 'read_at', 'created_at',
+  ],
+  properties: {
+    notification_type: {
+      enum: ['BOOKING_CONFIRMED', 'BOOKING_CANCELLED', 'PAYOUT_COMPLETED'],
+    },
+    aggregate_type: { enum: ['BOOKING', 'PAYOUT'] },
+    aggregate_id: { bsonType: 'objectId' },
+    venue_id: { bsonType: 'objectId' },
+    payload: { bsonType: 'object' },
+    read_at: { bsonType: ['date', 'null'] },
+    created_at: { bsonType: 'date' },
+  },
+};
 
 function documentValidator(
   required: string[],
@@ -44,8 +78,12 @@ const adminValidator = documentValidator(
     display_name: { bsonType: 'string' },
     role: { enum: ['ADMIN', 'OPS', 'SUPPORT'] },
     status: { enum: ['ACTIVE', 'DISABLED'] },
-    fcm_tokens: { bsonType: 'array' },
-    audit_history: { bsonType: 'array' },
+    fcm_tokens: {
+      bsonType: 'array',
+      maxItems: 20,
+      items: fcmTokenSchema,
+    },
+    audit_history: { bsonType: 'array', maxItems: 100 },
     last_login_at: { bsonType: ['date', 'null'] },
     created_at: { bsonType: 'date' },
     updated_at: { bsonType: 'date' },
@@ -85,7 +123,7 @@ const kycVerificationValidator = documentValidator(
     reviewed_at: { bsonType: ['date', 'null'] },
     rejection_reason: { bsonType: ['string', 'null'] },
     expires_at: { bsonType: ['date', 'null'] },
-    audit_history: { bsonType: 'array' },
+    audit_history: { bsonType: 'array', maxItems: 100 },
     created_at: { bsonType: 'date' },
   },
 );
@@ -119,7 +157,7 @@ const kycDocumentValidator = documentValidator(
         mime_type: { bsonType: 'string' },
         size_bytes: { bsonType: ['int', 'long'], minimum: 0 },
         checksum: { bsonType: 'string' },
-        classification: { bsonType: 'string' },
+        classification: { enum: ['SENSITIVE'] },
         status: { enum: ['ACTIVE', 'DELETED'] },
         created_at: { bsonType: 'date' },
       },
@@ -153,7 +191,7 @@ const partnerValidator = documentValidator(
     sandbox_approved_at: { bsonType: ['date', 'null'] },
     production_approved_by: { bsonType: ['objectId', 'null'] },
     production_approved_at: { bsonType: ['date', 'null'] },
-    audit_history: { bsonType: 'array' },
+    audit_history: { bsonType: 'array', maxItems: 100 },
     created_at: { bsonType: 'date' },
     updated_at: { bsonType: 'date' },
   },
@@ -218,6 +256,7 @@ const webhookValidator = documentValidator(
     'environment',
     'url',
     'signing_secret_hash',
+    'subscribed_event_types',
     'status',
     'verified_at',
     'created_at',
@@ -228,6 +267,13 @@ const webhookValidator = documentValidator(
     environment: { enum: ['SANDBOX', 'PRODUCTION'] },
     url: { bsonType: 'string' },
     signing_secret_hash: { bsonType: 'string' },
+    subscribed_event_types: {
+      bsonType: 'array',
+      minItems: 1,
+      maxItems: 20,
+      uniqueItems: true,
+      items: { enum: [...EXTERNAL_EVENT_TYPES] },
+    },
     status: { enum: ['PENDING', 'ACTIVE', 'DISABLED'] },
     verified_at: { bsonType: ['date', 'null'] },
     created_at: { bsonType: 'date' },
@@ -298,9 +344,17 @@ const ownerValidator: Document = {
           },
         },
       },
-      fcm_tokens: { bsonType: 'array' },
-      notifications: { bsonType: 'array' },
-      audit_history: { bsonType: 'array' },
+      fcm_tokens: {
+        bsonType: 'array',
+        maxItems: 20,
+        items: fcmTokenSchema,
+      },
+      notifications: {
+        bsonType: 'array',
+        maxItems: 100,
+        items: ownerNotificationSchema,
+      },
+      audit_history: { bsonType: 'array', maxItems: 100 },
       approved_by: { bsonType: ['objectId', 'null'] },
       approved_at: { bsonType: ['date', 'null'] },
       created_at: { bsonType: 'date' },
@@ -359,6 +413,7 @@ async function ensureValidatedCollection(
 }
 
 export async function initializeIdentityPersistence(db: Db): Promise<void> {
+  await migrateCommunicationsEmbeds(db);
   await ensureValidatedCollection(db, 'admin_users', adminValidator);
   await ensureValidatedCollection(db, 'venue_owners', ownerValidator);
   await ensureValidatedCollection(
@@ -396,6 +451,20 @@ export async function initializeIdentityPersistence(db: Db): Promise<void> {
     db,
     'webhook_endpoints',
     webhookValidator,
+  );
+
+  await Promise.all(
+    ['admin_users', 'venue_owners', 'kyc_verifications', 'partners'].map(
+      (name) =>
+        db.collection(name).updateMany(
+          { 'audit_history.100': { $exists: true } },
+          [{
+            $set: {
+              audit_history: { $slice: ['$audit_history', -100] },
+            },
+          }],
+        ),
+    ),
   );
 
   await db.collection('admin_users').createIndex(
@@ -490,6 +559,51 @@ export async function initializeIdentityPersistence(db: Db): Promise<void> {
   );
 
   await seedRolePermissions(db);
+}
+
+async function migrateCommunicationsEmbeds(db: Db): Promise<void> {
+  const existing = new Set(
+    (
+      await db
+        .listCollections(
+          { name: { $in: ['admin_users', 'venue_owners', 'webhook_endpoints'] } },
+          { nameOnly: true },
+        )
+        .toArray()
+    ).map(({ name }) => name),
+  );
+  if (existing.has('admin_users')) {
+    await db.collection('admin_users').updateMany(
+      {},
+      [{
+        $set: {
+          fcm_tokens: { $slice: [{ $ifNull: ['$fcm_tokens', []] }, -20] },
+        },
+      }],
+      { bypassDocumentValidation: true },
+    );
+  }
+  if (existing.has('venue_owners')) {
+    await db.collection('venue_owners').updateMany(
+      {},
+      [{
+        $set: {
+          fcm_tokens: { $slice: [{ $ifNull: ['$fcm_tokens', []] }, -20] },
+          notifications: {
+            $slice: [{ $ifNull: ['$notifications', []] }, -100],
+          },
+        },
+      }],
+      { bypassDocumentValidation: true },
+    );
+  }
+  if (existing.has('webhook_endpoints')) {
+    await db.collection('webhook_endpoints').updateMany(
+      { subscribed_event_types: { $exists: false } },
+      { $set: { subscribed_event_types: [...EXTERNAL_EVENT_TYPES] } },
+      { bypassDocumentValidation: true },
+    );
+  }
 }
 
 const rolePermissions: Record<VenueMembershipRole, VenuePermission[]> = {

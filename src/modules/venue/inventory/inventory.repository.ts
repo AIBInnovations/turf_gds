@@ -1,14 +1,13 @@
 import { type ClientSession, type ObjectId } from 'mongodb';
 
-import type { DatabaseConnection } from '../../shared/database/database-connection.js';
+import type { DatabaseConnection } from '../../../shared/database/database-connection.js';
 import type {
   PricingRuleDocument,
   SlotDocument,
-  VenuePayoutAccountDocument,
 } from './inventory.types.js';
-import type { CourtDocument } from './court.types.js';
+import type { CourtDocument } from '../courts/court.types.js';
 
-export interface VenueOperationsRepository {
+export interface InventoryRepository {
   insertPricingRule(rule: PricingRuleDocument): Promise<void>;
   listPricingRules(courtId: ObjectId): Promise<PricingRuleDocument[]>;
   findPricingRule(
@@ -60,22 +59,14 @@ export interface VenueOperationsRepository {
     expectedVersion: number;
   }): Promise<boolean>;
   findSlot(id: ObjectId, courtId: ObjectId): Promise<SlotDocument | null>;
-  insertPayoutAccount(account: VenuePayoutAccountDocument): Promise<void>;
-  listPayoutAccounts(
-    venueId: ObjectId,
-  ): Promise<VenuePayoutAccountDocument[]>;
 }
 
-export function createVenueOperationsRepository(
+export function createInventoryRepository(
   database: DatabaseConnection,
-): VenueOperationsRepository {
+): InventoryRepository {
   const pricing = () =>
     database.db.collection<PricingRuleDocument>('pricing_rules');
   const slots = () => database.db.collection<SlotDocument>('slots');
-  const payoutAccounts = () =>
-    database.db.collection<VenuePayoutAccountDocument>(
-      'venue_payout_accounts',
-    );
 
   return {
     async insertPricingRule(rule) {
@@ -219,15 +210,6 @@ export function createVenueOperationsRepository(
     },
     findSlot(id, courtId) {
       return slots().findOne({ _id: id, court_id: courtId });
-    },
-    async insertPayoutAccount(account) {
-      await payoutAccounts().insertOne(account);
-    },
-    listPayoutAccounts(venueId) {
-      return payoutAccounts()
-        .find({ venue_id: venueId })
-        .sort({ created_at: -1 })
-        .toArray();
     },
   };
 }

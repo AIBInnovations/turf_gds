@@ -2,7 +2,7 @@ import { AppError } from '../../../shared/errors/app-error.js';
 import type { DatabaseConnection } from '../../../shared/database/database-connection.js';
 import type { KycService } from '../../identity/kyc/kyc.service.js';
 import type { IdentityService } from '../../identity/owner/owner-auth.service.js';
-import type { VenueService } from '../../venue/venue.service.js';
+import type { VenueService } from '../../venue/profile/venue.service.js';
 
 export interface AdminOnboardingService {
   approveVenueOnboarding(input: {

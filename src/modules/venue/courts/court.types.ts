@@ -1,6 +1,9 @@
 import type { ObjectId } from 'mongodb';
 
-import type { VenueAuditDocument, VenueMediaDocument } from './venue.types.js';
+import type {
+  VenueAuditDocument,
+  VenueMediaDocument,
+} from '../profile/venue.types.js';
 
 export type CourtBookingMode = 'OPEN_TIME' | 'FIXED_SLOT' | 'BOTH';
 export type CourtStatus = 'AVAILABLE' | 'UNAVAILABLE';

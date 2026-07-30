@@ -10,6 +10,10 @@ import {
   verifyHmacSignature,
 } from '../../../shared/auth/partner-signature.js';
 import { AppError } from '../../../shared/errors/app-error.js';
+import {
+  EXTERNAL_EVENT_TYPES,
+  type ExternalEventType,
+} from '../../../shared/communications/communications.types.js';
 import type { KycService } from '../kyc/kyc.service.js';
 import type { PartnerAccessRepository } from './partner-access.repository.js';
 import type { PartnerEnvironment } from './partner-access.types.js';
@@ -18,19 +22,22 @@ export interface PartnerAccessService {
   apply(input: {
     legalName: string;
     displayName: string;
-    email: string;
   }): Promise<{ partnerId: string; status: 'PENDING' }>;
   approveSandbox(input: {
     partnerId: string;
     adminId: string;
+    correlationId: string;
   }): Promise<void>;
   approveProduction(input: {
     partnerId: string;
     adminId: string;
+    correlationId: string;
   }): Promise<void>;
   recordIntegrationReview(input: {
     partnerId: string;
+    adminId: string;
     status: 'PENDING' | 'PASSED' | 'FAILED';
+    correlationId: string;
   }): Promise<void>;
   issueKey(input: {
     partnerId: string;
@@ -70,12 +77,19 @@ export interface PartnerAccessService {
     partnerId: string;
     environment: PartnerEnvironment;
     url: string;
-    subscribedEvents: string[];
+    subscribedEvents: ExternalEventType[];
   }): Promise<{
     webhookId: string;
     status: 'PENDING';
     signingSecret: string;
+    subscribedEvents: ExternalEventType[];
   }>;
+  replaceWebhookSubscriptions(input: {
+    webhookId: string;
+    partnerId: string;
+    environment: PartnerEnvironment;
+    subscribedEvents: ExternalEventType[];
+  }): Promise<void>;
   verifyWebhook(webhookId: string): Promise<void>;
   disableWebhook(input: {
     webhookId: string;
@@ -128,6 +142,7 @@ export function createPartnerAccessService(input: {
     const approved = await input.repository.approveSandbox(
       toObjectId(values.partnerId),
       toObjectId(values.adminId),
+      values.correlationId,
       now(),
     );
     if (!approved) {
@@ -155,6 +170,7 @@ export function createPartnerAccessService(input: {
     const approved = await input.repository.approveProduction(
       toObjectId(values.partnerId),
       toObjectId(values.adminId),
+      values.correlationId,
       now(),
     );
     if (!approved) {
@@ -238,7 +254,9 @@ export function createPartnerAccessService(input: {
     if (
       !(await input.repository.setIntegrationReviewStatus(
         toObjectId(values.partnerId),
+        toObjectId(values.adminId),
         values.status,
+        values.correlationId,
         now(),
       ))
     ) {
@@ -347,6 +365,7 @@ export function createPartnerAccessService(input: {
     }
 
     const webhookId = new ObjectId();
+    const subscribedEvents = normalizeSubscriptions(values.subscribedEvents);
     const signingSecret = deriveSigningSecret(
       input.authConfig.partnerCredentialMasterSecret,
       `webhook:${webhookId.toHexString()}`,
@@ -358,6 +377,7 @@ export function createPartnerAccessService(input: {
       environment: values.environment,
       url: parsedUrl.toString(),
       signing_secret_hash: hashCredential(signingSecret),
+      subscribed_event_types: subscribedEvents,
       status: 'PENDING',
       verified_at: null,
       created_at: timestamp,
@@ -376,7 +396,27 @@ export function createPartnerAccessService(input: {
       webhookId: webhookId.toHexString(),
       status: 'PENDING',
       signingSecret,
+      subscribedEvents,
     };
+  }
+
+  async function replaceWebhookSubscriptions(
+    values: Parameters<
+      PartnerAccessService['replaceWebhookSubscriptions']
+    >[0],
+  ): Promise<void> {
+    const subscribedEvents = normalizeSubscriptions(values.subscribedEvents);
+    if (
+      !(await input.repository.replaceWebhookSubscriptions(
+        toObjectId(values.webhookId),
+        toObjectId(values.partnerId),
+        values.environment,
+        subscribedEvents,
+        now(),
+      ))
+    ) {
+      throw transitionNotAllowed();
+    }
   }
 
   async function verifyWebhook(webhookId: string): Promise<void> {
@@ -415,9 +455,29 @@ export function createPartnerAccessService(input: {
     revokeKey,
     recordApiUsage,
     registerWebhook,
+    replaceWebhookSubscriptions,
     verifyWebhook,
     disableWebhook,
   };
+}
+
+function normalizeSubscriptions(values: readonly string[]): ExternalEventType[] {
+  const unique = [...new Set(values.map((value) => value.trim().toLowerCase()))];
+  if (
+    unique.length === 0 ||
+    unique.length > 20 ||
+    unique.some(
+      (value) =>
+        !EXTERNAL_EVENT_TYPES.includes(value as ExternalEventType),
+    )
+  ) {
+    throw new AppError({
+      code: 'INVALID_WEBHOOK_SUBSCRIPTIONS',
+      message: 'Webhook subscriptions contain unsupported event types',
+      statusCode: 400,
+    });
+  }
+  return unique as ExternalEventType[];
 }
 
 function normalizeScope(value: string): string {

@@ -18,7 +18,7 @@ const environment = { enum: ['SANDBOX', 'PRODUCTION'] };
 const settlement = schema(
   [
     'partner_id', 'environment', 'period_start', 'period_end',
-    'settlement_cycle', 'due_at', 'status', 'gross_amount_minor',
+    'cycle', 'due_at', 'status', 'gross_amount_minor',
     'commission_amount_minor', 'tax_amount_minor', 'refund_amount_minor',
     'net_amount_minor', 'currency', 'audit_history', 'created_at',
     'completed_at',
@@ -28,7 +28,7 @@ const settlement = schema(
     environment,
     period_start: { bsonType: 'date' },
     period_end: { bsonType: 'date' },
-    settlement_cycle: { enum: ['T_PLUS_N', 'WEEKLY', 'MONTHLY'] },
+    cycle: { enum: ['T_PLUS_N', 'WEEKLY', 'MONTHLY'] },
     due_at: { bsonType: 'date' },
     status: {
       enum: [
@@ -42,7 +42,7 @@ const settlement = schema(
     refund_amount_minor: money,
     net_amount_minor: money,
     currency: { enum: ['INR'] },
-    audit_history: { bsonType: 'array' },
+    audit_history: { bsonType: 'array', maxItems: 100 },
     created_at: { bsonType: 'date' },
     completed_at: nullableDate,
   },
@@ -64,8 +64,8 @@ const reconciliation = schema(
     status: { enum: ['PENDING', 'MATCHED', 'MISMATCH', 'RESOLVED'] },
     reconciled_at: nullableDate,
     notes: { bsonType: ['string', 'null'] },
-    attempt_history: { bsonType: 'array' },
-    audit_history: { bsonType: 'array' },
+    attempt_history: { bsonType: 'array', maxItems: 100 },
+    audit_history: { bsonType: 'array', maxItems: 100 },
     created_at: { bsonType: 'date' },
   },
 );
@@ -90,7 +90,7 @@ const payout = schema(
     failure_reason: { bsonType: ['string', 'null'] },
     initiated_at: nullableDate,
     paid_at: nullableDate,
-    audit_history: { bsonType: 'array' },
+    audit_history: { bsonType: 'array', maxItems: 100 },
     created_at: { bsonType: 'date' },
     updated_at: { bsonType: 'date' },
   },
@@ -99,7 +99,7 @@ const payout = schema(
 const invoice = schema(
   [
     'settlement_id', 'environment', 'invoice_number', 'type',
-    'subtotal_amount_minor', 'tax_amount_minor', 'total_amount_minor',
+    'subtotal_minor', 'tax_amount_minor', 'total_minor',
     'currency', 'status', 'document_uri', 'issued_at', 'created_at',
   ],
   {
@@ -107,9 +107,9 @@ const invoice = schema(
     environment,
     invoice_number: { bsonType: 'string' },
     type: { enum: ['TAX_INVOICE', 'CREDIT_NOTE', 'DEBIT_NOTE'] },
-    subtotal_amount_minor: money,
+    subtotal_minor: money,
     tax_amount_minor: money,
-    total_amount_minor: money,
+    total_minor: money,
     currency: { enum: ['INR'] },
     status: { enum: ['DRAFT', 'ISSUED', 'VOID'] },
     document_uri: { bsonType: ['string', 'null'] },
@@ -137,6 +137,7 @@ async function ensure(db: Db, name: string, validator: Document): Promise<void> 
 }
 
 export async function initializeFinancialClosePersistence(db: Db): Promise<void> {
+  await migrateLegacyFinancialCloseFields(db);
   await ensure(db, 'settlements', settlement);
   await ensure(db, 'reconciliations', reconciliation);
   await ensure(db, 'payouts', payout);
@@ -145,16 +146,87 @@ export async function initializeFinancialClosePersistence(db: Db): Promise<void>
     { partner_id: 1, environment: 1, period_start: 1, period_end: 1 },
     { unique: true, name: 'uq_settlement_period' },
   );
+  await dropIndexIfPresent(
+    db,
+    'reconciliations',
+    'uq_reconciliation_settlement',
+  );
   await db.collection('reconciliations').createIndex(
-    { settlement_id: 1 },
-    { unique: true, name: 'uq_reconciliation_settlement' },
+    { settlement_id: 1, bank_reference: 1 },
+    {
+      unique: true,
+      partialFilterExpression: { bank_reference: { $type: 'string' } },
+      name: 'uq_reconciliation_bank_reference',
+    },
   );
   await db.collection('payouts').createIndex(
     { idempotency_key: 1 },
     { unique: true, name: 'uq_payout_idempotency' },
   );
+  await db.collection('payouts').createIndex(
+    { settlement_id: 1, venue_id: 1 },
+    { unique: true, name: 'uq_payout_settlement_venue' },
+  );
+  await db.collection('payouts').createIndex(
+    { environment: 1, bank_reference: 1 },
+    {
+      unique: true,
+      partialFilterExpression: { bank_reference: { $type: 'string' } },
+      name: 'uq_payout_environment_bank_reference',
+    },
+  );
   await db.collection('invoices').createIndex(
     { invoice_number: 1 },
     { unique: true, name: 'uq_invoice_number' },
   );
+}
+
+async function migrateLegacyFinancialCloseFields(db: Db): Promise<void> {
+  if (
+    await db
+      .listCollections({ name: 'settlements' }, { nameOnly: true })
+      .hasNext()
+  ) {
+    await db.command({ collMod: 'settlements', validationLevel: 'off' });
+    await db.collection('settlements').updateMany(
+      { settlement_cycle: { $exists: true }, cycle: { $exists: false } },
+      { $rename: { settlement_cycle: 'cycle' } },
+    );
+  }
+  if (
+    await db
+      .listCollections({ name: 'invoices' }, { nameOnly: true })
+      .hasNext()
+  ) {
+    await db.command({ collMod: 'invoices', validationLevel: 'off' });
+    await db.collection('invoices').updateMany(
+      {
+        $or: [
+          { subtotal_amount_minor: { $exists: true } },
+          { total_amount_minor: { $exists: true } },
+        ],
+      },
+      {
+        $rename: {
+          subtotal_amount_minor: 'subtotal_minor',
+          total_amount_minor: 'total_minor',
+        },
+      },
+    );
+  }
+}
+
+async function dropIndexIfPresent(
+  db: Db,
+  collectionName: string,
+  indexName: string,
+): Promise<void> {
+  const exists = await db
+    .listCollections({ name: collectionName }, { nameOnly: true })
+    .hasNext();
+  if (!exists) return;
+  const indexes = await db.collection(collectionName).indexes();
+  if (indexes.some(({ name }) => name === indexName)) {
+    await db.collection(collectionName).dropIndex(indexName);
+  }
 }

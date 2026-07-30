@@ -3,7 +3,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { AdminAuthService } from '../../identity/platform/auth.service.js';
 import {
   createAdminAuthenticationHook,
-  requireAdminContext,
+  requireAdminRole,
 } from '../../identity/shared/auth-context.js';
 import type { AdminOnboardingService } from './onboarding.service.js';
 
@@ -34,7 +34,7 @@ const adminOnboardingRoutes: FastifyPluginAsync<
       },
     },
     async (request, reply) => {
-      const admin = requireAdminContext(request);
+      const admin = requireAdminRole(request);
 
       await options.service.approveVenueOnboarding({
         ownerId: request.body.ownerId,

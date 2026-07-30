@@ -4,11 +4,15 @@ import type { AdminAuthService } from '../platform/auth.service.js';
 import {
   createAdminAuthenticationHook,
   createPartnerAuthenticationHook,
-  requireAdminContext,
+  requireAdminRole,
   requirePartnerScope,
 } from '../shared/auth-context.js';
 import type { PartnerAccessService } from './partner-access.service.js';
 import type { PartnerEnvironment } from './partner-access.types.js';
+import {
+  EXTERNAL_EVENT_TYPES,
+  type ExternalEventType,
+} from '../../../shared/communications/communications.types.js';
 
 export interface PartnerAccessRoutesOptions {
   service: PartnerAccessService;
@@ -47,7 +51,7 @@ const partnerAccessRoutes: FastifyPluginAsync<PartnerAccessRoutesOptions> =
     });
 
     fastify.post<{
-      Body: { legalName: string; displayName: string; email: string };
+      Body: { legalName: string; displayName: string };
     }>(
       '/applications',
       {
@@ -55,7 +59,7 @@ const partnerAccessRoutes: FastifyPluginAsync<PartnerAccessRoutesOptions> =
           body: {
             type: 'object',
             additionalProperties: false,
-            required: ['legalName', 'displayName', 'email'],
+            required: ['legalName', 'displayName'],
             properties: {
               legalName: { type: 'string', minLength: 2, maxLength: 200 },
               displayName: {
@@ -63,7 +67,6 @@ const partnerAccessRoutes: FastifyPluginAsync<PartnerAccessRoutesOptions> =
                 minLength: 2,
                 maxLength: 200,
               },
-              email: { type: 'string', format: 'email', maxLength: 320 },
             },
           },
         },
@@ -91,9 +94,12 @@ const partnerAccessRoutes: FastifyPluginAsync<PartnerAccessRoutesOptions> =
         },
       },
       async (request, reply) => {
+        const admin = requireAdminRole(request);
         await options.service.recordIntegrationReview({
           partnerId: request.params.partnerId,
+          adminId: admin.adminId,
           status: request.body.status,
+          correlationId: request.id,
         });
         return reply.status(204).send();
       },
@@ -103,10 +109,11 @@ const partnerAccessRoutes: FastifyPluginAsync<PartnerAccessRoutesOptions> =
       '/admin/:partnerId/approve-sandbox',
       { preHandler: adminAuth },
       async (request, reply) => {
-        const admin = requireAdminContext(request);
+        const admin = requireAdminRole(request);
         await options.service.approveSandbox({
           partnerId: request.params.partnerId,
           adminId: admin.adminId,
+          correlationId: request.id,
         });
         return reply.status(204).send();
       },
@@ -116,21 +123,12 @@ const partnerAccessRoutes: FastifyPluginAsync<PartnerAccessRoutesOptions> =
       '/admin/:partnerId/approve-production',
       { preHandler: adminAuth },
       async (request, reply) => {
-        const admin = requireAdminContext(request);
-
-        if (admin.role !== 'ADMIN') {
-          return reply.status(403).send({
-            error: {
-              code: 'ADMIN_ROLE_REQUIRED',
-              message: 'ADMIN role is required',
-              requestId: request.id,
-            },
-          });
-        }
+        const admin = requireAdminRole(request);
 
         await options.service.approveProduction({
           partnerId: request.params.partnerId,
           adminId: admin.adminId,
+          correlationId: request.id,
         });
         return reply.status(204).send();
       },
@@ -166,26 +164,29 @@ const partnerAccessRoutes: FastifyPluginAsync<PartnerAccessRoutesOptions> =
           },
         },
       },
-      async (request, reply) =>
-        reply.status(201).send(
+      async (request, reply) => {
+        requireAdminRole(request);
+        return reply.status(201).send(
           await options.service.issueKey({
             partnerId: request.params.partnerId,
             ...request.body,
           }),
-        ),
+        );
+      },
     );
 
     fastify.delete<{ Params: { keyId: string } }>(
       '/admin/keys/:keyId',
       { preHandler: adminAuth },
       async (request, reply) => {
+        requireAdminRole(request);
         await options.service.revokeKey(request.params.keyId);
         return reply.status(204).send();
       },
     );
 
     fastify.post<{
-      Body: { url: string; subscribedEvents: string[] };
+      Body: { url: string; subscribedEvents: ExternalEventType[] };
     }>(
       '/webhooks',
       {
@@ -201,9 +202,9 @@ const partnerAccessRoutes: FastifyPluginAsync<PartnerAccessRoutesOptions> =
               subscribedEvents: {
                 type: 'array',
                 minItems: 1,
-                maxItems: 100,
+                maxItems: 20,
                 uniqueItems: true,
-                items: { type: 'string', minLength: 1, maxLength: 100 },
+                items: { enum: [...EXTERNAL_EVENT_TYPES] },
               },
             },
           },
@@ -218,6 +219,54 @@ const partnerAccessRoutes: FastifyPluginAsync<PartnerAccessRoutesOptions> =
             ...request.body,
           }),
         );
+      },
+    );
+
+    fastify.put<{
+      Params: { webhookId: string };
+      Body: { subscribedEvents: ExternalEventType[] };
+    }>(
+      '/webhooks/:webhookId/subscriptions',
+      {
+        config: { rawBody: true },
+        preHandler: partnerAuth,
+        schema: {
+          params: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['webhookId'],
+            properties: {
+              webhookId: {
+                type: 'string',
+                pattern: '^[a-fA-F0-9]{24}$',
+              },
+            },
+          },
+          body: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['subscribedEvents'],
+            properties: {
+              subscribedEvents: {
+                type: 'array',
+                minItems: 1,
+                maxItems: 20,
+                uniqueItems: true,
+                items: { enum: [...EXTERNAL_EVENT_TYPES] },
+              },
+            },
+          },
+        },
+      },
+      async (request, reply) => {
+        const partner = requirePartnerScope(request, 'webhooks:write');
+        await options.service.replaceWebhookSubscriptions({
+          webhookId: request.params.webhookId,
+          partnerId: partner.partnerId,
+          environment: partner.environment,
+          subscribedEvents: request.body.subscribedEvents,
+        });
+        return reply.status(204).send();
       },
     );
 
@@ -242,6 +291,7 @@ const partnerAccessRoutes: FastifyPluginAsync<PartnerAccessRoutesOptions> =
       '/admin/webhooks/:webhookId/verify',
       { preHandler: adminAuth },
       async (request, reply) => {
+        requireAdminRole(request);
         await options.service.verifyWebhook(request.params.webhookId);
         return reply.status(204).send();
       },

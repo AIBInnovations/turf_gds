@@ -1,8 +1,8 @@
 import { ObjectId } from 'mongodb';
 
-import type { OwnerAccessService } from '../identity/owner/owner-access.service.js';
-import { AppError } from '../../shared/errors/app-error.js';
-import type { MediaStorage } from '../../shared/media/cloudinary-media-storage.js';
+import type { OwnerAccessService } from '../../identity/owner/owner-access.service.js';
+import { AppError } from '../../../shared/errors/app-error.js';
+import type { MediaStorage } from '../../../shared/media/cloudinary-media-storage.js';
 import type { CourtRepository } from './court.repository.js';
 import type {
   CourtBookingMode,
@@ -11,8 +11,8 @@ import type {
   CourtSportType,
   CourtStatus,
 } from './court.types.js';
-import type { VenueRepository } from './venue.repository.js';
-import type { VenueMediaDocument } from './venue.types.js';
+import type { VenueRepository } from '../profile/venue.repository.js';
+import type { VenueMediaDocument } from '../profile/venue.types.js';
 
 const COURT_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 const COURT_MEDIA_MAX_ITEMS = 20;

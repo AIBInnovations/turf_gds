@@ -25,13 +25,20 @@ export interface KycRepository {
   ): Promise<KycVerificationDocument | null>;
   insertDocument(document: KycDocumentDocument): Promise<void>;
   countActiveDocuments(verificationId: ObjectId): Promise<number>;
-  submit(id: ObjectId, subjectId: ObjectId, now: Date): Promise<boolean>;
+  submit(
+    id: ObjectId,
+    subjectId: ObjectId,
+    actorType: KycSubjectType,
+    correlationId: string,
+    now: Date,
+  ): Promise<boolean>;
   review(input: {
     id: ObjectId;
     adminId: ObjectId;
     status: Extract<KycStatus, 'VERIFIED' | 'REJECTED'>;
     rejectionReason: string | null;
     expiresAt: Date | null;
+    correlationId: string;
     now: Date;
   }): Promise<boolean>;
 }
@@ -107,13 +114,14 @@ export function createKycRepository(
         status: 'PENDING',
       });
     },
-    async submit(id, subjectId, _now) {
+    async submit(id, subjectId, actorType, correlationId, _now) {
       const result = await verifications().updateOne(
         {
           _id: id,
           subject_id: subjectId,
           status: 'PENDING',
           is_current: true,
+          'audit_history.event_type': { $ne: 'KYC_SUBMITTED' },
         },
         {
           $set: {
@@ -122,9 +130,9 @@ export function createKycRepository(
           $push: {
             audit_history: {
               event_type: 'KYC_SUBMITTED',
-              actor_type: inputActorType(),
+              actor_type: actorType,
               actor_id: subjectId,
-              correlation_id: new ObjectId().toHexString(),
+              correlation_id: correlationId,
               changes: {},
               occurred_at: _now,
             },
@@ -134,27 +142,88 @@ export function createKycRepository(
       return result.modifiedCount > 0;
     },
     async review(input) {
-      const result = await verifications().updateOne(
-        {
-          _id: input.id,
-          status: 'PENDING',
-          is_current: true,
-        },
-        {
-          $set: {
-            status: input.status,
-            reviewed_by: input.adminId,
-            reviewed_at: input.now,
-            rejection_reason: input.rejectionReason,
-            expires_at: input.expiresAt,
+      return database.withTransaction(async ({ session }) => {
+        const verification = await verifications().findOne(
+          {
+            _id: input.id,
+            status: 'PENDING',
+            is_current: true,
+            audit_history: { $elemMatch: { event_type: 'KYC_SUBMITTED' } },
           },
-        },
-      );
-      return result.modifiedCount > 0;
+          { session },
+        );
+        if (!verification) return false;
+
+        const result = await verifications().updateOne(
+          {
+            _id: input.id,
+            status: 'PENDING',
+            is_current: true,
+          },
+          {
+            $set: {
+              status: input.status,
+              reviewed_by: input.adminId,
+              reviewed_at: input.now,
+              rejection_reason: input.rejectionReason,
+              expires_at: input.expiresAt,
+            },
+            $push: {
+              audit_history: {
+                $each: [{
+                  event_type: `KYC_${input.status}`,
+                  actor_type: 'ADMIN',
+                  actor_id: input.adminId,
+                  correlation_id: input.correlationId,
+                  changes: {
+                    status: input.status,
+                    expires_at: input.expiresAt,
+                    rejection_reason: input.rejectionReason,
+                  },
+                  occurred_at: input.now,
+                }],
+                $slice: -100,
+              },
+            },
+          },
+          { session },
+        );
+        if (result.modifiedCount !== 1) return false;
+
+        await documents().updateMany(
+          {
+            kyc_verification_id: input.id,
+            status: 'PENDING',
+          },
+          {
+            $set: {
+              status:
+                input.status === 'VERIFIED' ? 'ACCEPTED' : 'REJECTED',
+              rejection_reason:
+                input.status === 'REJECTED'
+                  ? input.rejectionReason
+                  : null,
+            },
+          },
+          { session },
+        );
+
+        const collection =
+          verification.subject_type === 'VENUE_OWNER'
+            ? 'venue_owners'
+            : 'partners';
+        await database.db.collection(collection).updateOne(
+          { _id: verification.subject_id },
+          {
+            $set: {
+              kyc_status: input.status,
+              updated_at: input.now,
+            },
+          },
+          { session },
+        );
+        return true;
+      });
     },
   };
-}
-
-function inputActorType(): 'VENUE_OWNER_OR_PARTNER' {
-  return 'VENUE_OWNER_OR_PARTNER';
 }

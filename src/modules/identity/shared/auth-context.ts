@@ -114,6 +114,23 @@ export function requireAdminContext(
   return request.identity;
 }
 
+export function requireAdminRole(
+  request: FastifyRequest,
+): Omit<
+  Extract<IdentityContext, { actorType: 'ADMIN' }>,
+  'role'
+> & { role: 'ADMIN' } {
+  const admin = requireAdminContext(request);
+  if (admin.role !== 'ADMIN') {
+    throw new AppError({
+      code: 'ADMIN_ROLE_REQUIRED',
+      message: 'The ADMIN role is required for this operation',
+      statusCode: 403,
+    });
+  }
+  return { ...admin, role: 'ADMIN' };
+}
+
 export function requirePartnerContext(
   request: FastifyRequest,
 ): Extract<IdentityContext, { actorType: 'PARTNER' }> {

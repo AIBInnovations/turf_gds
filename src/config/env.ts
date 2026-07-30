@@ -46,6 +46,24 @@ export interface AppConfig {
     apiSecret: string;
     folder: string;
   };
+  communications: {
+    pollIntervalMs: number;
+    batchSize: number;
+    leaseSeconds: number;
+    requestTimeoutMs: number;
+    maxWebhookAttempts: number;
+    retryBaseSeconds: number;
+    retryMaxSeconds: number;
+  };
+  fcm: {
+    enabled: boolean;
+    projectId?: string;
+    clientEmail?: string;
+    privateKey?: string;
+  };
+  adminOperations?: {
+    inventoryMinimumCoverageDays: number;
+  };
 }
 
 function readEnum<T extends string>(
@@ -103,7 +121,28 @@ function readInteger(
   return parsed;
 }
 
+function readBoolean(
+  name: string,
+  value: string | undefined,
+  fallback: boolean,
+): boolean {
+  if (value === undefined) return fallback;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  throw new Error(`${name} must be true or false`);
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  const fcmEnabled = readBoolean('FCM_ENABLED', env.FCM_ENABLED, false);
+  const fcm = fcmEnabled
+    ? {
+        enabled: true,
+        projectId: readRequired('FCM_PROJECT_ID', env.FCM_PROJECT_ID),
+        clientEmail: readRequired('FCM_CLIENT_EMAIL', env.FCM_CLIENT_EMAIL),
+        privateKey: readRequired('FCM_PRIVATE_KEY', env.FCM_PRIVATE_KEY)
+          .replace(/\\n/g, '\n'),
+      }
+    : { enabled: false };
   return {
     nodeEnv: readEnum(
       'NODE_ENV',
@@ -223,6 +262,67 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
         env.CLOUDINARY_API_SECRET,
       ),
       folder: env.CLOUDINARY_FOLDER?.trim() || 'turf-gds/development',
+    },
+    communications: {
+      pollIntervalMs: readInteger(
+        'COMMUNICATIONS_POLL_INTERVAL_MS',
+        env.COMMUNICATIONS_POLL_INTERVAL_MS,
+        1_000,
+        100,
+        60_000,
+      ),
+      batchSize: readInteger(
+        'COMMUNICATIONS_BATCH_SIZE',
+        env.COMMUNICATIONS_BATCH_SIZE,
+        20,
+        1,
+        100,
+      ),
+      leaseSeconds: readInteger(
+        'COMMUNICATIONS_LEASE_SECONDS',
+        env.COMMUNICATIONS_LEASE_SECONDS,
+        60,
+        10,
+        3_600,
+      ),
+      requestTimeoutMs: readInteger(
+        'COMMUNICATIONS_REQUEST_TIMEOUT_MS',
+        env.COMMUNICATIONS_REQUEST_TIMEOUT_MS,
+        10_000,
+        100,
+        120_000,
+      ),
+      maxWebhookAttempts: readInteger(
+        'COMMUNICATIONS_MAX_WEBHOOK_ATTEMPTS',
+        env.COMMUNICATIONS_MAX_WEBHOOK_ATTEMPTS,
+        8,
+        1,
+        8,
+      ),
+      retryBaseSeconds: readInteger(
+        'COMMUNICATIONS_RETRY_BASE_SECONDS',
+        env.COMMUNICATIONS_RETRY_BASE_SECONDS,
+        30,
+        1,
+        3_600,
+      ),
+      retryMaxSeconds: readInteger(
+        'COMMUNICATIONS_RETRY_MAX_SECONDS',
+        env.COMMUNICATIONS_RETRY_MAX_SECONDS,
+        3_600,
+        1,
+        86_400,
+      ),
+    },
+    fcm,
+    adminOperations: {
+      inventoryMinimumCoverageDays: readInteger(
+        'ADMIN_INVENTORY_MIN_COVERAGE_DAYS',
+        env.ADMIN_INVENTORY_MIN_COVERAGE_DAYS,
+        7,
+        1,
+        31,
+      ),
     },
   };
 }

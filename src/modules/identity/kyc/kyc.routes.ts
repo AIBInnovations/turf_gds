@@ -1,10 +1,11 @@
 import type { FastifyPluginAsync } from 'fastify';
 
+import { AppError } from '../../../shared/errors/app-error.js';
 import type { AdminAuthService } from '../platform/auth.service.js';
 import {
   createAdminAuthenticationHook,
   createOwnerAuthenticationHook,
-  requireAdminContext,
+  requireAdminRole,
   requireOwnerContext,
 } from '../shared/auth-context.js';
 import type { KycService } from './kyc.service.js';
@@ -94,12 +95,10 @@ const kycRoutes: FastifyPluginAsync<KycRoutesOptions> = async (
       const part = await request.file();
 
       if (!part) {
-        return reply.status(400).send({
-          error: {
-            code: 'KYC_FILE_REQUIRED',
-            message: 'A multipart file is required',
-            requestId: request.id,
-          },
+        throw new AppError({
+          code: 'KYC_FILE_REQUIRED',
+          message: 'A multipart file is required',
+          statusCode: 400,
         });
       }
 
@@ -138,6 +137,7 @@ const kycRoutes: FastifyPluginAsync<KycRoutesOptions> = async (
       await options.service.submit({
         verificationId: request.params.verificationId,
         subjectId: owner.ownerId,
+        correlationId: request.id,
       });
       return reply.status(204).send();
     },
@@ -207,10 +207,11 @@ const kycRoutes: FastifyPluginAsync<KycRoutesOptions> = async (
       },
     },
     async (request, reply) => {
-      const admin = requireAdminContext(request);
+      const admin = requireAdminRole(request);
       await options.service.review({
         verificationId: request.params.verificationId,
         adminId: admin.adminId,
+        correlationId: request.id,
         ...request.body,
       });
       return reply.status(204).send();
@@ -224,6 +225,7 @@ const kycRoutes: FastifyPluginAsync<KycRoutesOptions> = async (
     '/admin/partners/:partnerId/verifications',
     { preHandler: adminAuth },
     async (request, reply) => {
+      requireAdminRole(request);
       const result = await options.service.createDraft({
         subjectType: 'PARTNER',
         subjectId: request.params.partnerId,
@@ -240,15 +242,14 @@ const kycRoutes: FastifyPluginAsync<KycRoutesOptions> = async (
     '/admin/partners/:partnerId/verifications/:verificationId/documents',
     { preHandler: adminAuth },
     async (request, reply) => {
+      requireAdminRole(request);
       const part = await request.file();
 
       if (!part) {
-        return reply.status(400).send({
-          error: {
-            code: 'KYC_FILE_REQUIRED',
-            message: 'A multipart file is required',
-            requestId: request.id,
-          },
+        throw new AppError({
+          code: 'KYC_FILE_REQUIRED',
+          message: 'A multipart file is required',
+          statusCode: 400,
         });
       }
 
@@ -270,9 +271,11 @@ const kycRoutes: FastifyPluginAsync<KycRoutesOptions> = async (
     '/admin/partners/:partnerId/verifications/:verificationId/submit',
     { preHandler: adminAuth },
     async (request, reply) => {
+      requireAdminRole(request);
       await options.service.submit({
         verificationId: request.params.verificationId,
         subjectId: request.params.partnerId,
+        correlationId: request.id,
       });
       return reply.status(204).send();
     },

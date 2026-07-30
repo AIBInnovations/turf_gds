@@ -31,7 +31,7 @@ export interface KycFileDocument {
   mime_type: string;
   size_bytes: number;
   checksum: string;
-  classification: string;
+  classification: 'SENSITIVE';
   status: 'ACTIVE' | 'DELETED';
   created_at: Date;
 }

@@ -1,10 +1,10 @@
 import type { FastifyPluginAsync } from 'fastify';
 
-import type { OwnerAccessService } from '../identity/owner/owner-access.service.js';
+import type { OwnerAccessService } from '../../identity/owner/owner-access.service.js';
 import {
   createOwnerAuthenticationHook,
   requireOwnerContext,
-} from '../identity/shared/auth-context.js';
+} from '../../identity/shared/auth-context.js';
 import type {
   CourtOwnerService,
   CreateCourtInput,

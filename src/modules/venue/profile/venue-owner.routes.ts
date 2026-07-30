@@ -3,8 +3,8 @@ import type { FastifyPluginAsync } from 'fastify';
 import {
   createOwnerAuthenticationHook,
   requireOwnerContext,
-} from '../identity/shared/auth-context.js';
-import type { OwnerAccessService } from '../identity/owner/owner-access.service.js';
+} from '../../identity/shared/auth-context.js';
+import type { OwnerAccessService } from '../../identity/owner/owner-access.service.js';
 import type {
   UpdateVenueProfileInput,
   VenueOwnerService,

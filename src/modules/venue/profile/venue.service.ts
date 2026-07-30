@@ -1,6 +1,6 @@
 import { ObjectId, type ClientSession } from 'mongodb';
 
-import { AppError } from '../../shared/errors/app-error.js';
+import { AppError } from '../../../shared/errors/app-error.js';
 import type { VenueRepository } from './venue.repository.js';
 
 export interface CreateInitialVenueInput {
@@ -18,6 +18,7 @@ export interface CreateInitialVenueInput {
   };
   latitude: number;
   longitude: number;
+  environment?: 'SANDBOX' | 'PRODUCTION';
   createdAt: Date;
 }
 
@@ -51,7 +52,7 @@ export function createVenueService(input: {
         _id: values.venueId,
         legal_name: values.legalName.trim(),
         display_name: values.displayName.trim(),
-        environment: 'PRODUCTION',
+        environment: values.environment ?? 'PRODUCTION',
         timezone: values.timezone.trim(),
         address: {
           line1: values.address.line1.trim(),

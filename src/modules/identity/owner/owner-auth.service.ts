@@ -13,7 +13,7 @@ import {
 } from "../../../shared/auth/session-token.js";
 import { createHash } from "node:crypto";
 import { AppError } from "../../../shared/errors/app-error.js";
-import type { VenueService } from "../../venue/venue.service.js";
+import type { VenueService } from "../../venue/profile/venue.service.js";
 import type { IdentityRepository } from "./owner-auth.repository.js";
 import type {
   LoginVenueOwnerInput,
@@ -56,7 +56,13 @@ export interface IdentityService {
     ownerId: string;
     venueId: string;
     adminId: string;
+    correlationId: string;
   }, session: ClientSession): Promise<void>;
+  attachOwnerVenue?(input: {
+    ownerId: string;
+    venueId: string;
+    createdAt: Date;
+  }, session: ClientSession): Promise<{ membershipId: string }>;
 }
 
 export interface IdentityServiceDependencies {
@@ -299,6 +305,12 @@ export function createIdentityService(
       });
     }
 
+    await dependencies.repository.touchSession(
+      owner._id,
+      tokenHash,
+      timestamp,
+    );
+
     if (input.venueId) {
       const membership = await dependencies.repository.findMembershipByOwnerAndVenue(
         owner._id,
@@ -335,6 +347,7 @@ export function createIdentityService(
     ownerId: string;
     venueId: string;
     adminId: string;
+    correlationId: string;
   }, session: ClientSession): Promise<void> {
     const ownerId = toObjectId(input.ownerId);
     const membership =
@@ -359,6 +372,7 @@ export function createIdentityService(
     const approved = await dependencies.repository.approveOwner(
       ownerId,
       toObjectId(input.adminId),
+      input.correlationId,
       now(),
       session,
     );
@@ -372,11 +386,55 @@ export function createIdentityService(
     }
   }
 
+  async function attachOwnerVenue(
+    input: {
+      ownerId: string;
+      venueId: string;
+      createdAt: Date;
+    },
+    session: ClientSession,
+  ): Promise<{ membershipId: string }> {
+    const ownerId = toObjectId(input.ownerId);
+    const venueId = toObjectId(input.venueId);
+    const owner = await dependencies.repository.findOwnerById?.(ownerId, session);
+    if (!owner || owner.status !== "ACTIVE") {
+      throw new AppError({
+        code: "ACTIVE_OWNER_REQUIRED",
+        message: "An active Venue Owner is required",
+        statusCode: 409,
+      });
+    }
+    if (
+      await dependencies.repository.findMembershipByOwnerAndVenue(
+        ownerId,
+        venueId,
+        session,
+      )
+    ) {
+      throw new AppError({
+        code: "OWNER_MEMBERSHIP_EXISTS",
+        message: "The owner already belongs to this Venue",
+        statusCode: 409,
+      });
+    }
+    const membershipId = new ObjectId();
+    await dependencies.repository.insertOwnerMembership({
+      _id: membershipId,
+      owner_id: ownerId,
+      venue_id: venueId,
+      role: "OWNER",
+      status: "ACTIVE",
+      created_at: input.createdAt,
+    }, session);
+    return { membershipId: membershipId.toHexString() };
+  }
+
   return {
     registerVenueOwner,
     loginVenueOwner,
     validateOwnerSession,
     approveVenueOwner,
+    attachOwnerVenue,
   };
 }
 

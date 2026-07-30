@@ -1,4 +1,5 @@
 import type { ObjectId } from 'mongodb';
+import type { ExternalEventType } from '../../../shared/communications/communications.types.js';
 
 export type PartnerEnvironment = 'SANDBOX' | 'PRODUCTION';
 
@@ -50,6 +51,7 @@ export interface WebhookEndpointDocument {
   environment: PartnerEnvironment;
   url: string;
   signing_secret_hash: string;
+  subscribed_event_types: ExternalEventType[];
   status: 'PENDING' | 'ACTIVE' | 'DISABLED';
   verified_at: Date | null;
   created_at: Date;

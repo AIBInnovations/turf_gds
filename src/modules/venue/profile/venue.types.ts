@@ -31,6 +31,7 @@ export interface VenueAuditDocument {
   actor_id: ObjectId;
   correlation_id: string;
   changed_fields?: string[];
+  reason?: string;
   occurred_at: Date;
 }
 

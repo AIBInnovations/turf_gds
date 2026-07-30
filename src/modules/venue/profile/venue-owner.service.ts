@@ -1,8 +1,8 @@
 import { ObjectId } from 'mongodb';
 
-import type { OwnerAccessService } from '../identity/owner/owner-access.service.js';
-import { AppError } from '../../shared/errors/app-error.js';
-import type { MediaStorage } from '../../shared/media/cloudinary-media-storage.js';
+import type { OwnerAccessService } from '../../identity/owner/owner-access.service.js';
+import { AppError } from '../../../shared/errors/app-error.js';
+import type { MediaStorage } from '../../../shared/media/cloudinary-media-storage.js';
 import type { VenueRepository } from './venue.repository.js';
 import type {
   AddressDocument,

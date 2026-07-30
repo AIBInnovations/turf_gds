@@ -6,16 +6,13 @@ import type { DatabaseConnection } from '../../shared/database/database-connecti
 import { AppError } from '../../shared/errors/app-error.js';
 import type { OutboxRepository } from '../../shared/communications/outbox.repository.js';
 import type { PartnerVenueContractDocument } from '../contracts/contract.types.js';
-import type {
-  LedgerEntryDocument,
-  LedgerRepository,
-} from '../ledger/ledger.repository.js';
-import type { CourtDocument } from '../venue/court.types.js';
+import type { LedgerService } from '../ledger/ledger.service.js';
+import type { CourtDocument } from '../venue/courts/court.types.js';
 import type {
   PricingRuleDocument,
   SlotDocument,
-} from '../venue/inventory.types.js';
-import type { VenueDocument } from '../venue/venue.types.js';
+} from '../venue/inventory/inventory.types.js';
+import type { VenueDocument } from '../venue/profile/venue.types.js';
 import type { BookingLifecycleRepository } from './booking-lifecycle.repository.js';
 import type {
   ApiIdempotencyRecordDocument,
@@ -85,7 +82,7 @@ export interface BookingLifecycleService {
 
 export function createBookingLifecycleService(input: {
   repository: BookingLifecycleRepository;
-  ledgerRepository: LedgerRepository;
+  ledgerService: LedgerService;
   outboxRepository: OutboxRepository;
   database: DatabaseConnection;
   now?: () => Date;
@@ -393,10 +390,12 @@ export function createBookingLifecycleService(input: {
             );
           }
           await input.repository.insertBooking(booking, session);
-          await input.ledgerRepository.post(
-            confirmationLedger(booking, timestamp, values.correlationId),
+          await input.ledgerService.postBooking({
+            booking: ledgerBooking(booking),
+            effectiveAt: timestamp,
+            correlationId: values.correlationId,
             session,
-          );
+          });
           await enqueueBookingEvent(
             input.outboxRepository,
             booking,
@@ -544,20 +543,13 @@ export function createBookingLifecycleService(input: {
             created_at: timestamp,
           };
           await input.repository.insertCancellation(cancellation, session);
-          const originals = await input.ledgerRepository.listForBooking(
-            booking._id,
+          await input.ledgerService.postCancellation({
+            booking: ledgerBooking(booking),
+            refundPercent: policy.refundPercent,
+            effectiveAt: timestamp,
+            correlationId: values.correlationId,
             session,
-          );
-          await input.ledgerRepository.post(
-            cancellationLedger(
-              booking,
-              originals,
-              policy.refundPercent,
-              timestamp,
-              values.correlationId,
-            ),
-            session,
-          );
+          });
           await enqueueBookingEvent(
             input.outboxRepository,
             cancelled,
@@ -833,93 +825,18 @@ function calculateAmounts(
   };
 }
 
-function confirmationLedger(
-  booking: BookingDocument,
-  timestamp: Date,
-  correlationId: string,
-): LedgerEntryDocument[] {
-  const base = {
-    booking_id: booking._id,
-    partner_id: booking.partner_id,
-    venue_id: booking.venue_id,
-    contract_id: booking.contract_id,
-    settlement_id: null,
-    payout_id: null,
-    reverses_entry_id: null,
+function ledgerBooking(booking: BookingDocument) {
+  return {
+    bookingId: booking._id,
+    partnerId: booking.partner_id,
+    venueId: booking.venue_id,
+    contractId: booking.contract_id,
     environment: booking.environment,
-    currency: 'INR' as const,
-    effective_at: timestamp,
-    correlation_id: correlationId,
-    created_at: timestamp,
+    grossAmountMinor: booking.gross_amount_minor,
+    commissionAmountMinor: booking.commission_amount_minor,
+    taxAmountMinor: booking.tax_amount_minor,
+    venueNetAmountMinor: booking.venue_net_amount_minor,
   };
-  return [
-    {
-      ...base,
-      _id: new ObjectId(),
-      entry_type: 'BOOKING',
-      direction: 'DEBIT',
-      amount_minor: booking.gross_amount_minor,
-      metadata: { component: 'GROSS' },
-    },
-    {
-      ...base,
-      _id: new ObjectId(),
-      entry_type: 'COMMISSION',
-      direction: 'CREDIT',
-      amount_minor: booking.commission_amount_minor,
-      metadata: { component: 'COMMISSION' },
-    },
-    {
-      ...base,
-      _id: new ObjectId(),
-      entry_type: 'TAX',
-      direction: 'CREDIT',
-      amount_minor: booking.tax_amount_minor,
-      metadata: { component: 'TAX' },
-    },
-    {
-      ...base,
-      _id: new ObjectId(),
-      entry_type: 'BOOKING',
-      direction: 'CREDIT',
-      amount_minor: booking.venue_net_amount_minor,
-      metadata: { component: 'VENUE_NET' },
-    },
-  ];
-}
-
-function cancellationLedger(
-  booking: BookingDocument,
-  originals: LedgerEntryDocument[],
-  refundPercent: number,
-  timestamp: Date,
-  correlationId: string,
-): LedgerEntryDocument[] {
-  if (refundPercent === 0) return [];
-  return originals
-    .filter((entry) => entry.reverses_entry_id === null)
-    .map((entry) => ({
-      _id: new ObjectId(),
-      booking_id: booking._id,
-      partner_id: booking.partner_id,
-      venue_id: booking.venue_id,
-      contract_id: booking.contract_id,
-      settlement_id: null,
-      payout_id: null,
-      reverses_entry_id: entry._id,
-      environment: booking.environment,
-      entry_type: 'REVERSAL' as const,
-      direction: entry.direction === 'DEBIT' ? 'CREDIT' as const : 'DEBIT' as const,
-      amount_minor: Math.round((entry.amount_minor * refundPercent) / 100),
-      currency: 'INR' as const,
-      effective_at: timestamp,
-      correlation_id: correlationId,
-      metadata: {
-        refund_percent: refundPercent,
-        original_entry_type: entry.entry_type,
-      },
-      created_at: timestamp,
-    }));
 }
 
 function cancellationPolicy(
@@ -997,7 +914,16 @@ async function enqueueBookingEvent(
       booking_id: booking._id.toHexString(),
       venue_id: booking.venue_id.toHexString(),
       court_id: booking.court_id.toHexString(),
+      partner_id: booking.partner_id.toHexString(),
+      booking_type: booking.booking_type,
+      starts_at: booking.starts_at.toISOString(),
+      ends_at: booking.ends_at.toISOString(),
       status: booking.status,
+      gross_amount_minor: booking.gross_amount_minor,
+      commission_amount_minor: booking.commission_amount_minor,
+      tax_amount_minor: booking.tax_amount_minor,
+      venue_net_amount_minor: booking.venue_net_amount_minor,
+      currency: booking.currency,
       ...extra,
     },
     now: timestamp,

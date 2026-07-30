@@ -17,6 +17,10 @@ export interface IdentityRepository {
     membership: VenueOwnerMembershipDocument,
     session: ClientSession,
   ): Promise<void>;
+  findOwnerById?(
+    ownerId: ObjectId,
+    session?: ClientSession,
+  ): Promise<VenueOwnerDocument | null>;
   findOwnerByEmail(email: string): Promise<VenueOwnerDocument | null>;
   recordFailedLogin(
     ownerId: ObjectId,
@@ -32,6 +36,11 @@ export interface IdentityRepository {
     now: Date,
   ): Promise<boolean>;
   findOwnerBySessionTokenHash(tokenHash: string): Promise<VenueOwnerDocument | null>;
+  touchSession(
+    ownerId: ObjectId,
+    tokenHash: string,
+    now: Date,
+  ): Promise<void>;
   findMembershipByOwnerAndVenue(
     ownerId: ObjectId,
     venueId: ObjectId,
@@ -40,6 +49,7 @@ export interface IdentityRepository {
   approveOwner(
     ownerId: ObjectId,
     adminId: ObjectId,
+    correlationId: string,
     now: Date,
     session: ClientSession,
   ): Promise<boolean>;
@@ -84,6 +94,16 @@ export function createIdentityRepository(
     email: string,
   ): Promise<VenueOwnerDocument | null> {
     return owners().findOne({ email });
+  }
+
+  async function findOwnerById(
+    ownerId: ObjectId,
+    session?: ClientSession,
+  ): Promise<VenueOwnerDocument | null> {
+    return owners().findOne(
+      { _id: ownerId },
+      ...(session ? [{ session }] : []),
+    );
   }
 
   async function recordFailedLogin(
@@ -188,6 +208,32 @@ export function createIdentityRepository(
     return owners().findOne({ 'sessions.token_hash': tokenHash });
   }
 
+  async function touchSession(
+    ownerId: ObjectId,
+    tokenHash: string,
+    now: Date,
+  ): Promise<void> {
+    await owners().updateOne(
+      {
+        _id: ownerId,
+        sessions: {
+          $elemMatch: {
+            token_hash: tokenHash,
+            revoked_at: null,
+            expires_at: { $gt: now },
+          },
+        },
+      },
+      {
+        $set: {
+          'sessions.$[session].last_seen_at': now,
+          updated_at: now,
+        },
+      },
+      { arrayFilters: [{ 'session.token_hash': tokenHash }] },
+    );
+  }
+
   async function findMembershipByOwnerAndVenue(
     ownerId: ObjectId,
     venueId: ObjectId,
@@ -202,6 +248,7 @@ export function createIdentityRepository(
   async function approveOwner(
     ownerId: ObjectId,
     adminId: ObjectId,
+    correlationId: string,
     now: Date,
     session: ClientSession,
   ): Promise<boolean> {
@@ -212,6 +259,19 @@ export function createIdentityRepository(
           approved_by: adminId,
           approved_at: now,
           updated_at: now,
+        },
+        $push: {
+          audit_history: {
+            $each: [{
+              event_type: 'OWNER_APPROVED',
+              actor_type: 'ADMIN',
+              actor_id: adminId,
+              correlation_id: correlationId,
+              changes: { approved_at: now },
+              occurred_at: now,
+            }],
+            $slice: -100,
+          },
         },
       },
       { session },
@@ -224,11 +284,13 @@ export function createIdentityRepository(
     ownerEmailExists,
     insertOwner,
     insertOwnerMembership,
+    findOwnerById,
     findOwnerByEmail,
     recordFailedLogin,
     resetLoginFailures,
     appendSession,
     findOwnerBySessionTokenHash,
+    touchSession,
     findMembershipByOwnerAndVenue,
     approveOwner,
   };

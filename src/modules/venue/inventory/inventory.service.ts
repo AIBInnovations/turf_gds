@@ -1,19 +1,18 @@
 import { ObjectId } from 'mongodb';
 
-import type { OwnerAccessService } from '../identity/owner/owner-access.service.js';
-import type { DatabaseConnection } from '../../shared/database/database-connection.js';
-import { AppError } from '../../shared/errors/app-error.js';
-import type { CourtRepository } from './court.repository.js';
-import type { CourtDocument } from './court.types.js';
+import type { OwnerAccessService } from '../../identity/owner/owner-access.service.js';
+import type { DatabaseConnection } from '../../../shared/database/database-connection.js';
+import { AppError } from '../../../shared/errors/app-error.js';
+import type { CourtRepository } from '../courts/court.repository.js';
+import type { CourtDocument } from '../courts/court.types.js';
 import type {
   PricingRuleDocument,
   SlotDocument,
-  VenuePayoutAccountDocument,
 } from './inventory.types.js';
-import type { VenueOperationsRepository } from './venue-operations.repository.js';
-import type { VenueRepository } from './venue.repository.js';
+import type { InventoryRepository } from './inventory.repository.js';
+import type { VenueRepository } from '../profile/venue.repository.js';
 
-export interface VenueOperationsService {
+export interface InventoryService {
   createPricingRule(input: PricingInput): Promise<object>;
   listPricingRules(input: ScopedCourt): Promise<object[]>;
   updatePricingRule(input: PricingUpdateInput): Promise<object>;
@@ -49,20 +48,6 @@ export interface VenueOperationsService {
     reason: string;
     correlationId: string;
   }): Promise<void | object>;
-  addPayoutAccount(input: {
-    actorOwnerId: string;
-    venueId: string;
-    accountHolderName: string;
-    vaultProvider: string;
-    vaultAccountToken: string;
-    accountLast4: string;
-    bankName: string;
-    ifscCode: string;
-  }): Promise<object>;
-  listPayoutAccounts(input: {
-    actorOwnerId: string;
-    venueId: string;
-  }): Promise<object[]>;
   searchAvailability(input: {
     courtId: string;
     from: Date;
@@ -102,14 +87,14 @@ interface PricingUpdateInput extends ScopedCourt {
   active?: boolean;
 }
 
-export function createVenueOperationsService(input: {
-  repository: VenueOperationsRepository;
+export function createInventoryService(input: {
+  repository: InventoryRepository;
   venueRepository: VenueRepository;
   courtRepository: CourtRepository;
   ownerAccessService: OwnerAccessService;
   database: DatabaseConnection;
   now?: () => Date;
-}): VenueOperationsService {
+}): InventoryService {
   const now = input.now ?? (() => new Date());
 
   async function scopedCourt(
@@ -204,7 +189,7 @@ export function createVenueOperationsService(input: {
   }
 
   async function generateFixedSlots(
-    values: Parameters<VenueOperationsService['generateFixedSlots']>[0],
+    values: Parameters<InventoryService['generateFixedSlots']>[0],
   ) {
     const court = await scopedCourt(values, 'MANAGE_AVAILABILITY');
     if (
@@ -315,7 +300,7 @@ export function createVenueOperationsService(input: {
   }
 
   async function listInventory(
-    values: Parameters<VenueOperationsService['listInventory']>[0],
+    values: Parameters<InventoryService['listInventory']>[0],
   ) {
     await scopedCourt(values, 'MANAGE_AVAILABILITY');
     return (
@@ -328,7 +313,7 @@ export function createVenueOperationsService(input: {
   }
 
   async function blockAvailability(
-    values: Parameters<VenueOperationsService['blockAvailability']>[0],
+    values: Parameters<InventoryService['blockAvailability']>[0],
   ) {
     const court = await scopedCourt(values, 'MANAGE_AVAILABILITY');
     const reason = required(values.reason, 'reason');
@@ -443,7 +428,7 @@ export function createVenueOperationsService(input: {
   }
 
   async function releaseAvailability(
-    values: Parameters<VenueOperationsService['releaseAvailability']>[0],
+    values: Parameters<InventoryService['releaseAvailability']>[0],
   ) {
     await scopedCourt(values, 'MANAGE_AVAILABILITY');
     const slot = await input.repository.findSlot(
@@ -484,75 +469,8 @@ export function createVenueOperationsService(input: {
     return presentSlot(updated);
   }
 
-  async function addPayoutAccount(
-    values: Parameters<VenueOperationsService['addPayoutAccount']>[0],
-  ) {
-    await input.ownerAccessService.requirePermission(
-      values.actorOwnerId,
-      values.venueId,
-      'VIEW_FINANCE',
-    );
-    if (
-      !/^[0-9]{4}$/.test(values.accountLast4) ||
-      values.vaultAccountToken.trim().length < 12 ||
-      !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(values.ifscCode.toUpperCase())
-    ) {
-      throw invalid(
-        'INVALID_PAYOUT_ACCOUNT',
-        'Tokenized payout-account metadata is invalid',
-      );
-    }
-    const timestamp = now();
-    const account: VenuePayoutAccountDocument = {
-      _id: new ObjectId(),
-      venue_id: oid(values.venueId),
-      account_holder_name: required(
-        values.accountHolderName,
-        'accountHolderName',
-      ),
-      vault_provider: required(values.vaultProvider, 'vaultProvider'),
-      vault_account_token: values.vaultAccountToken.trim(),
-      account_last4: values.accountLast4,
-      bank_name: required(values.bankName, 'bankName'),
-      ifsc_code: values.ifscCode.toUpperCase(),
-      status: 'PENDING',
-      verified_by: null,
-      verified_at: null,
-      verification_failure_reason: null,
-      verification_method: 'PENNY_DROP',
-      audit_history: [],
-      created_at: timestamp,
-      updated_at: timestamp,
-    };
-    try {
-      await input.repository.insertPayoutAccount(account);
-    } catch (error) {
-      if (duplicate(error)) {
-        throw conflict(
-          'PAYOUT_ACCOUNT_ALREADY_EXISTS',
-          'This tokenized payout account already exists',
-        );
-      }
-      throw error;
-    }
-    return presentPayout(account);
-  }
-
-  async function listPayoutAccounts(
-    values: Parameters<VenueOperationsService['listPayoutAccounts']>[0],
-  ) {
-    await input.ownerAccessService.requirePermission(
-      values.actorOwnerId,
-      values.venueId,
-      'VIEW_FINANCE',
-    );
-    return (
-      await input.repository.listPayoutAccounts(oid(values.venueId))
-    ).map(presentPayout);
-  }
-
   async function searchAvailability(
-    values: Parameters<VenueOperationsService['searchAvailability']>[0],
+    values: Parameters<InventoryService['searchAvailability']>[0],
   ) {
     const inventory = await input.repository.listSlots(
       oid(values.courtId),
@@ -584,8 +502,6 @@ export function createVenueOperationsService(input: {
     listInventory,
     blockAvailability,
     releaseAvailability,
-    addPayoutAccount,
-    listPayoutAccounts,
     searchAvailability,
   };
 }
@@ -781,21 +697,6 @@ function presentSlot(value: SlotDocument) {
   };
 }
 
-function presentPayout(value: VenuePayoutAccountDocument) {
-  return {
-    id: value._id.toHexString(),
-    venueId: value.venue_id.toHexString(),
-    accountHolderName: value.account_holder_name,
-    vaultProvider: value.vault_provider,
-    accountLast4: value.account_last4,
-    bankName: value.bank_name,
-    ifscCode: value.ifsc_code,
-    status: value.status,
-    verifiedAt: value.verified_at?.toISOString() ?? null,
-    verificationMethod: value.verification_method,
-  };
-}
-
 function oid(value: string): ObjectId {
   if (!ObjectId.isValid(value)) throw invalid('INVALID_ID', 'Identifier is invalid');
   return new ObjectId(value);
@@ -821,7 +722,4 @@ function conflict(code: string, message: string): AppError {
 }
 function notFound(code: string, message: string): AppError {
   return new AppError({ code, message, statusCode: 404 });
-}
-function duplicate(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && 'code' in error && error.code === 11_000;
 }

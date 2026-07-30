@@ -29,6 +29,7 @@ export interface KycService {
   submit(input: {
     verificationId: string;
     subjectId: string;
+    correlationId: string;
   }): Promise<void>;
   getCurrent(input: {
     subjectType: KycSubjectType;
@@ -47,6 +48,7 @@ export interface KycService {
     status: Extract<KycStatus, 'VERIFIED' | 'REJECTED'>;
     rejectionReason?: string;
     expiresAt?: string;
+    correlationId: string;
   }): Promise<void>;
 }
 
@@ -157,7 +159,7 @@ export function createKycService(input: {
           mime_type: values.mimeType.toLowerCase(),
           size_bytes: uploaded.bytes,
           checksum: uploaded.checksum ?? uploaded.publicId,
-          classification: values.filename.slice(0, 255),
+          classification: 'SENSITIVE',
           status: 'ACTIVE',
           created_at: timestamp,
         },
@@ -179,6 +181,17 @@ export function createKycService(input: {
     values: Parameters<KycService['submit']>[0],
   ): Promise<void> {
     const verificationId = toObjectId(values.verificationId);
+    const verification = await input.repository.findVerification(
+      verificationId,
+    );
+    if (
+      !verification ||
+      !verification.subject_id.equals(toObjectId(values.subjectId)) ||
+      verification.status !== 'PENDING' ||
+      !verification.is_current
+    ) {
+      throw verificationNotEditable();
+    }
     const documentCount =
       await input.repository.countActiveDocuments(verificationId);
 
@@ -193,6 +206,8 @@ export function createKycService(input: {
     const submitted = await input.repository.submit(
       verificationId,
       toObjectId(values.subjectId),
+      verification.subject_type,
+      required(values.correlationId, 'correlationId'),
       now(),
     );
 
@@ -265,12 +280,37 @@ export function createKycService(input: {
       });
     }
 
+    const verification = await input.repository.findVerification(
+      toObjectId(values.verificationId),
+    );
+    const wasSubmitted = verification?.audit_history.some(
+      (event) =>
+        typeof event === 'object' &&
+        event !== null &&
+        'event_type' in event &&
+        event.event_type === 'KYC_SUBMITTED',
+    );
+    if (
+      !verification ||
+      verification.status !== 'PENDING' ||
+      !verification.is_current ||
+      !wasSubmitted ||
+      (await input.repository.countActiveDocuments(verification._id)) === 0
+    ) {
+      throw new AppError({
+        code: 'KYC_REVIEW_NOT_READY',
+        message: 'Only a submitted current KYC with documents can be reviewed',
+        statusCode: 409,
+      });
+    }
+
     const reviewed = await input.repository.review({
-      id: toObjectId(values.verificationId),
+      id: verification._id,
       adminId: toObjectId(values.adminId),
       status: values.status,
       rejectionReason: values.rejectionReason?.trim() ?? null,
       expiresAt,
+      correlationId: required(values.correlationId, 'correlationId'),
       now: now(),
     });
 
@@ -327,6 +367,18 @@ function normalizeType(
     });
   }
   return normalized as KycVerificationType | KycDocumentType;
+}
+
+function required(value: string, field: string): string {
+  const normalized = value.trim();
+  if (!normalized) {
+    throw new AppError({
+      code: 'FIELD_REQUIRED',
+      message: `${field} is required`,
+      statusCode: 400,
+    });
+  }
+  return normalized;
 }
 
 function toObjectId(value: string): ObjectId {

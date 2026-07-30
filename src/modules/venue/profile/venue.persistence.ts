@@ -1,5 +1,6 @@
 import type { Db, Document } from 'mongodb';
-import { initializeInventoryPersistence } from './inventory.persistence.js';
+import { initializeInventoryPersistence } from '../inventory/inventory.persistence.js';
+import { initializePayoutAccountPersistence } from '../payout-accounts/payout-account.persistence.js';
 
 const venueValidator: Document = {
   $jsonSchema: {
@@ -115,6 +116,7 @@ const venueValidator: Document = {
               bsonType: 'array',
               items: { bsonType: 'string' },
             },
+            reason: { bsonType: 'string', maxLength: 1_000 },
             occurred_at: { bsonType: 'date' },
           },
         },
@@ -239,6 +241,7 @@ const courtValidator: Document = {
               bsonType: 'array',
               items: { bsonType: 'string' },
             },
+            reason: { bsonType: 'string', maxLength: 1_000 },
             occurred_at: { bsonType: 'date' },
           },
         },
@@ -264,6 +267,20 @@ async function ensureVenueCollection(db: Db): Promise<void> {
     return;
   }
 
+  await db.collection('venues').updateMany(
+    { status: { $in: ['DRAFT', 'PENDING_APPROVAL'] } },
+    {
+      $set: { status: 'PENDING' },
+      $unset: { approved_by: '', approved_at: '' },
+    },
+    { bypassDocumentValidation: true },
+  );
+  await db.collection('venues').updateMany(
+    { $or: [{ approved_by: { $exists: true } }, { approved_at: { $exists: true } }] },
+    { $unset: { approved_by: '', approved_at: '' } },
+    { bypassDocumentValidation: true },
+  );
+
   await db.command({
     collMod: 'venues',
     validator: venueValidator,
@@ -286,6 +303,18 @@ async function ensureCourtCollection(db: Db): Promise<void> {
     return;
   }
 
+  await db.collection('courts').updateMany(
+    { status: { $in: ['ACTIVE', 'INACTIVE'] } },
+    [{
+      $set: {
+        status: {
+          $cond: [{ $eq: ['$status', 'ACTIVE'] }, 'AVAILABLE', 'UNAVAILABLE'],
+        },
+      },
+    }],
+    { bypassDocumentValidation: true },
+  );
+
   await db.command({
     collMod: 'courts',
     validator: courtValidator,
@@ -300,6 +329,10 @@ export async function initializeVenuePersistence(db: Db): Promise<void> {
   await db.collection('venues').createIndex(
     { geo: '2dsphere' },
     { name: 'ix_venues_geo' },
+  );
+  await db.collection('courts').createIndex(
+    { venue_id: 1, status: 1, booking_mode: 1 },
+    { name: 'ix_courts_venue_status_mode' },
   );
   await db.collection('venues').createIndex(
     { environment: 1, status: 1 },
@@ -318,4 +351,5 @@ export async function initializeVenuePersistence(db: Db): Promise<void> {
     { name: 'ix_courts_venue_status_mode' },
   );
   await initializeInventoryPersistence(db);
+  await initializePayoutAccountPersistence(db);
 }

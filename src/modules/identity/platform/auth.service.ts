@@ -7,9 +7,9 @@ import {
   verifyPassword,
 } from '../../../shared/auth/password.js';
 import {
-  createSignedToken,
-  verifySignedToken,
-} from '../../../shared/auth/signed-token.js';
+  createAdminJwt,
+  verifyAdminJwt,
+} from '../../../shared/auth/admin-jwt.js';
 import { AppError } from '../../../shared/errors/app-error.js';
 import type { AdminRole } from './auth.types.js';
 import type { AdminAuthRepository } from './auth.repository.js';
@@ -76,7 +76,7 @@ export function createAdminAuthService(input: {
       timestamp.getTime() +
         input.authConfig.adminAccessTokenTtlMinutes * 60_000,
     );
-    const accessToken = createSignedToken(
+    const accessToken = createAdminJwt(
       {
         sub: admin._id.toHexString(),
         actor: 'ADMIN',
@@ -103,7 +103,7 @@ export function createAdminAuthService(input: {
   async function authenticate(
     token: string,
   ): ReturnType<AdminAuthService['authenticate']> {
-    const payload = verifySignedToken(
+    const payload = verifyAdminJwt(
       token,
       input.authConfig.adminAccessTokenSecret,
       Math.floor(now().getTime() / 1_000),
