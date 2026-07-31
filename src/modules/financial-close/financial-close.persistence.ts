@@ -179,6 +179,10 @@ export async function initializeFinancialClosePersistence(db: Db): Promise<void>
     { invoice_number: 1 },
     { unique: true, name: 'uq_invoice_number' },
   );
+  await db.collection('invoices').createIndex(
+    { settlement_id: 1, type: 1 },
+    { unique: true, name: 'uq_invoice_settlement_type' },
+  );
 }
 
 async function migrateLegacyFinancialCloseFields(db: Db): Promise<void> {

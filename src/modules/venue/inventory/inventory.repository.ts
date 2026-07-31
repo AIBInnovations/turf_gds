@@ -1,6 +1,7 @@
 import { type ClientSession, type ObjectId } from 'mongodb';
 
 import type { DatabaseConnection } from '../../../shared/database/database-connection.js';
+import { archiveAuditEvent } from '../../../shared/audit/audit.persistence.js';
 import type {
   PricingRuleDocument,
   SlotDocument,
@@ -120,39 +121,46 @@ export function createInventoryRepository(
         .sort({ starts_at: 1 })
         .toArray();
     },
-    updateFixedSlot(input) {
-      return slots().findOneAndUpdate(
-        {
-          _id: input.slotId,
-          court_id: input.courtId,
-          booking_type: 'FIXED_SLOT',
-          status: input.fromStatus,
-          version: input.expectedVersion,
-        },
-        {
-          $set: { status: input.toStatus, updated_at: input.now },
-          $inc: { version: 1 },
-          $push: {
-            audit_history: {
-              $each: [{
-                event_type:
-                  input.toStatus === 'BLOCKED'
-                    ? 'SLOT_BLOCKED'
-                    : 'SLOT_RELEASED',
-                actor_type: 'VENUE_OWNER',
-                actor_id: input.actorOwnerId,
-                previous_status: input.fromStatus,
-                new_status: input.toStatus,
-                reason: input.reason,
-                correlation_id: input.correlationId,
-                occurred_at: input.now,
-              }],
-              $slice: -100,
+    async updateFixedSlot(input) {
+      let updated: SlotDocument | null = null;
+      await database.withTransaction(async ({ session }) => {
+        updated = await slots().findOneAndUpdate(
+          {
+            _id: input.slotId,
+            court_id: input.courtId,
+            booking_type: 'FIXED_SLOT',
+            status: input.fromStatus,
+            version: input.expectedVersion,
+          },
+          {
+            $set: { status: input.toStatus, updated_at: input.now },
+            $inc: { version: 1 },
+            $push: {
+              audit_history: {
+                $each: [{
+                  event_type:
+                    input.toStatus === 'BLOCKED'
+                      ? 'SLOT_BLOCKED'
+                      : 'SLOT_RELEASED',
+                  actor_type: 'VENUE_OWNER',
+                  actor_id: input.actorOwnerId,
+                  previous_status: input.fromStatus,
+                  new_status: input.toStatus,
+                  reason: input.reason,
+                  correlation_id: input.correlationId,
+                  occurred_at: input.now,
+                }],
+                $slice: -100,
+              },
             },
           },
-        },
-        { returnDocument: 'after' },
-      );
+          { returnDocument: 'after', session },
+        );
+        if (updated) {
+          await archiveSlot(database, updated, session);
+        }
+      });
+      return updated;
     },
     findOverlap(courtId, environment, startsAt, endsAt, session) {
       return slots().findOne(
@@ -197,19 +205,64 @@ export function createInventoryRepository(
     },
     async insertOpenBlock(slot, session) {
       await slots().insertOne(slot, { session });
+      await archiveSlot(database, slot, session);
     },
     async deleteOpenBlock(input) {
-      const result = await slots().deleteOne({
-        _id: input.slotId,
-        court_id: input.courtId,
-        booking_type: 'OPEN_TIME',
-        status: 'BLOCKED',
-        version: input.expectedVersion,
+      let deleted = false;
+      await database.withTransaction(async ({ session }) => {
+        const slot = await slots().findOne({
+          _id: input.slotId,
+          court_id: input.courtId,
+          booking_type: 'OPEN_TIME',
+          status: 'BLOCKED',
+          version: input.expectedVersion,
+        }, { session });
+        if (!slot) return;
+        const event = {
+          event_type: 'SLOT_RELEASED',
+          actor_type: 'VENUE_OWNER',
+          actor_id: null,
+          previous_status: 'BLOCKED',
+          new_status: 'AVAILABLE',
+          reason: 'Open-time block released',
+          correlation_id: `release:${slot._id.toHexString()}:${slot.version}`,
+          occurred_at: new Date(),
+        };
+        await archiveAuditEvent({
+          db: database.db,
+          aggregateType: 'SLOT',
+          aggregateId: slot._id,
+          environment: slot.environment,
+          event,
+          session,
+        });
+        const result = await slots().deleteOne({
+          _id: slot._id,
+          version: slot.version,
+        }, { session });
+        deleted = result.deletedCount > 0;
       });
-      return result.deletedCount > 0;
+      return deleted;
     },
     findSlot(id, courtId) {
       return slots().findOne({ _id: id, court_id: courtId });
     },
   };
+}
+
+async function archiveSlot(
+  database: DatabaseConnection,
+  slot: SlotDocument,
+  session: ClientSession,
+): Promise<void> {
+  const event = slot.audit_history.at(-1);
+  if (!event) return;
+  await archiveAuditEvent({
+    db: database.db,
+    aggregateType: 'SLOT',
+    aggregateId: slot._id,
+    environment: slot.environment,
+    event,
+    session,
+  });
 }

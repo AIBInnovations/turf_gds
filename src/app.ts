@@ -49,6 +49,7 @@ import { createOwnerAccessRepository } from './modules/identity/owner/owner-acce
 import { createOwnerAccessService } from './modules/identity/owner/owner-access.service.js';
 import { createPartnerAccessRepository } from './modules/identity/partner/partner-access.repository.js';
 import { createPartnerAccessService } from './modules/identity/partner/partner-access.service.js';
+import { createPartnerPortalService } from './modules/identity/partner/partner-portal.service.js';
 import { initializeIdentityPersistence } from './modules/identity/persistence.js';
 import { initializeVenuePersistence } from './modules/venue/profile/venue.persistence.js';
 import { createCourtOwnerService } from './modules/venue/courts/court-owner.service.js';
@@ -63,10 +64,13 @@ import { createPayoutAccountService } from './modules/venue/payout-accounts/payo
 import cloudinaryPlugin from './plugins/cloudinary.js';
 import errorHandlerPlugin from './plugins/error-handler.js';
 import mongodbPlugin from './plugins/mongodb.js';
+import redisPlugin from './plugins/redis.js';
 import apiV1Routes from './routes/api-v1.js';
 import healthRoutes from './routes/health.js';
 import type { DatabaseConnection } from './shared/database/database-connection.js';
 import type { MediaStorage } from './shared/media/cloudinary-media-storage.js';
+import { createPartnerRateLimiter } from './shared/rate-limit/partner-rate-limiter.js';
+import { initializeAuditPersistence } from './shared/audit/audit.persistence.js';
 
 export interface BuildAppOptions {
   config?: AppConfig;
@@ -84,12 +88,44 @@ export async function buildApp(
   options: BuildAppOptions = {},
 ): Promise<FastifyInstance> {
   const config = options.config ?? loadConfig();
+  const redisConfig = config.redis ?? {
+    connectTimeoutMs: 1_000,
+    keyPrefix: 'turf-gds',
+  };
   const app = Fastify({
     logger:
       options.logger === false
         ? false
         : {
             level: config.logLevel,
+            redact: {
+              paths: [
+                'req.headers.authorization',
+                'req.headers.x-api-key',
+                'req.headers.x-signature',
+                'req.headers.cookie',
+                'request.headers.authorization',
+                'request.headers.x-api-key',
+                'request.headers.x-signature',
+                '*.password',
+                '*.passwordHash',
+                '*.password_hash',
+                '*.signingSecret',
+                '*.signing_secret',
+                '*.signing_secret_hash',
+                '*.vaultAccountToken',
+                '*.vault_account_token',
+                '*.accountNumber',
+                '*.account_number',
+                '*.cardNumber',
+                '*.card_number',
+                '*.pan',
+                '*.cvv',
+                '*.cvc',
+                '*.privateKey',
+              ],
+              censor: '[REDACTED]',
+            },
           },
   });
 
@@ -117,6 +153,7 @@ export async function buildApp(
     config: config.mongodb,
     ...(options.database ? { connection: options.database } : {}),
   });
+  await app.register(redisPlugin, { config: redisConfig });
   await app.register(healthRoutes, {
     cacheTtlMs: config.readinessCacheTtlMs,
   });
@@ -129,6 +166,7 @@ export async function buildApp(
     await initializeLedgerPersistence(app.database.db);
     await initializeFinancialClosePersistence(app.database.db);
     await initializeOutboxPersistence(app.database.db);
+    await initializeAuditPersistence(app.database.db);
   }
 
   const venueService = createVenueService({
@@ -183,10 +221,23 @@ export async function buildApp(
     venueService,
     database: app.database,
   });
+  const partnerAccessRepository = createPartnerAccessRepository(app.database);
   const partnerAccessService = createPartnerAccessService({
-    repository: createPartnerAccessRepository(app.database),
+    repository: partnerAccessRepository,
     kycService,
     authConfig: config.auth,
+    rateLimiter: createPartnerRateLimiter({
+      redis: app.redis,
+      fallback: {
+        async consumeRateLimitWindow(values) {
+          if (!partnerAccessRepository.consumeRateLimitWindow) {
+            return { count: 1 };
+          }
+          return partnerAccessRepository.consumeRateLimitWindow(values);
+        },
+      },
+      keyPrefix: redisConfig.keyPrefix,
+    }),
   });
   const ownerBookingService = createOwnerBookingService({
     repository: createOwnerBookingRepository(app.database),
@@ -253,6 +304,7 @@ export async function buildApp(
     adminOnboardingService,
     kycService,
     partnerAccessService,
+    partnerPortalService: createPartnerPortalService(app.database.db),
     venueOwnerService,
     courtOwnerService,
     inventoryService,

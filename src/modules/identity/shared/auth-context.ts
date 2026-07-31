@@ -4,6 +4,7 @@ import { AppError } from '../../../shared/errors/app-error.js';
 import type { AdminAuthService } from '../platform/auth.service.js';
 import type { OwnerAccessService } from '../owner/owner-access.service.js';
 import type { PartnerAccessService } from '../partner/partner-access.service.js';
+import type { RateLimitDecision } from '../../../shared/rate-limit/partner-rate-limiter.js';
 
 export type IdentityContext =
   | {
@@ -27,6 +28,7 @@ export type IdentityContext =
 declare module 'fastify' {
   interface FastifyRequest {
     identity?: IdentityContext;
+    partnerRateLimit?: RateLimitDecision;
   }
 }
 
@@ -80,7 +82,7 @@ export function createPartnerAuthenticationHook(
       throw authenticationRequired();
     }
 
-    request.identity = await service.authenticateRequest({
+    const identity = await service.authenticateRequest({
       apiKey,
       signature,
       timestamp,
@@ -91,6 +93,26 @@ export function createPartnerAuthenticationHook(
           ? Buffer.from(request.rawBody, 'utf8')
           : request.rawBody ?? Buffer.alloc(0),
     });
+    request.identity = identity;
+    if (!service.consumeRateLimit) return;
+    const rateLimit = await service.consumeRateLimit({
+      partnerId: identity.partnerId,
+      environment: identity.environment,
+    });
+    request.partnerRateLimit = rateLimit;
+    if (!rateLimit.allowed) {
+      throw new AppError({
+        code: 'PARTNER_RATE_LIMIT_EXCEEDED',
+        message: 'The Partner request rate limit has been exceeded',
+        statusCode: 429,
+        details: {
+          limit: rateLimit.limit,
+          remaining: rateLimit.remaining,
+          resetAt: rateLimit.resetAt.toISOString(),
+          source: rateLimit.source,
+        },
+      });
+    }
   };
 }
 

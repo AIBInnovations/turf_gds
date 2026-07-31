@@ -45,6 +45,20 @@ export interface PartnerAccessRepository {
     rateLimited: boolean;
     now: Date;
   }): Promise<void>;
+  setRateLimitTier?(
+    partnerId: ObjectId,
+    tier: PartnerDocument['rate_limit_tier'],
+    adminId: ObjectId,
+    correlationId: string,
+    now: Date,
+  ): Promise<boolean>;
+  consumeRateLimitWindow?(input: {
+    partnerId: string;
+    environment: PartnerEnvironment;
+    limit: number;
+    windowStartedAt: Date;
+    now: Date;
+  }): Promise<{ count: number }>;
   insertWebhook(endpoint: WebhookEndpointDocument): Promise<boolean>;
   verifyWebhook(id: ObjectId, now: Date): Promise<boolean>;
   replaceWebhookSubscriptions(
@@ -212,10 +226,93 @@ export function createPartnerAccessRepository(
             p95_latency_ms: Math.max(0, Math.round(input.latencyMs)),
           },
           $set: { updated_at: input.now },
-          $setOnInsert: { _id: new ObjectId() },
+          $setOnInsert: {
+            _id: new ObjectId(),
+            rate_limit_window_started_at: new Date(0),
+            rate_limit_window_count: 0,
+          },
         },
         { upsert: true },
       );
+    },
+    async setRateLimitTier(
+      partnerId,
+      tier,
+      adminId,
+      correlationId,
+      now,
+    ) {
+      const result = await partners().updateOne(
+        { _id: partnerId, status: { $in: ['PENDING', 'ACTIVE'] } },
+        {
+          $set: { rate_limit_tier: tier, updated_at: now },
+          $push: {
+            audit_history: boundedAudit({
+              event_type: 'RATE_LIMIT_TIER_CHANGED',
+              actor_type: 'ADMIN',
+              actor_id: adminId,
+              correlation_id: correlationId,
+              changes: { rate_limit_tier: tier },
+              occurred_at: now,
+            }),
+          },
+        },
+      );
+      return result.matchedCount > 0;
+    },
+    async consumeRateLimitWindow(input) {
+      const partnerId = new ObjectId(input.partnerId);
+      const usageDate = new Date(input.now);
+      usageDate.setUTCHours(0, 0, 0, 0);
+      const filter = {
+        partner_id: partnerId,
+        environment: input.environment,
+        usage_date: usageDate,
+      };
+      const update = [
+          {
+            $set: {
+              _id: { $ifNull: ['$_id', new ObjectId()] },
+              partner_id: partnerId,
+              environment: input.environment,
+              usage_date: usageDate,
+              request_count: { $ifNull: ['$request_count', 0] },
+              error_count: { $ifNull: ['$error_count', 0] },
+              rate_limited_count: { $ifNull: ['$rate_limited_count', 0] },
+              p95_latency_ms: { $ifNull: ['$p95_latency_ms', 0] },
+              rate_limit_window_count: {
+                $cond: [
+                  {
+                    $eq: [
+                      '$rate_limit_window_started_at',
+                      input.windowStartedAt,
+                    ],
+                  },
+                  { $add: [{ $ifNull: ['$rate_limit_window_count', 0] }, 1] },
+                  1,
+                ],
+              },
+              rate_limit_window_started_at: input.windowStartedAt,
+              updated_at: input.now,
+            },
+          },
+        ];
+      let value;
+      try {
+        value = await usage().findOneAndUpdate(
+          filter,
+          update,
+          { upsert: true, returnDocument: 'after' },
+        );
+      } catch (error) {
+        if (!isDuplicateKeyError(error)) throw error;
+        value = await usage().findOneAndUpdate(
+          filter,
+          update,
+          { returnDocument: 'after' },
+        );
+      }
+      return { count: value?.rate_limit_window_count ?? input.limit + 1 };
     },
     async insertWebhook(endpoint) {
       try {

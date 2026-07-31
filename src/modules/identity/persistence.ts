@@ -235,6 +235,8 @@ const usageValidator = documentValidator(
     'error_count',
     'rate_limited_count',
     'p95_latency_ms',
+    'rate_limit_window_started_at',
+    'rate_limit_window_count',
     'updated_at',
   ],
   {
@@ -245,6 +247,8 @@ const usageValidator = documentValidator(
     error_count: { bsonType: ['int', 'long'] },
     rate_limited_count: { bsonType: ['int', 'long'] },
     p95_latency_ms: { bsonType: ['int', 'long'] },
+    rate_limit_window_started_at: { bsonType: 'date' },
+    rate_limit_window_count: { bsonType: ['int', 'long'] },
     created_at: { bsonType: 'date' },
     updated_at: { bsonType: 'date' },
   },
@@ -413,6 +417,22 @@ async function ensureValidatedCollection(
 }
 
 export async function initializeIdentityPersistence(db: Db): Promise<void> {
+  if (
+    await db
+      .listCollections({ name: 'api_usage_daily' }, { nameOnly: true })
+      .hasNext()
+  ) {
+    await db.command({ collMod: 'api_usage_daily', validationLevel: 'off' });
+    await db.collection('api_usage_daily').updateMany(
+      { rate_limit_window_started_at: { $exists: false } },
+      {
+        $set: {
+          rate_limit_window_started_at: new Date(0),
+          rate_limit_window_count: 0,
+        },
+      },
+    );
+  }
   await migrateCommunicationsEmbeds(db);
   await ensureValidatedCollection(db, 'admin_users', adminValidator);
   await ensureValidatedCollection(db, 'venue_owners', ownerValidator);

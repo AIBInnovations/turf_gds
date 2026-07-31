@@ -90,7 +90,22 @@ Responses contain only Venue-specific totals and allocations, masked payout
 account details, payout status/reference, and booking-level Ledger allocation.
 Cross-Venue access is rejected.
 
-Settlement adjustments, Partner statements, Invoice services/routes, and
-communications delivery is handled by the dedicated Epic 07 worker. Invoice persistence uses
-`subtotal_minor`, `tax_amount_minor`, `total_minor`, and nullable
-`document_uri`.
+## Adjustments and B2B Invoices
+
+- `POST /settlements/:settlementId/adjustments` posts evidenced, balanced,
+  immutable Ledger corrections for a Booking already allocated to a completed
+  Settlement. The old Settlement remains unchanged and a later Settlement
+  consumes the new entries.
+- `POST /settlements/:settlementId/invoices` creates the Settlement's
+  idempotent structured TAX_INVOICE.
+- `GET /invoices` and `GET /invoices/:invoiceId` provide Admin reads.
+- `POST /invoices/:invoiceId/issue` and `/void` enforce DRAFT/ISSUED state
+  transitions without deleting accounting history.
+
+Invoice subtotal is Settlement commission, tax is Settlement tax, and total is
+their sum. `document_uri` remains null because file rendering and downloadable
+documents are out of scope.
+
+Partner-scoped Settlement and Invoice reads are available under
+`/api/v1/partners/me` with `finance:read`. Communications delivery remains
+handled by the dedicated Epic 07 worker.

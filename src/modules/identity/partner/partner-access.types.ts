@@ -42,6 +42,8 @@ export interface ApiUsageDailyDocument {
   error_count: number;
   rate_limited_count: number;
   p95_latency_ms: number;
+  rate_limit_window_started_at: Date;
+  rate_limit_window_count: number;
   updated_at: Date;
 }
 

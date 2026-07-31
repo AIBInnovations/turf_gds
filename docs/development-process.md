@@ -95,13 +95,14 @@ another owner's venue data.
 - Ledger: complete as of 2026-07-30 for balanced Booking journals,
   residual-safe partial reversals, evidenced adjustments, append-only service
   boundaries, strict persistence, and conditional one-time Settlement/Payout
-  allocation. Financial Close adjustment orchestration remains deferred.
+  allocation. Financial Close adjustment orchestration was completed on
+  2026-07-31.
 - Venue Owner / Financial Close: complete as of 2026-07-30 for Settlement and
   Reconciliation, Admin payout-account verification, idempotent Venue payout
   creation/manual results, transactional Ledger/Outbox linkage, owner finance
   history, permission enforcement, masking, filters, pagination, and
-  cross-owner isolation. Adjustments, Partner statements, and Invoice
-  workflows remain deferred.
+  cross-owner isolation. Adjustments, Partner statements, and structured
+  Invoice workflows were completed on 2026-07-31.
 - Shared Communications / Epic 07: complete as of 2026-07-30. Transactional
   event routing, subscription snapshots, dedicated worker leases and recovery,
   bounded Partner webhook attempts, SSRF-safe signed delivery, permission-based
@@ -112,6 +113,22 @@ another owner's venue data.
   exports, cross-module dispute inspection/notes, inventory-health monitoring,
   strict role policy, optimistic concurrency, and Admin audit context.
 - Partner actor phase begins after the Admin regression gate passes.
+
+## Remaining Backlog Completion (2026-07-31)
+
+- Partner availability search now composes active environment-matched Venues,
+  Courts, effective Contracts, Pricing Rules, and fixed/open-time Slot state.
+- Partner usage, booking, Settlement, allocation, and Invoice reporting is
+  exposed through HMAC-authenticated, scope-limited reads.
+- Redis-first Partner rate limiting uses configurable tier quotas and an atomic
+  `ApiUsageDaily` MongoDB fallback.
+- Financial Close supports immutable evidenced post-settlement Ledger
+  adjustments and structured B2B TAX_INVOICE create/issue/void workflows.
+- Booking and Slot audits retain the latest 100 embedded events and dual-write
+  a two-year `AuditEvent` archive transactionally. Existing surviving embedded
+  events are backfilled on initialization.
+- The production logger redacts authorization, Partner signing, password,
+  banking, card, KYC, and private-key fields.
 
 ## Consolidated Verification Record
 

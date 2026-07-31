@@ -119,6 +119,47 @@ const partnerAccessRoutes: FastifyPluginAsync<PartnerAccessRoutesOptions> =
       },
     );
 
+    fastify.patch<{
+      Params: { partnerId: string };
+      Body: { tier: 'STARTER' | 'STANDARD' | 'ENTERPRISE' };
+    }>(
+      '/admin/:partnerId/rate-limit-tier',
+      {
+        preHandler: adminAuth,
+        schema: {
+          params: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['partnerId'],
+            properties: {
+              partnerId: {
+                type: 'string',
+                pattern: '^[a-fA-F0-9]{24}$',
+              },
+            },
+          },
+          body: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['tier'],
+            properties: {
+              tier: { enum: ['STARTER', 'STANDARD', 'ENTERPRISE'] },
+            },
+          },
+        },
+      },
+      async (request, reply) => {
+        const admin = requireAdminRole(request);
+        await options.service.setRateLimitTier({
+          partnerId: request.params.partnerId,
+          adminId: admin.adminId,
+          correlationId: request.id,
+          tier: request.body.tier,
+        });
+        return reply.status(204).send();
+      },
+    );
+
     fastify.post<{ Params: { partnerId: string } }>(
       '/admin/:partnerId/approve-production',
       { preHandler: adminAuth },

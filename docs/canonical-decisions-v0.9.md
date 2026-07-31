@@ -125,3 +125,18 @@ For the Venue Owner phase, the working sequence is:
 No module should be left as an untested skeleton while development advances to
 the next module. The Admin phase follows the same completion gate, followed by
 the Partner phase.
+
+## 2026-07-31 Implementation Amendment
+
+The completed backlog requires two additive persistence changes:
+
+- `ApiUsageDaily.rate_limit_window_started_at` and
+  `rate_limit_window_count` support the atomic MongoDB fallback for temporary
+  Redis rate-limit counters.
+- `AuditEvent` is an append-only two-year Booking/Slot audit archive. Recent
+  histories remain capped and embedded; state changes dual-write archive
+  events transactionally, and `retain_until` has a TTL index.
+
+The local validators and migrations implement this amendment. The matching
+authoritative Eraser update remains an explicit release gate until external
+workspace write permission is approved.

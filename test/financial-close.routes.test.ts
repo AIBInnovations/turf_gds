@@ -65,6 +65,33 @@ function fixture(role: 'ADMIN' | 'OPS' | 'SUPPORT' = 'ADMIN') {
     async getOwnerPayout() {
       throw new Error('not used');
     },
+    async recordAdjustment(input) {
+      calls.recordAdjustment = input;
+      return { settlementId, entryIds: ['entry-id'] };
+    },
+    async createInvoice(input) {
+      calls.createInvoice = input;
+      return { invoiceId: settlementId, status: 'DRAFT' };
+    },
+    async listInvoices(input) {
+      calls.listInvoices = input;
+      return {
+        items: [],
+        pagination: { page: 1, limit: 20, total: 0, totalPages: 0 },
+      };
+    },
+    async getInvoice(input) {
+      calls.getInvoice = input;
+      return { invoiceId: input, status: 'DRAFT' };
+    },
+    async issueInvoice(input) {
+      calls.issueInvoice = input;
+      return { invoiceId: input.invoiceId, status: 'ISSUED' };
+    },
+    async voidInvoice(input) {
+      calls.voidInvoice = input;
+      return { invoiceId: input.invoiceId, status: 'VOID' };
+    },
   } satisfies FinancialCloseService;
   const adminAuthService = {
     async authenticate() {
@@ -77,6 +104,59 @@ function fixture(role: 'ADMIN' | 'OPS' | 'SUPPORT' = 'ADMIN') {
   } as unknown as AdminAuthService;
   return { calls, service, adminAuthService };
 }
+
+test('Financial Close exposes adjustment and Invoice workflows to ADMIN only', async () => {
+  const value = fixture();
+  const app = await appFor(value);
+  const headers = { authorization: 'Bearer admin-token' };
+  const adjusted = await app.inject({
+    method: 'POST',
+    url: `/settlements/${settlementId}/adjustments`,
+    headers,
+    payload: {
+      bookingId: '687f00000000000000000a04',
+      lines: [
+        { direction: 'DEBIT', amountMinor: 100, component: 'GROSS' },
+        { direction: 'CREDIT', amountMinor: 100, component: 'VENUE_NET' },
+      ],
+      reason: 'Post-settlement correction',
+      evidenceUri: 'https://evidence.example/adjustment/1',
+    },
+  });
+  assert.equal(adjusted.statusCode, 201);
+  assert.equal(
+    (value.calls.recordAdjustment as { adminId: string }).adminId,
+    adminId,
+  );
+
+  const created = await app.inject({
+    method: 'POST',
+    url: `/settlements/${settlementId}/invoices`,
+    headers,
+  });
+  assert.equal(created.statusCode, 201);
+  const issued = await app.inject({
+    method: 'POST',
+    url: `/invoices/${settlementId}/issue`,
+    headers,
+  });
+  assert.equal(issued.statusCode, 200);
+  const voided = await app.inject({
+    method: 'POST',
+    url: `/invoices/${settlementId}/void`,
+    headers,
+  });
+  assert.equal(voided.statusCode, 200);
+
+  const ops = fixture('OPS');
+  const opsApp = await appFor(ops);
+  const denied = await opsApp.inject({
+    method: 'POST',
+    url: `/settlements/${settlementId}/invoices`,
+    headers,
+  });
+  assert.equal(denied.statusCode, 403);
+});
 
 async function appFor(value: ReturnType<typeof fixture>) {
   const app = Fastify({ logger: false });

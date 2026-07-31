@@ -19,6 +19,8 @@ import ownerAccessRoutes from '../modules/identity/owner/owner-access.routes.js'
 import type { OwnerAccessService } from '../modules/identity/owner/owner-access.service.js';
 import partnerAccessRoutes from '../modules/identity/partner/partner-access.routes.js';
 import type { PartnerAccessService } from '../modules/identity/partner/partner-access.service.js';
+import partnerPortalRoutes from '../modules/identity/partner/partner-portal.routes.js';
+import type { PartnerPortalService } from '../modules/identity/partner/partner-portal.service.js';
 import adminAuthRoutes from '../modules/identity/platform/auth.routes.js';
 import type { AdminAuthService } from '../modules/identity/platform/auth.service.js';
 import courtOwnerRoutes from '../modules/venue/courts/court-owner.routes.js';
@@ -44,6 +46,7 @@ export interface ApiV1RoutesOptions {
   adminOnboardingService: AdminOnboardingService;
   kycService: KycService;
   partnerAccessService: PartnerAccessService;
+  partnerPortalService: PartnerPortalService;
   venueOwnerService: VenueOwnerService;
   courtOwnerService: CourtOwnerService;
   inventoryService: InventoryService;
@@ -153,6 +156,10 @@ const apiV1Routes: FastifyPluginAsync<ApiV1RoutesOptions> = async (
     prefix: '/partners',
     service: options.partnerAccessService,
     adminAuthService: options.adminAuthService,
+  });
+  await fastify.register(partnerPortalRoutes, {
+    service: options.partnerPortalService,
+    partnerAccessService: options.partnerAccessService,
   });
   await fastify.register(adminCommunicationsRoutes, {
     prefix: '/admin/communications',

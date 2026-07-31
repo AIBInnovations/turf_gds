@@ -12,12 +12,14 @@ import { initializeIdentityPersistence } from '../src/modules/identity/persisten
 import { initializeLedgerPersistence } from '../src/modules/ledger/ledger.persistence.js';
 import { initializeInventoryPersistence } from '../src/modules/venue/inventory/inventory.persistence.js';
 import { initializeVenuePersistence } from '../src/modules/venue/profile/venue.persistence.js';
+import { initializeAuditPersistence } from '../src/shared/audit/audit.persistence.js';
 import { MongoDatabaseConnection } from '../src/shared/database/database-connection.js';
 
 const expectedCollections = [
   'admin_users',
   'api_idempotency_records',
   'api_usage_daily',
+  'audit_events',
   'booking_cancellations',
   'bookings',
   'courts',
@@ -73,6 +75,7 @@ test('all authoritative ERD collections initialize with strict validators and no
     await initializeLedgerPersistence(database.db);
     await initializeFinancialClosePersistence(database.db);
     await initializeOutboxPersistence(database.db);
+    await initializeAuditPersistence(database.db);
 
     const names = (
       await database.db.listCollections({}, { nameOnly: true }).toArray()
@@ -87,6 +90,7 @@ test('all authoritative ERD collections initialize with strict validators and no
       'payouts',
       'invoices',
       'outbox_events',
+      'audit_events',
     ]) {
       await assert.rejects(
         database.db.collection(collection).insertOne({ invalid: true }),
@@ -105,7 +109,9 @@ test('all authoritative ERD collections initialize with strict validators and no
       ['payouts', 'uq_payout_idempotency'],
       ['payouts', 'uq_payout_settlement_venue'],
       ['invoices', 'uq_invoice_number'],
+      ['invoices', 'uq_invoice_settlement_type'],
       ['outbox_events', 'uq_outbox_event_identity'],
+      ['audit_events', 'uq_audit_event_identity'],
     ];
     for (const [collection, indexName] of requiredIndexes) {
       const indexes = await database.db.collection(collection).indexes();

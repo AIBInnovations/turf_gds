@@ -10,6 +10,11 @@ import {
   verifyHmacSignature,
 } from '../../../shared/auth/partner-signature.js';
 import { AppError } from '../../../shared/errors/app-error.js';
+import type {
+  PartnerRateLimiter,
+  RateLimitDecision,
+  RateLimitTier,
+} from '../../../shared/rate-limit/partner-rate-limiter.js';
 import {
   EXTERNAL_EVENT_TYPES,
   type ExternalEventType,
@@ -38,6 +43,12 @@ export interface PartnerAccessService {
     adminId: string;
     status: 'PENDING' | 'PASSED' | 'FAILED';
     correlationId: string;
+  }): Promise<void>;
+  setRateLimitTier(input: {
+    partnerId: string;
+    adminId: string;
+    correlationId: string;
+    tier: RateLimitTier;
   }): Promise<void>;
   issueKey(input: {
     partnerId: string;
@@ -73,6 +84,10 @@ export interface PartnerAccessService {
     latencyMs: number;
     rateLimited?: boolean;
   }): Promise<void>;
+  consumeRateLimit?(input: {
+    partnerId: string;
+    environment: PartnerEnvironment;
+  }): Promise<RateLimitDecision>;
   registerWebhook(input: {
     partnerId: string;
     environment: PartnerEnvironment;
@@ -102,6 +117,7 @@ export function createPartnerAccessService(input: {
   repository: PartnerAccessRepository;
   kycService: KycService;
   authConfig: AppConfig['auth'];
+  rateLimiter?: PartnerRateLimiter;
   now?: () => Date;
 }): PartnerAccessService {
   const now = input.now ?? (() => new Date());
@@ -332,6 +348,47 @@ export function createPartnerAccessService(input: {
     };
   }
 
+  async function consumeRateLimit(
+    values: {
+      partnerId: string;
+      environment: PartnerEnvironment;
+    },
+  ): Promise<RateLimitDecision> {
+    const partner = await input.repository.findPartner(
+      toObjectId(values.partnerId),
+    );
+    if (!partner) throw invalidPartnerAuthentication();
+    if (!input.rateLimiter) {
+      return {
+        allowed: true,
+        limit: Number.MAX_SAFE_INTEGER,
+        remaining: Number.MAX_SAFE_INTEGER,
+        resetAt: new Date(now().getTime() + 60_000),
+        source: 'MONGODB',
+      };
+    }
+    return input.rateLimiter.consume({
+      partnerId: values.partnerId,
+      environment: values.environment,
+      tier: partner.rate_limit_tier,
+      now: now(),
+    });
+  }
+
+  async function setRateLimitTier(
+    values: Parameters<PartnerAccessService['setRateLimitTier']>[0],
+  ): Promise<void> {
+    if (!input.repository.setRateLimitTier || !(await input.repository.setRateLimitTier(
+      toObjectId(values.partnerId),
+      values.tier,
+      toObjectId(values.adminId),
+      values.correlationId,
+      now(),
+    ))) {
+      throw transitionNotAllowed();
+    }
+  }
+
   async function revokeKey(keyId: string): Promise<void> {
     if (!(await input.repository.revokeApiKey(toObjectId(keyId), now()))) {
       throw transitionNotAllowed();
@@ -450,10 +507,12 @@ export function createPartnerAccessService(input: {
     approveSandbox,
     approveProduction,
     recordIntegrationReview,
+    setRateLimitTier,
     issueKey,
     authenticateRequest,
     revokeKey,
     recordApiUsage,
+    consumeRateLimit,
     registerWebhook,
     replaceWebhookSubscriptions,
     verifyWebhook,

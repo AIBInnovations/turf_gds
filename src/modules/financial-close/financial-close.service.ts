@@ -4,6 +4,7 @@ import type { OutboxRepository } from '../../shared/communications/outbox.reposi
 import type { DatabaseConnection } from '../../shared/database/database-connection.js';
 import { AppError } from '../../shared/errors/app-error.js';
 import type { OwnerAccessService } from '../identity/owner/owner-access.service.js';
+import type { BookingDocument } from '../booking/booking.types.js';
 import type {
   LedgerEntryDocument,
 } from '../ledger/ledger.repository.js';
@@ -11,6 +12,7 @@ import type { LedgerService } from '../ledger/ledger.service.js';
 import type { FinancialCloseRepository } from './financial-close.repository.js';
 import type {
   FinancialEnvironment,
+  InvoiceDocument,
   PayoutDocument,
   PayoutStatus,
   ReconciliationDocument,
@@ -94,6 +96,41 @@ export interface FinancialCloseService {
   getOwnerPayout(input: OwnerScope & {
     payoutId: string;
   }): Promise<Record<string, unknown>>;
+  recordAdjustment?(input: AdjustmentInput): Promise<Record<string, unknown>>;
+  createInvoice?(input: MutationInput): Promise<Record<string, unknown>>;
+  listInvoices?(input: {
+    settlementId?: string;
+    environment?: FinancialEnvironment;
+    status?: InvoiceDocument['status'];
+    page?: number;
+    limit?: number;
+  }): Promise<PageView>;
+  getInvoice?(invoiceId: string): Promise<Record<string, unknown>>;
+  issueInvoice?(input: {
+    adminId: string;
+    invoiceId: string;
+    correlationId: string;
+  }): Promise<Record<string, unknown>>;
+  voidInvoice?(input: {
+    adminId: string;
+    invoiceId: string;
+    correlationId: string;
+  }): Promise<Record<string, unknown>>;
+}
+
+interface AdjustmentInput {
+  adminId: string;
+  settlementId: string;
+  bookingId: string;
+  lines: Array<{
+    direction: 'DEBIT' | 'CREDIT';
+    amountMinor: number;
+    component: 'GROSS' | 'COMMISSION' | 'TAX' | 'VENUE_NET';
+  }>;
+  reason: string;
+  evidenceUri: string;
+  effectiveAt?: string;
+  correlationId: string;
 }
 
 interface MutationInput {
@@ -879,6 +916,196 @@ export function createFinancialCloseService(input: {
       if (!payout) throw notFound('PAYOUT_NOT_FOUND');
       return ownerPayoutView(payout, true);
     },
+
+    async recordAdjustment(values) {
+      const settlementId = oid(values.settlementId);
+      const bookingId = oid(values.bookingId);
+      const timestamp = values.effectiveAt
+        ? instant(values.effectiveAt, 'effectiveAt')
+        : now();
+      let entries: LedgerEntryDocument[] = [];
+      await input.database.withTransaction(async ({ session }) => {
+        const settlement = await input.repository.findSettlement(
+          settlementId,
+          session,
+        );
+        if (!settlement || settlement.status !== 'COMPLETED') {
+          throw conflict(
+            'SETTLEMENT_NOT_COMPLETED',
+            'Adjustments require a completed Settlement',
+          );
+        }
+        if (
+          !settlement.completed_at ||
+          timestamp < settlement.completed_at ||
+          timestamp > now()
+        ) {
+          throw invalid(
+            'INVALID_ADJUSTMENT_EFFECTIVE_AT',
+            'Adjustment time must be between Settlement completion and now',
+          );
+        }
+        const booking = await input.database.db.collection<BookingDocument>(
+          'bookings',
+        ).findOne(
+          {
+            _id: bookingId,
+            partner_id: settlement.partner_id,
+            environment: settlement.environment,
+          },
+          { session },
+        );
+        if (!booking) throw notFound('BOOKING_NOT_FOUND');
+        const allocated = await input.database.db.collection<LedgerEntryDocument>(
+          'ledger_entries',
+        ).findOne(
+          {
+            booking_id: bookingId,
+            settlement_id: settlementId,
+            partner_id: settlement.partner_id,
+            environment: settlement.environment,
+          },
+          { session },
+        );
+        if (!allocated) {
+          throw conflict(
+            'BOOKING_NOT_IN_SETTLEMENT',
+            'Booking is not allocated to the requested Settlement',
+          );
+        }
+        entries = await input.ledgerService.postAdjustment({
+          booking: {
+            bookingId: booking._id,
+            partnerId: booking.partner_id,
+            venueId: booking.venue_id,
+            contractId: booking.contract_id,
+            environment: booking.environment,
+          },
+          lines: values.lines,
+          reason: values.reason,
+          evidenceUri: values.evidenceUri,
+          actorId: oid(values.adminId),
+          effectiveAt: timestamp,
+          correlationId: values.correlationId,
+          session,
+        });
+      });
+      return {
+        settlementId: values.settlementId,
+        bookingId: values.bookingId,
+        entryIds: entries.map(({ _id }) => _id.toHexString()),
+        effectiveAt: timestamp.toISOString(),
+      };
+    },
+
+    async createInvoice(values) {
+      const settlementId = oid(values.settlementId);
+      let invoice: InvoiceDocument | undefined;
+      try {
+        await input.database.withTransaction(async ({ session }) => {
+          const collection = input.database.db.collection<InvoiceDocument>(
+            'invoices',
+          );
+          const existing = await collection.findOne(
+            { settlement_id: settlementId, type: 'TAX_INVOICE' },
+            { session },
+          );
+          if (existing) {
+            invoice = existing;
+            return;
+          }
+          const settlement = await input.repository.findSettlement(
+            settlementId,
+            session,
+          );
+          if (!settlement || settlement.status !== 'COMPLETED') {
+            throw conflict(
+              'SETTLEMENT_NOT_COMPLETED',
+              'Invoices require a completed Settlement',
+            );
+          }
+          const createdAt = now();
+          const id = new ObjectId();
+          invoice = {
+            _id: id,
+            settlement_id: settlement._id,
+            environment: settlement.environment,
+            invoice_number: invoiceNumber(
+              id,
+              settlement.environment,
+              createdAt,
+            ),
+            type: 'TAX_INVOICE',
+            subtotal_minor: settlement.commission_amount_minor,
+            tax_amount_minor: settlement.tax_amount_minor,
+            total_minor:
+              settlement.commission_amount_minor + settlement.tax_amount_minor,
+            currency: 'INR',
+            status: 'DRAFT',
+            document_uri: null,
+            issued_at: null,
+            created_at: createdAt,
+          };
+          await collection.insertOne(invoice, { session });
+        });
+      } catch (error) {
+        if (!duplicate(error)) throw error;
+        invoice = await input.database.db.collection<InvoiceDocument>('invoices')
+          .findOne({ settlement_id: settlementId, type: 'TAX_INVOICE' }) ??
+          undefined;
+      }
+      if (!invoice) throw new Error('Invoice transaction returned no result');
+      return invoiceView(invoice);
+    },
+
+    async listInvoices(values) {
+      const pagination = page(values.page, values.limit);
+      const filter = {
+        ...(values.settlementId
+          ? { settlement_id: oid(values.settlementId) }
+          : {}),
+        ...(values.environment ? { environment: values.environment } : {}),
+        ...(values.status ? { status: values.status } : {}),
+      };
+      const collection = input.database.db.collection<InvoiceDocument>(
+        'invoices',
+      );
+      const [items, total] = await Promise.all([
+        collection.find(filter).sort({ created_at: -1, _id: -1 })
+          .skip((pagination.page - 1) * pagination.limit)
+          .limit(pagination.limit).toArray(),
+        collection.countDocuments(filter),
+      ]);
+      return pageView(items.map(invoiceView), total, pagination);
+    },
+
+    async getInvoice(invoiceId) {
+      const invoice = await input.database.db.collection<InvoiceDocument>(
+        'invoices',
+      ).findOne({ _id: oid(invoiceId) });
+      if (!invoice) throw notFound('INVOICE_NOT_FOUND');
+      return invoiceView(invoice);
+    },
+
+    async issueInvoice(values) {
+      return transitionInvoice(
+        input.database,
+        oid(values.invoiceId),
+        ['DRAFT'],
+        'ISSUED',
+        now(),
+      );
+    },
+
+    async voidInvoice(values) {
+      return transitionInvoice(
+        input.database,
+        oid(values.invoiceId),
+        ['DRAFT', 'ISSUED'],
+        'VOID',
+        now(),
+      );
+    },
   };
 
   async function hydrateReversalOriginals(
@@ -1225,6 +1452,56 @@ function payoutView(value: PayoutDocument): Record<string, unknown> {
   };
 }
 
+function invoiceView(value: InvoiceDocument): Record<string, unknown> {
+  return {
+    invoiceId: value._id.toHexString(),
+    settlementId: value.settlement_id.toHexString(),
+    environment: value.environment,
+    invoiceNumber: value.invoice_number,
+    type: value.type,
+    subtotalMinor: value.subtotal_minor,
+    taxAmountMinor: value.tax_amount_minor,
+    totalMinor: value.total_minor,
+    currency: value.currency,
+    status: value.status,
+    documentUri: value.document_uri,
+    issuedAt: value.issued_at?.toISOString() ?? null,
+    createdAt: value.created_at.toISOString(),
+  };
+}
+
+function invoiceNumber(
+  id: ObjectId,
+  environment: FinancialEnvironment,
+  createdAt: Date,
+): string {
+  const date = createdAt.toISOString().slice(0, 10).replaceAll('-', '');
+  const suffix = id.toHexString().slice(-12).toUpperCase();
+  return `GDS-${environment === 'SANDBOX' ? 'SBX' : 'PRD'}-${date}-${suffix}`;
+}
+
+async function transitionInvoice(
+  database: DatabaseConnection,
+  id: ObjectId,
+  from: InvoiceDocument['status'][],
+  to: 'ISSUED' | 'VOID',
+  now: Date,
+): Promise<Record<string, unknown>> {
+  const value = await database.db.collection<InvoiceDocument>('invoices')
+    .findOneAndUpdate(
+      { _id: id, status: { $in: from } },
+      {
+        $set: {
+          status: to,
+          ...(to === 'ISSUED' ? { issued_at: now } : {}),
+        },
+      },
+      { returnDocument: 'after' },
+    );
+  if (!value) throw stateConflict();
+  return invoiceView(value);
+}
+
 function reconciliationView(
   settlement: SettlementDocument,
   reconciliation: ReconciliationDocument,
@@ -1349,7 +1626,11 @@ function notFound(code: string): AppError {
     code,
     message: code.startsWith('PAYOUT')
       ? 'Payout was not found'
-      : 'Settlement was not found',
+      : code.startsWith('INVOICE')
+        ? 'Invoice was not found'
+        : code.startsWith('BOOKING')
+          ? 'Booking was not found'
+          : 'Settlement was not found',
     statusCode: 404,
   });
 }

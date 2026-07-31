@@ -228,9 +228,9 @@ Responsibilities:
   account data and booking-level allocations.
 - Insert Financial Close Outbox events transactionally.
 
-Settlement adjustments, Partner statements, and Invoice routes/services remain
-deferred. Communications consumes the transactional events through its
-dedicated worker.
+Settlement adjustments, Partner statements, and structured Invoice
+routes/services are implemented. Downloadable Invoice files remain deferred.
+Communications consumes transactional events through its dedicated worker.
 
 ### 7. Admin Orchestration
 

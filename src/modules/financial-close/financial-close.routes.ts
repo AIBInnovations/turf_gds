@@ -286,6 +286,170 @@ const financialCloseRoutes: FastifyPluginAsync<
       });
     },
   );
+
+  fastify.post<{
+    Params: { settlementId: string };
+    Body: {
+      bookingId: string;
+      lines: Array<{
+        direction: 'DEBIT' | 'CREDIT';
+        amountMinor: number;
+        component: 'GROSS' | 'COMMISSION' | 'TAX' | 'VENUE_NET';
+      }>;
+      reason: string;
+      evidenceUri: string;
+      effectiveAt?: string;
+    };
+  }>(
+    '/settlements/:settlementId/adjustments',
+    {
+      preHandler: authenticate,
+      schema: {
+        params: settlementParams,
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['bookingId', 'lines', 'reason', 'evidenceUri'],
+          properties: {
+            bookingId: objectId,
+            lines: {
+              type: 'array',
+              minItems: 2,
+              maxItems: 20,
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['direction', 'amountMinor', 'component'],
+                properties: {
+                  direction: { enum: ['DEBIT', 'CREDIT'] },
+                  amountMinor: {
+                    type: 'integer',
+                    minimum: 1,
+                    maximum: Number.MAX_SAFE_INTEGER,
+                  },
+                  component: {
+                    enum: ['GROSS', 'COMMISSION', 'TAX', 'VENUE_NET'],
+                  },
+                },
+              },
+            },
+            reason: { type: 'string', minLength: 1, maxLength: 1_000 },
+            evidenceUri: {
+              type: 'string',
+              format: 'uri',
+              minLength: 1,
+              maxLength: 2_048,
+            },
+            effectiveAt: { type: 'string', format: 'date-time' },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const admin = requireFinancialAdmin(request);
+      return reply.status(201).send(await options.service.recordAdjustment!({
+        adminId: admin.adminId,
+        settlementId: request.params.settlementId,
+        correlationId: request.id,
+        ...request.body,
+      }));
+    },
+  );
+
+  fastify.post<{ Params: { settlementId: string } }>(
+    '/settlements/:settlementId/invoices',
+    {
+      preHandler: authenticate,
+      schema: { params: settlementParams },
+    },
+    async (request, reply) => {
+      const admin = requireFinancialAdmin(request);
+      return reply.status(201).send(await options.service.createInvoice!({
+        adminId: admin.adminId,
+        settlementId: request.params.settlementId,
+        correlationId: request.id,
+      }));
+    },
+  );
+
+  fastify.get<{
+    Querystring: {
+      settlementId?: string;
+      environment?: 'SANDBOX' | 'PRODUCTION';
+      status?: 'DRAFT' | 'ISSUED' | 'VOID';
+      page?: number;
+      limit?: number;
+    };
+  }>(
+    '/invoices',
+    {
+      preHandler: authenticate,
+      schema: {
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            settlementId: objectId,
+            environment: { enum: ['SANDBOX', 'PRODUCTION'] },
+            status: { enum: ['DRAFT', 'ISSUED', 'VOID'] },
+            page: { type: 'integer', minimum: 1 },
+            limit: { type: 'integer', minimum: 1, maximum: 100 },
+          },
+        },
+      },
+    },
+    async (request) => {
+      requireAdminContext(request);
+      return options.service.listInvoices!(request.query);
+    },
+  );
+
+  fastify.get<{ Params: { invoiceId: string } }>(
+    '/invoices/:invoiceId',
+    {
+      preHandler: authenticate,
+      schema: {
+        params: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['invoiceId'],
+          properties: { invoiceId: objectId },
+        },
+      },
+    },
+    async (request) => {
+      requireAdminContext(request);
+      return options.service.getInvoice!(request.params.invoiceId);
+    },
+  );
+
+  for (const action of ['issue', 'void'] as const) {
+    fastify.post<{ Params: { invoiceId: string } }>(
+      `/invoices/:invoiceId/${action}`,
+      {
+        preHandler: authenticate,
+        schema: {
+          params: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['invoiceId'],
+            properties: { invoiceId: objectId },
+          },
+        },
+      },
+      async (request) => {
+        const admin = requireFinancialAdmin(request);
+        const input = {
+          adminId: admin.adminId,
+          invoiceId: request.params.invoiceId,
+          correlationId: request.id,
+        };
+        return action === 'issue'
+          ? options.service.issueInvoice!(input)
+          : options.service.voidInvoice!(input);
+      },
+    );
+  }
 };
 
 function requireFinancialAdmin(request: FastifyRequest): { adminId: string } {

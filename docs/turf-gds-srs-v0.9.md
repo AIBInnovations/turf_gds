@@ -293,10 +293,11 @@ Embedded notifications, audit histories, webhook deliveries, and delivery attemp
 - No sandbox-production data mixing.
 - No raw bank account or card data stored in MongoDB.
 
-The Venue Owner Financial Close completion slice implements Settlement,
-Reconciliation, payout-account verification, Payout, and owner finance
-history. Settlement adjustments (`US-05.04`), Partner statements
-(`US-05.05`), and Invoice workflows (`US-06.04`/`US-06.05`) are deferred.
+The Financial Close implementation includes Settlement, Reconciliation,
+payout-account verification, Payout, owner finance history, evidenced
+post-settlement adjustments (`US-05.04`), Partner statements (`US-05.05`),
+and structured Invoice workflows (`US-06.04`/`US-06.05`). Downloadable
+Invoice rendering remains deferred.
 Communications delivery is implemented by the dedicated Epic 07 worker.
 Invoice persistence nevertheless uses
 `subtotal_minor`, `tax_amount_minor`, `total_minor`, and nullable

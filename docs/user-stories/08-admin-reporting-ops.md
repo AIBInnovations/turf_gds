@@ -2,7 +2,8 @@
 
 Implementation status: complete for v1. Admin owns no collection; mutations
 delegate to the owning module and cross-module reporting remains read-only.
-CSV exports are synchronous and bounded. Invoice reporting remains deferred.
+CSV exports are synchronous and bounded. Structured Invoice reporting is
+available through Financial Close; downloadable documents remain deferred.
 
 ## US-08.01 - Platform Admin Login
 

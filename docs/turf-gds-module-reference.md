@@ -289,7 +289,7 @@ Responsibilities:
   and record manual results.
 - Expose owner-scoped Settlement and Payout history with masked account and
   booking-allocation details.
-- Maintain Invoice persistence; Invoice workflows are deferred.
+- Maintain structured Invoice persistence and create/issue/void workflows.
 
 Rules:
 
@@ -318,8 +318,8 @@ Public capabilities:
 - `listOwnerSettlements()`
 - `listOwnerPayouts()`
 
-Deferred capabilities: settlement adjustment, Partner statements, and Invoice
-service/routes.
+Settlement adjustments, Partner statements, and structured Invoice
+service/routes are implemented. Downloadable Invoice files remain deferred.
 
 ### 4.7 `admin`
 

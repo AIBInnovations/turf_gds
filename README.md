@@ -42,6 +42,7 @@ probes do not exhaust Cloudinary Admin API limits.
 npm run dev
 npm run typecheck
 npm test
+npm run test:load
 npm run build
 npm start
 npm run worker:dev
@@ -116,3 +117,25 @@ are documented in `docs/communications-api.md`.
 The completed Epic 08 Venue/Court operations, Ledger-backed reports and CSV
 exports, dispute view, and inventory-health API are documented in
 `docs/admin-api.md`.
+
+## Partner completion APIs
+
+Partner requests use API-key/HMAC authentication and are rate-limited per
+Partner and environment. Redis is the primary counter; MongoDB provides an
+atomic fallback. Default per-minute tiers are STARTER 100, STANDARD 300, and
+ENTERPRISE 1000.
+
+- `GET /api/v1/availability` (`availability:read`)
+- `GET /api/v1/partners/me/usage` (`reports:read`)
+- `GET /api/v1/partners/me/bookings` (`reports:read`)
+- `GET /api/v1/partners/me/settlements[/:settlementId]` (`finance:read`)
+- `GET /api/v1/partners/me/invoices[/:invoiceId]` (`finance:read`)
+
+Financial Close also supports Admin-only post-settlement Ledger adjustments
+and structured B2B Invoice creation, issue, and void workflows. Invoice
+document rendering remains out of scope.
+
+The load harness defaults to 50 concurrent clients. Configure
+`LOAD_BASE_URL`, `LOAD_PARTNER_API_KEY`, `LOAD_PARTNER_SIGNING_SECRET`, and
+`LOAD_PATH`; set `LOAD_P95_THRESHOLD_MS=300` for availability or `1000` for a
+prepared confirmation workload.

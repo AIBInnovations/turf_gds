@@ -13,6 +13,25 @@ interface ErrorBody {
 }
 
 const errorHandlerPlugin: FastifyPluginAsync = async (fastify) => {
+  fastify.addHook('onSend', async (request, reply) => {
+    const rateLimit = request.partnerRateLimit;
+    if (!rateLimit) return;
+    void reply.header('X-RateLimit-Limit', rateLimit.limit);
+    void reply.header('X-RateLimit-Remaining', rateLimit.remaining);
+    void reply.header(
+      'X-RateLimit-Reset',
+      Math.ceil(rateLimit.resetAt.getTime() / 1_000),
+    );
+    if (!rateLimit.allowed) {
+      void reply.header(
+        'Retry-After',
+        Math.max(
+          1,
+          Math.ceil((rateLimit.resetAt.getTime() - Date.now()) / 1_000),
+        ),
+      );
+    }
+  });
   fastify.setNotFoundHandler((request, reply) => {
     void reply.status(404).send({
       error: {

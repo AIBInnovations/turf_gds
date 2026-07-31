@@ -26,6 +26,11 @@ export interface AppConfig {
     serverSelectionTimeoutMs: number;
     maxPoolSize: number;
   };
+  redis?: {
+    url?: string;
+    connectTimeoutMs: number;
+    keyPrefix: string;
+  };
   auth: {
     sessionTtlHours: number;
     maxSessions: number;
@@ -182,6 +187,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
         1,
         1_000,
       ),
+    },
+    redis: {
+      ...(env.REDIS_URL?.trim() ? { url: env.REDIS_URL.trim() } : {}),
+      connectTimeoutMs: readInteger(
+        'REDIS_CONNECT_TIMEOUT_MS',
+        env.REDIS_CONNECT_TIMEOUT_MS,
+        1_000,
+        100,
+        30_000,
+      ),
+      keyPrefix: env.REDIS_KEY_PREFIX?.trim() || 'turf-gds',
     },
     auth: {
       sessionTtlHours: readInteger(

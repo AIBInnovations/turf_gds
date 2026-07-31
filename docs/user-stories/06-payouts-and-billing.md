@@ -85,8 +85,8 @@ Supporting Modules: `admin`
 Data: `Invoice`, `Settlement`
 API/UI: Admin billing console
 Priority: `P1`
-Notes: Deferred from the Venue Owner Financial Close completion slice. GDS
-does not generate customer invoices.
+Notes: Structured B2B TAX_INVOICE generation is implemented. GDS does not
+generate customer invoices.
 
 ## US-06.05 - Partner Invoice Access
 
@@ -106,6 +106,6 @@ Supporting Modules: `identity`
 Data: `Invoice`, `Settlement`, `Partner`
 API/UI: Developer portal invoice section
 Priority: `P2`
-Notes: Deferred from the Venue Owner Financial Close completion slice. File
-rendering or downloadable invoice documents are out of scope until a protected
+Notes: Structured Partner Invoice access is implemented. File rendering or
+downloadable invoice documents remain out of scope until a protected
 document-storage design is added.

@@ -5,10 +5,12 @@ import type {
 } from 'mongodb';
 
 import type { DatabaseConnection } from '../../shared/database/database-connection.js';
+import { archiveAuditEvent } from '../../shared/audit/audit.persistence.js';
 import type { PartnerVenueContractDocument } from '../contracts/contract.types.js';
 import type { CourtDocument } from '../venue/courts/court.types.js';
 import type {
   PricingRuleDocument,
+  SlotAuditDocument,
   SlotDocument,
   SlotStatus,
 } from '../venue/inventory/inventory.types.js';
@@ -179,8 +181,8 @@ export function createBookingLifecycleRepository(
         .sort({ priority: -1, created_at: 1 })
         .toArray();
     },
-    claimFixedHold(input) {
-      return slots().findOneAndUpdate(
+    async claimFixedHold(input) {
+      const result = await slots().findOneAndUpdate(
         {
           _id: input.slotId,
           environment: input.environment,
@@ -222,6 +224,15 @@ export function createBookingLifecycleRepository(
         },
         { returnDocument: 'after', session: input.session },
       );
+      if (result) {
+        await archiveLatest(
+          database,
+          'SLOT',
+          result,
+          input.session,
+        );
+      }
+      return result;
     },
     findConflictingSlot(input) {
       return slots().findOne(
@@ -257,6 +268,7 @@ export function createBookingLifecycleRepository(
     },
     async insertSlot(slot, session) {
       await slots().insertOne(slot, { session });
+      await archiveLatest(database, 'SLOT', slot, session);
     },
     findHeldSlot(holdId, partnerId, environment, session) {
       return slots().findOne(
@@ -269,8 +281,8 @@ export function createBookingLifecycleRepository(
         { session },
       );
     },
-    confirmSlot(input) {
-      return slots().findOneAndUpdate(
+    async confirmSlot(input) {
+      const result = await slots().findOneAndUpdate(
         {
           _id: input.slot._id,
           status: 'HELD',
@@ -309,6 +321,10 @@ export function createBookingLifecycleRepository(
         },
         { returnDocument: 'after', session: input.session },
       );
+      if (result) {
+        await archiveLatest(database, 'SLOT', result, input.session);
+      }
+      return result;
     },
     getIdempotency(partnerId, environment, key, operation, session) {
       return idempotency().findOne(
@@ -326,6 +342,7 @@ export function createBookingLifecycleRepository(
     },
     async insertBooking(booking, session) {
       await bookings().insertOne(booking, { session });
+      await archiveLatest(database, 'BOOKING', booking, session);
     },
     findBooking(id, partnerId, environment, session) {
       return bookings().findOne(
@@ -333,8 +350,8 @@ export function createBookingLifecycleRepository(
         { session },
       );
     },
-    cancelBooking(input) {
-      return bookings().findOneAndUpdate(
+    async cancelBooking(input) {
+      const result = await bookings().findOneAndUpdate(
         {
           _id: input.booking._id,
           partner_id: input.booking.partner_id,
@@ -370,6 +387,10 @@ export function createBookingLifecycleRepository(
         },
         { returnDocument: 'after', session: input.session },
       );
+      if (result) {
+        await archiveLatest(database, 'BOOKING', result, input.session);
+      }
+      return result;
     },
     async disposeSlot(input) {
       const nextStatus =
@@ -415,6 +436,13 @@ export function createBookingLifecycleRepository(
         update,
         { session: input.session },
       );
+      if (result.modifiedCount === 1) {
+        const slot = await slots().findOne(
+          { _id: input.booking.slot_id },
+          { session: input.session },
+        );
+        if (slot) await archiveLatest(database, 'SLOT', slot, input.session);
+      }
       return result.modifiedCount === 1;
     },
     async insertCancellation(cancellation, session) {
@@ -423,54 +451,90 @@ export function createBookingLifecycleRepository(
         .insertOne(cancellation, { session });
     },
     async recoverExpiredHolds(now) {
-      const fixed = await slots().updateMany(
-        {
-          booking_type: 'FIXED_SLOT',
-          status: 'HELD',
-          hold_expires_at: { $lte: now },
-          booking_id: null,
-        },
-        {
-          $set: {
-            status: 'AVAILABLE',
-            hold_id: null,
-            hold_partner_id: null,
-            hold_expires_at: null,
-            hold_created_at: null,
-            updated_at: now,
+      let fixedReleased = 0;
+      let openReleased = 0;
+      await database.withTransaction(async ({ session }) => {
+        const expired = await slots().find(
+          {
+            status: 'HELD',
+            hold_expires_at: { $lte: now },
+            booking_id: null,
           },
-          $inc: { version: 1 },
-          $push: {
-            audit_history: {
-              $each: [{
-                event_type: 'HOLD_EXPIRED',
-                actor_type: 'SYSTEM',
-                actor_id: null,
-                previous_status: 'HELD',
-                new_status: 'AVAILABLE',
-                reason: 'Hold expired',
-                correlation_id: 'hold-recovery',
-                occurred_at: now,
-              }],
-              $slice: -100,
+          { session },
+        ).limit(1_000).toArray();
+        for (const slot of expired) {
+          const event = {
+            event_type: 'HOLD_EXPIRED',
+            actor_type: 'SYSTEM',
+            actor_id: null,
+            previous_status: 'HELD',
+            new_status: 'AVAILABLE',
+            reason: 'Hold expired',
+            correlation_id: `hold-recovery:${slot._id.toHexString()}:${slot.version}`,
+            occurred_at: now,
+          } satisfies SlotAuditDocument;
+          if (slot.booking_type === 'OPEN_TIME' && slot.source === 'BOOKING') {
+            await archiveAuditEvent({
+              db: database.db,
+              aggregateType: 'SLOT',
+              aggregateId: slot._id,
+              environment: slot.environment,
+              event,
+              session,
+            });
+            const deleted = await slots().deleteOne(
+              { _id: slot._id, status: 'HELD', version: slot.version },
+              { session },
+            );
+            openReleased += deleted.deletedCount;
+            continue;
+          }
+          const updated = await slots().findOneAndUpdate(
+            { _id: slot._id, status: 'HELD', version: slot.version },
+            {
+              $set: {
+                status: 'AVAILABLE',
+                hold_id: null,
+                hold_partner_id: null,
+                hold_expires_at: null,
+                hold_created_at: null,
+                updated_at: now,
+              },
+              $inc: { version: 1 },
+              $push: {
+                audit_history: { $each: [event], $slice: -100 },
+              },
             },
-          },
-        },
-      );
-      const open = await slots().deleteMany({
-        booking_type: 'OPEN_TIME',
-        source: 'BOOKING',
-        status: 'HELD',
-        hold_expires_at: { $lte: now },
-        booking_id: null,
+            { returnDocument: 'after', session },
+          );
+          if (updated) {
+            await archiveLatest(database, 'SLOT', updated, session);
+            fixedReleased += 1;
+          }
+        }
       });
-      return {
-        fixedReleased: fixed.modifiedCount,
-        openReleased: open.deletedCount,
-      };
+      return { fixedReleased, openReleased };
     },
     findBookingAudit(id) {
       return bookings().findOne({ _id: id });
     },
   };
+}
+
+async function archiveLatest(
+  database: DatabaseConnection,
+  aggregateType: 'BOOKING' | 'SLOT',
+  value: BookingDocument | SlotDocument,
+  session?: ClientSession,
+): Promise<void> {
+  const event = value.audit_history.at(-1);
+  if (!event) return;
+  await archiveAuditEvent({
+    db: database.db,
+    aggregateType,
+    aggregateId: value._id,
+    environment: value.environment,
+    event,
+    ...(session ? { session } : {}),
+  });
 }
