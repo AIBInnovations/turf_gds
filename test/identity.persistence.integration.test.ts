@@ -184,14 +184,53 @@ test('Venue Owner registration commits and rolls back as one MongoDB transaction
       subjectId: result.ownerId,
       verificationType: 'BUSINESS',
     });
-    await kycService.uploadDocument({
-      verificationId: verification.id,
-      subjectId: result.ownerId,
-      documentType: 'GST_CERTIFICATE',
-      filename: 'gst.jpg',
-      mimeType: 'image/jpeg',
-      buffer: Buffer.from('document'),
-    });
+    const registrationDocuments = [
+      {
+        documentType: 'GST_CERTIFICATE',
+        filename: 'gst.jpg',
+        details: {
+          gstNumber: '29ABCDE1234F1Z5',
+          legalName: 'Committed Owner Private Limited',
+        },
+      },
+      {
+        documentType: 'PAN',
+        filename: 'pan.jpg',
+        details: {
+          panNumber: 'ABCDE1234F',
+          nameOnPan: 'Committed Owner',
+        },
+      },
+      {
+        documentType: 'PASSBOOK',
+        filename: 'passbook.jpg',
+        details: {
+          accountHolderName: 'Committed Owner',
+          bankName: 'Integration Bank',
+          ifscCode: 'ABCD0123456',
+          accountLast4: '4567',
+        },
+      },
+      {
+        documentType: 'AADHAAR',
+        filename: 'aadhaar.jpg',
+        details: {
+          holderName: 'Committed Owner',
+          aadhaarLast4: '6789',
+        },
+      },
+    ] as const;
+    for (const document of registrationDocuments) {
+      await kycService.uploadDocument({
+        verificationId: verification.id,
+        subjectId: result.ownerId,
+        documentType: document.documentType,
+        filename: document.filename,
+        mimeType: 'image/jpeg',
+        buffer: Buffer.from('document'),
+        details: document.details,
+      });
+    }
     await kycService.submit({
       verificationId: verification.id,
       subjectId: result.ownerId,
@@ -216,6 +255,22 @@ test('Venue Owner registration commits and rolls back as one MongoDB transaction
           event.event_type === 'KYC_SUBMITTED',
       ),
     );
+    const preliminaryReviewerId = new ObjectId().toHexString();
+    await kycService.preliminaryReview?.({
+      verificationId: verification.id,
+      reviewerId: preliminaryReviewerId,
+      status: 'APPROVED',
+      checklist: {
+        documentReadable: true,
+        detailsMatch: true,
+        gstChecked: true,
+        panChecked: true,
+        bankChecked: true,
+        aadhaarMasked: true,
+      },
+      notes: 'Registration documents verified by the maker.',
+      correlationId: 'identity-integration-preliminary-review',
+    });
     await kycService.review({
       verificationId: verification.id,
       adminId: new ObjectId().toHexString(),

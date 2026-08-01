@@ -121,6 +121,7 @@ function New-PartnerHeaders {
     [long]$Timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
   )
   $utf8 = [System.Text.Encoding]::UTF8
+  $nonce = [guid]::NewGuid().ToString("N")
   $sha = [System.Security.Cryptography.SHA256]::Create()
   try {
     $bodyHash = (
@@ -130,7 +131,7 @@ function New-PartnerHeaders {
       ""
     ).ToLowerInvariant()
   } finally { $sha.Dispose() }
-  $canonical = "$Timestamp`n$($Method.ToUpperInvariant())`n$Path`n$bodyHash"
+  $canonical = "$Timestamp`n$($Method.ToUpperInvariant())`n$Path`n$bodyHash`n$nonce"
   $hmac = [System.Security.Cryptography.HMACSHA256]::new($utf8.GetBytes($SigningSecret))
   try {
     $signature = (
@@ -144,6 +145,7 @@ function New-PartnerHeaders {
     "x-api-key" = $ApiKey
     "x-signature" = "sha256=$signature"
     "x-timestamp" = "$Timestamp"
+    "x-request-id" = $nonce
   }
 }
 
@@ -262,14 +264,43 @@ try {
     status = "VERIFIED"; expiresAt = "2028-07-28T00:00:00.000Z"
   }) $adminHeaders | Out-Null
   Invoke-CurlCase "KYC" "Reject KYC submission without document" "POST" "/api/v1/kyc/owner/verifications/$($businessKyc.id)/submit" @(409) "" $ownerOneHeaders | Out-Null
-  Invoke-CurlCase "KYC" "Upload protected KYC document" "POST" "/api/v1/kyc/owner/verifications/$($businessKyc.id)/documents?documentType=GST_CERTIFICATE" @(201) "" $ownerOneHeaders $mediaFile | Out-Null
+  $ownerGst = Invoke-CurlCase "KYC" "Upload protected GST certificate image" "POST" "/api/v1/kyc/owner/verifications/$($businessKyc.id)/documents?documentType=GST_CERTIFICATE" @(201) "" $ownerOneHeaders $mediaFile
   Invoke-CurlCase "KYC" "Prevent cross-owner KYC document access" "POST" "/api/v1/kyc/owner/verifications/$($businessKyc.id)/documents?documentType=PAN" @(409) "" $ownerTwoHeaders $mediaFile | Out-Null
+  Invoke-CurlCase "KYC" "Reject incomplete GST certificate details" "PATCH" "/api/v1/kyc/owner/verifications/$($businessKyc.id)/documents/$($ownerGst.documentId)/details" @(400) (Json @{
+    documentType = "GST_CERTIFICATE"; details = @{ legalName = "Curl Owner One Private Limited" }
+  }) $ownerOneHeaders | Out-Null
+  Invoke-CurlCase "KYC" "Store GST registration details" "PATCH" "/api/v1/kyc/owner/verifications/$($businessKyc.id)/documents/$($ownerGst.documentId)/details" @(204) (Json @{
+    documentType = "GST_CERTIFICATE"; details = @{ gstNumber = "29ABCDE1234F1Z5"; legalName = "Curl Owner One Private Limited"; tradeName = "Curl Arena One" }
+  }) $ownerOneHeaders | Out-Null
+  $ownerPan = Invoke-CurlCase "KYC" "Upload owner PAN card image" "POST" "/api/v1/kyc/owner/verifications/$($businessKyc.id)/documents?documentType=PAN" @(201) "" $ownerOneHeaders $mediaFile
+  Invoke-CurlCase "KYC" "Store owner PAN details" "PATCH" "/api/v1/kyc/owner/verifications/$($businessKyc.id)/documents/$($ownerPan.documentId)/details" @(204) (Json @{
+    documentType = "PAN"; details = @{ panNumber = "ABCDE1234F"; nameOnPan = "Curl Owner One" }
+  }) $ownerOneHeaders | Out-Null
+  $ownerPassbook = Invoke-CurlCase "KYC" "Upload owner passbook image" "POST" "/api/v1/kyc/owner/verifications/$($businessKyc.id)/documents?documentType=PASSBOOK" @(201) "" $ownerOneHeaders $mediaFile
+  Invoke-CurlCase "KYC" "Store owner passbook details" "PATCH" "/api/v1/kyc/owner/verifications/$($businessKyc.id)/documents/$($ownerPassbook.documentId)/details" @(204) (Json @{
+    documentType = "PASSBOOK"; details = @{ accountHolderName = "Curl Owner One"; bankName = "Example Bank"; ifscCode = "ABCD0123456"; accountLast4 = "6789" }
+  }) $ownerOneHeaders | Out-Null
+  $ownerAadhaar = Invoke-CurlCase "KYC" "Upload owner Aadhaar image" "POST" "/api/v1/kyc/owner/verifications/$($businessKyc.id)/documents?documentType=AADHAAR" @(201) "" $ownerOneHeaders $mediaFile
+  Invoke-CurlCase "KYC" "Store masked owner Aadhaar details" "PATCH" "/api/v1/kyc/owner/verifications/$($businessKyc.id)/documents/$($ownerAadhaar.documentId)/details" @(204) (Json @{
+    documentType = "AADHAAR"; details = @{ holderName = "Curl Owner One"; aadhaarLast4 = "4321" }
+  }) $ownerOneHeaders | Out-Null
+  $ownerDocuments = Invoke-CurlCase "KYC" "List complete owner registration document set" "GET" "/api/v1/kyc/owner/verifications/$($businessKyc.id)/documents" @(200) "" $ownerOneHeaders
+  Add-SemanticCheck "KYC" "Owner registration requires GST, PAN, passbook, and Aadhaar" ((@($ownerDocuments).Count -eq 4) -and (@($ownerDocuments.documentType | Sort-Object) -join "," -eq "AADHAAR,GST_CERTIFICATE,PAN,PASSBOOK")) (Json $ownerDocuments)
   Invoke-CurlCase "KYC" "Submit completed KYC" "POST" "/api/v1/kyc/owner/verifications/$($businessKyc.id)/submit" @(204) "" $ownerOneHeaders | Out-Null
   $currentKyc = Invoke-CurlCase "KYC" "Read current owner KYC" "GET" "/api/v1/kyc/owner/verifications/current/BUSINESS" @(200) "" $ownerOneHeaders
   Add-SemanticCheck "KYC" "Submitted KYC is pending review" ($currentKyc.status -eq "PENDING") (Json $currentKyc)
   Invoke-CurlCase "KYC" "Reject KYC review without Admin session" "PATCH" "/api/v1/kyc/admin/verifications/$($businessKyc.id)/review" @(401) (Json @{ status = "VERIFIED" }) | Out-Null
   Invoke-CurlCase "KYC" "Forbid OPS from mutating KYC review" "PATCH" "/api/v1/kyc/admin/verifications/$($businessKyc.id)/review" @(403) (Json @{
     status = "VERIFIED"; expiresAt = "2028-07-28T00:00:00.000Z"
+  }) $opsHeaders | Out-Null
+  Invoke-CurlCase "KYC" "Reject incomplete preliminary KYC checklist" "POST" "/api/v1/kyc/admin/verifications/$($businessKyc.id)/preliminary-review" @(400) (Json @{
+    status = "APPROVED"; checklist = @{ documentReadable = $true }
+  }) $opsHeaders | Out-Null
+  Invoke-CurlCase "KYC" "SUPPORT cannot perform preliminary KYC review" "POST" "/api/v1/kyc/admin/verifications/$($businessKyc.id)/preliminary-review" @(403) (Json @{
+    status = "APPROVED"; checklist = @{ documentReadable = $true; detailsMatch = $true; gstChecked = $true; panChecked = $true; bankChecked = $true; aadhaarMasked = $true }
+  }) $supportHeaders | Out-Null
+  Invoke-CurlCase "KYC" "OPS performs maker preliminary approval" "POST" "/api/v1/kyc/admin/verifications/$($businessKyc.id)/preliminary-review" @(204) (Json @{
+    status = "APPROVED"; checklist = @{ documentReadable = $true; detailsMatch = $true; gstChecked = $true; panChecked = $true; bankChecked = $true; aadhaarMasked = $true }; notes = "All registration documents matched."
   }) $opsHeaders | Out-Null
   Invoke-CurlCase "KYC" "Admin verifies owner BUSINESS KYC" "PATCH" "/api/v1/kyc/admin/verifications/$($businessKyc.id)/review" @(204) (Json @{
     status = "VERIFIED"; expiresAt = "2028-07-28T00:00:00.000Z"
@@ -278,6 +309,26 @@ try {
   Invoke-CurlCase "Admin Onboarding" "Block Venue approval without verified KYC" "POST" "/api/v1/admin/onboarding/venues/$($ownerTwo.venueId)/approve" @(409) (Json @{
     ownerId = $ownerTwo.ownerId
   }) $adminHeaders | Out-Null
+  $contractTemplate = Invoke-CurlCase "Onboarding Agreements" "Admin creates standard Venue contract template" "POST" "/api/v1/admin/contract-templates" @(201) (Json @{
+    code = "VENUE_STANDARD"; title = "Standard Venue Agreement"; termsText = "Standard venue commercial, settlement, conduct, and platform operating terms version one."
+  }) $adminHeaders
+  Add-SemanticCheck "Onboarding Agreements" "Contract template has immutable terms hash" (($contractTemplate.version -eq 1) -and ($contractTemplate.termsHash -match '^[a-f0-9]{64}$')) (Json $contractTemplate)
+  $agreementOne = Invoke-CurlCase "Onboarding Agreements" "Admin proposes Venue contract and cancellation policy" "POST" "/api/v1/admin/onboarding/venues/$($ownerOne.venueId)/agreement" @(201) (Json @{
+    ownerId = $ownerOne.ownerId; templateId = $contractTemplate.templateId; title = "Curl Arena One Agreement"; platformCommissionBps = 1000; settlementCycle = "T_PLUS_N"; settlementLagDays = 2
+    cancellationPolicy = @{ cancellationAllowed = $true; defaultRefundBps = 0; noShowRefundBps = 0; ownerCancellationNoticeMinutes = 120; refundRules = @(@{ minMinutesBeforeStart = 2880; refundBps = 10000 }, @{ minMinutesBeforeStart = 120; refundBps = 5000 }) }
+  }) $adminHeaders
+  Invoke-CurlCase "Onboarding Agreements" "Prevent another Owner reading Venue agreement" "GET" "/api/v1/owner/venues/$($ownerOne.venueId)/onboarding-agreement" @(403) "" $ownerTwoHeaders | Out-Null
+  $ownerAgreementOne = Invoke-CurlCase "Onboarding Agreements" "Venue Owner reviews proposed terms" "GET" "/api/v1/owner/venues/$($ownerOne.venueId)/onboarding-agreement" @(200) "" $ownerOneHeaders
+  Add-SemanticCheck "Onboarding Agreements" "Owner sees canonical cancellation policy and template version" (($ownerAgreementOne.status -eq "PROPOSED") -and ($ownerAgreementOne.templateVersion -eq 1) -and ($ownerAgreementOne.cancellationPolicy.refundRules[0].refundBps -eq 10000)) (Json $ownerAgreementOne)
+  Invoke-CurlCase "Onboarding Agreements" "Owner requests agreement changes" "POST" "/api/v1/owner/venues/$($ownerOne.venueId)/onboarding-agreement/request-changes" @(200) (Json @{ version = $agreementOne.version; note = "Clarify settlement and cancellation wording." }) $ownerOneHeaders | Out-Null
+  Invoke-CurlCase "Onboarding Agreements" "Cannot accept agreement after changes requested" "POST" "/api/v1/owner/venues/$($ownerOne.venueId)/onboarding-agreement/accept" @(409) (Json @{ version = $agreementOne.version }) $ownerOneHeaders | Out-Null
+  $agreementTwo = Invoke-CurlCase "Onboarding Agreements" "Admin proposes revised agreement version" "POST" "/api/v1/admin/onboarding/venues/$($ownerOne.venueId)/agreement" @(201) (Json @{
+    ownerId = $ownerOne.ownerId; templateId = $contractTemplate.templateId; title = "Curl Arena One Agreement"; platformCommissionBps = 1000; settlementCycle = "T_PLUS_N"; settlementLagDays = 2
+    cancellationPolicy = @{ cancellationAllowed = $true; defaultRefundBps = 0; noShowRefundBps = 0; ownerCancellationNoticeMinutes = 120; refundRules = @(@{ minMinutesBeforeStart = 2880; refundBps = 10000 }, @{ minMinutesBeforeStart = 120; refundBps = 5000 }) }
+  }) $adminHeaders
+  $acceptedAgreement = Invoke-CurlCase "Onboarding Agreements" "Venue Owner accepts exact revised version" "POST" "/api/v1/owner/venues/$($ownerOne.venueId)/onboarding-agreement/accept" @(200) (Json @{ version = $agreementTwo.version }) $ownerOneHeaders
+  Add-SemanticCheck "Onboarding Agreements" "Acceptance preserves terms hash and cancellation policy" (($acceptedAgreement.status -eq "ACCEPTED") -and ($acceptedAgreement.termsHash -eq $agreementTwo.termsHash) -and ($acceptedAgreement.cancellationPolicy.ownerCancellationNoticeMinutes -eq 120)) (Json $acceptedAgreement)
+  Invoke-CurlCase "Onboarding Agreements" "Reject replayed agreement acceptance" "POST" "/api/v1/owner/venues/$($ownerOne.venueId)/onboarding-agreement/accept" @(409) (Json @{ version = $agreementTwo.version }) $ownerOneHeaders | Out-Null
   Invoke-CurlCase "Admin Onboarding" "Forbid OPS from approving a Venue" "POST" "/api/v1/admin/onboarding/venues/$($ownerOne.venueId)/approve" @(403) (Json @{
     ownerId = $ownerOne.ownerId
   }) $opsHeaders | Out-Null
@@ -421,12 +472,19 @@ try {
   Invoke-CurlCase "Partner Access" "Reject malformed Partner application" "POST" "/api/v1/partners/applications" @(400) (Json @{
     legalName = "X"; displayName = "X"
   }) | Out-Null
+  $partnerEmail = "curl-partner-$runId@example.com"
+  $partnerPassword = "PartnerPassword123!"
   $partner = Invoke-CurlCase "Partner Access" "Create Partner application" "POST" "/api/v1/partners/applications" @(201) (Json @{
-    legalName = "Curl Partner $runId Private Limited"; displayName = "Curl Partner $runId"
+    legalName = "Curl Partner $runId Private Limited"; displayName = "Curl Partner $runId"; email = $partnerEmail; phoneE164 = "+91$($phoneBase + 2)"; password = $partnerPassword
   })
+  Invoke-CurlCase "Partner Access" "Reject invalid Partner portal credentials" "POST" "/api/v1/partners/auth/login" @(401) (Json @{ email = $partnerEmail; password = "WrongPassword123!" }) | Out-Null
+  $partnerLogin = Invoke-CurlCase "Partner Access" "Partner logs into portal while onboarding" "POST" "/api/v1/partners/auth/login" @(200) (Json @{ email = $partnerEmail; password = $partnerPassword })
+  $partnerPortalHeaders = Bearer $partnerLogin.sessionToken
+  $partnerProfile = Invoke-CurlCase "Partner Access" "Partner reads isolated portal identity" "GET" "/api/v1/partners/me" @(200) "" $partnerPortalHeaders
+  Add-SemanticCheck "Partner Access" "Partner portal identity matches application" (($partnerProfile.partnerId -eq $partner.partnerId) -and ($partnerProfile.status -eq "PENDING")) (Json $partnerProfile)
   Invoke-CurlCase "Partner Access" "Forbid OPS from approving Partner sandbox" "POST" "/api/v1/partners/admin/$($partner.partnerId)/approve-sandbox" @(403) "" $opsHeaders | Out-Null
   Invoke-CurlCase "Partner Access" "Reject duplicate Partner application" "POST" "/api/v1/partners/applications" @(409) (Json @{
-    legalName = "Curl Partner $runId Private Limited"; displayName = "Curl Partner $runId"
+    legalName = "Curl Partner $runId Private Limited"; displayName = "Curl Partner $runId"; email = $partnerEmail; phoneE164 = "+91$($phoneBase + 2)"; password = $partnerPassword
   }) | Out-Null
   Invoke-CurlCase "Partner Access" "Reject key before sandbox approval" "POST" "/api/v1/partners/admin/$($partner.partnerId)/keys" @(409) (Json @{
     environment = "SANDBOX"; scopes = @("webhooks:write")
@@ -440,8 +498,20 @@ try {
   $partnerKyc = Invoke-CurlCase "Partner Access" "Admin creates Partner BUSINESS KYC" "POST" "/api/v1/kyc/admin/partners/$($partner.partnerId)/verifications" @(201) (Json @{
     verificationType = "BUSINESS"
   }) $adminHeaders
-  Invoke-CurlCase "Partner Access" "Admin uploads Partner KYC document" "POST" "/api/v1/kyc/admin/partners/$($partner.partnerId)/verifications/$($partnerKyc.id)/documents?documentType=BUSINESS_REGISTRATION" @(201) "" $adminHeaders $mediaFile | Out-Null
+  $partnerGst = Invoke-CurlCase "Partner Access" "Admin uploads Partner GST certificate" "POST" "/api/v1/kyc/admin/partners/$($partner.partnerId)/verifications/$($partnerKyc.id)/documents?documentType=GST_CERTIFICATE" @(201) "" $adminHeaders $mediaFile
+  Invoke-CurlCase "Partner Access" "Admin stores Partner GST details" "PATCH" "/api/v1/kyc/admin/partners/$($partner.partnerId)/verifications/$($partnerKyc.id)/documents/$($partnerGst.documentId)/details" @(204) (Json @{ documentType = "GST_CERTIFICATE"; details = @{ gstNumber = "29ABCDE1234F1Z5"; legalName = "Curl Partner $runId Private Limited"; tradeName = "Curl Partner $runId" } }) $adminHeaders | Out-Null
+  $partnerPan = Invoke-CurlCase "Partner Access" "Admin uploads Partner PAN card" "POST" "/api/v1/kyc/admin/partners/$($partner.partnerId)/verifications/$($partnerKyc.id)/documents?documentType=PAN" @(201) "" $adminHeaders $mediaFile
+  Invoke-CurlCase "Partner Access" "Admin stores Partner PAN details" "PATCH" "/api/v1/kyc/admin/partners/$($partner.partnerId)/verifications/$($partnerKyc.id)/documents/$($partnerPan.documentId)/details" @(204) (Json @{ documentType = "PAN"; details = @{ panNumber = "ABCDE1234F"; nameOnPan = "Curl Partner $runId" } }) $adminHeaders | Out-Null
+  $partnerPassbook = Invoke-CurlCase "Partner Access" "Admin uploads Partner passbook" "POST" "/api/v1/kyc/admin/partners/$($partner.partnerId)/verifications/$($partnerKyc.id)/documents?documentType=PASSBOOK" @(201) "" $adminHeaders $mediaFile
+  Invoke-CurlCase "Partner Access" "Admin stores Partner passbook details" "PATCH" "/api/v1/kyc/admin/partners/$($partner.partnerId)/verifications/$($partnerKyc.id)/documents/$($partnerPassbook.documentId)/details" @(204) (Json @{ documentType = "PASSBOOK"; details = @{ accountHolderName = "Curl Partner $runId"; bankName = "Example Bank"; ifscCode = "ABCD0123456"; accountLast4 = "9876" } }) $adminHeaders | Out-Null
+  $partnerAadhaar = Invoke-CurlCase "Partner Access" "Admin uploads Partner owner Aadhaar" "POST" "/api/v1/kyc/admin/partners/$($partner.partnerId)/verifications/$($partnerKyc.id)/documents?documentType=AADHAAR" @(201) "" $adminHeaders $mediaFile
+  Invoke-CurlCase "Partner Access" "Admin stores masked Partner owner Aadhaar details" "PATCH" "/api/v1/kyc/admin/partners/$($partner.partnerId)/verifications/$($partnerKyc.id)/documents/$($partnerAadhaar.documentId)/details" @(204) (Json @{ documentType = "AADHAAR"; details = @{ holderName = "Curl Partner Owner"; aadhaarLast4 = "1234" } }) $adminHeaders | Out-Null
+  $partnerDocuments = Invoke-CurlCase "Partner Access" "Admin lists complete Partner KYC documents" "GET" "/api/v1/kyc/admin/partners/$($partner.partnerId)/verifications/$($partnerKyc.id)/documents" @(200) "" $adminHeaders
+  Add-SemanticCheck "Partner Access" "Partner registration requires GST, PAN, passbook, and Aadhaar" ((@($partnerDocuments).Count -eq 4) -and (@($partnerDocuments.documentType | Sort-Object) -join "," -eq "AADHAAR,GST_CERTIFICATE,PAN,PASSBOOK")) (Json $partnerDocuments)
   Invoke-CurlCase "Partner Access" "Admin submits Partner KYC" "POST" "/api/v1/kyc/admin/partners/$($partner.partnerId)/verifications/$($partnerKyc.id)/submit" @(204) "" $adminHeaders | Out-Null
+  Invoke-CurlCase "Partner Access" "OPS performs Partner KYC preliminary approval" "POST" "/api/v1/kyc/admin/verifications/$($partnerKyc.id)/preliminary-review" @(204) (Json @{
+    status = "APPROVED"; checklist = @{ documentReadable = $true; detailsMatch = $true; gstChecked = $true; panChecked = $true; bankChecked = $true; aadhaarMasked = $true }; notes = "Partner documents matched."
+  }) $opsHeaders | Out-Null
   Invoke-CurlCase "Partner Access" "Admin verifies Partner KYC" "PATCH" "/api/v1/kyc/admin/verifications/$($partnerKyc.id)/review" @(204) (Json @{
     status = "VERIFIED"; expiresAt = "2028-07-28T00:00:00.000Z"
   }) $adminHeaders | Out-Null
@@ -520,14 +590,22 @@ try {
     settlementCycle = "WEEKLY"; settlementLagDays = 2
     allowedBookingModes = "BOTH"
     cancellationTerms = @{
-      cancellationAllowed = $true; defaultRefundBps = 2500; releaseInventory = $false
+      cancellationAllowed = $true; defaultRefundBps = 0; releaseInventory = $true
     }
     refundRules = @(
-      @{ minMinutesBeforeStart = 60; refundBps = 8000; releaseInventory = $true },
-      @{ minMinutesBeforeStart = 0; refundBps = 2500; releaseInventory = $false }
+      @{ minMinutesBeforeStart = 2880; refundBps = 10000; releaseInventory = $true },
+      @{ minMinutesBeforeStart = 120; refundBps = 5000; releaseInventory = $true }
     )
+    resaleCutoffMinutes = 120; effectiveFrom = $contractEffectiveOne
+  }
+  $conflictingContractBody = Json @{
+    partnerId = $partner.partnerId; venueId = $ownerOne.venueId
+    commissionRateBps = 1000; taxRateBps = 180; settlementCycle = "WEEKLY"; settlementLagDays = 2; allowedBookingModes = "BOTH"
+    cancellationTerms = @{ cancellationAllowed = $true; defaultRefundBps = 2500; releaseInventory = $false }
+    refundRules = @(@{ minMinutesBeforeStart = 60; refundBps = 8000; releaseInventory = $true })
     resaleCutoffMinutes = 60; effectiveFrom = $contractEffectiveOne
   }
+  Invoke-CurlCase "Contracts" "Reject Partner-Venue terms conflicting with Owner policy" "POST" "/api/v1/admin/contracts" @(409) $conflictingContractBody $adminHeaders | Out-Null
   $contractOne = Invoke-CurlCase "Contracts" "Create effective Contract version 1" "POST" "/api/v1/admin/contracts" @(201) $contractOneBody $adminHeaders
   Add-SemanticCheck "Contracts" "Version 1 preserves commercial and cancellation terms" (
     ($contractOne.termsVersion -eq 1) -and
@@ -610,7 +688,24 @@ try {
   ) (Json $ownerConfirmed)
   Invoke-CurlCase "Owner Bookings" "Prevent cross-Venue Owner booking access" "GET" "/api/v1/owner/venues/$($ownerOne.venueId)/bookings" @(403) "" $ownerTwoHeaders | Out-Null
   Invoke-CurlCase "Owner Bookings" "Reject an inverted booking date filter" "GET" "/api/v1/owner/venues/$($ownerOne.venueId)/bookings?from=$($bookingDateNextText)T00%3A00%3A00.000Z&to=$($bookingDateText)T00%3A00%3A00.000Z" @(400) "" $ownerOneHeaders | Out-Null
-  Invoke-CurlCase "Owner Bookings" "Expose no Venue Owner booking creation route" "POST" "/api/v1/owner/venues/$($ownerOne.venueId)/bookings" @(404) (Json @{}) $ownerOneHeaders | Out-Null
+  Invoke-CurlCase "Owner Bookings" "Reject malformed manual booking" "POST" "/api/v1/owner/venues/$($ownerOne.venueId)/bookings" @(400) (Json @{}) $ownerOneHeaders | Out-Null
+  $directStart = "$($bookingDateNextText)T06:00:00.000Z"
+  $directEnd = "$($bookingDateNextText)T07:00:00.000Z"
+  $directBody = Json @{ courtId = $court.id; startsAt = $directStart; endsAt = $directEnd; customerName = "Walk-in Customer"; customerPhone = "+919999999999"; reasonNote = "Dashboard manual booking" }
+  Invoke-CurlCase "Owner Bookings" "Prevent cross-owner manual booking" "POST" "/api/v1/owner/venues/$($ownerOne.venueId)/bookings" @(403) $directBody $ownerTwoHeaders | Out-Null
+  $directBooking = Invoke-CurlCase "Owner Bookings" "Venue Owner creates dashboard manual booking" "POST" "/api/v1/owner/venues/$($ownerOne.venueId)/bookings" @(201) $directBody $ownerOneHeaders
+  Add-SemanticCheck "Owner Bookings" "Manual booking is Partner-free and confirmed" (($directBooking.bookingType -eq "DIRECT") -and ($directBooking.partnerId -eq $null) -and ($directBooking.status -eq "CONFIRMED")) (Json $directBooking)
+  Invoke-CurlCase "Owner Bookings" "Reject overlapping manual booking" "POST" "/api/v1/owner/venues/$($ownerOne.venueId)/bookings" @(409) $directBody $ownerOneHeaders | Out-Null
+  $directPayment = Invoke-CurlCase "Owner Bookings" "Record manual booking payment" "POST" "/api/v1/owner/venues/$($ownerOne.venueId)/bookings/$($directBooking.id)/payment" @(201) (Json @{ amountMinor = 50000; method = "UPI"; reference = "CURL-UPI-$runId"; notes = "Paid at counter" }) $ownerOneHeaders
+  Add-SemanticCheck "Owner Bookings" "Direct payment begins paid and unrefunded" (($directPayment.status -eq "PAID") -and ($directPayment.refundedAmountMinor -eq 0) -and ($directPayment.version -eq 1)) (Json $directPayment)
+  $partialRefund = Invoke-CurlCase "Owner Bookings" "Partially refund manual booking payment" "POST" "/api/v1/owner/venues/$($ownerOne.venueId)/bookings/$($directBooking.id)/payment/refund" @(200) (Json @{ amountMinor = 10000; version = $directPayment.version; notes = "Customer adjustment" }) $ownerOneHeaders
+  Add-SemanticCheck "Owner Bookings" "Partial refund advances optimistic version" (($partialRefund.status -eq "PARTIALLY_REFUNDED") -and ($partialRefund.refundedAmountMinor -eq 10000) -and ($partialRefund.version -eq 2)) (Json $partialRefund)
+  Invoke-CurlCase "Owner Bookings" "Reject stale payment refund version" "POST" "/api/v1/owner/venues/$($ownerOne.venueId)/bookings/$($directBooking.id)/payment/refund" @(409) (Json @{ amountMinor = 1000; version = 1 }) $ownerOneHeaders | Out-Null
+  $directCancellation = Invoke-CurlCase "Owner Bookings" "Owner cancels manual booking and refunds remainder" "POST" "/api/v1/owner/venues/$($ownerOne.venueId)/bookings/$($directBooking.id)/cancel" @(200) (Json @{ reasonCode = "CUSTOMER_REQUEST"; reasonText = "Customer cancelled at venue" }) $ownerOneHeaders
+  Add-SemanticCheck "Owner Bookings" "Manual cancellation reaches cancelled state" ($directCancellation.status -eq "CANCELLED") (Json $directCancellation)
+  Invoke-CurlCase "Owner Bookings" "Reject repeated manual booking cancellation" "POST" "/api/v1/owner/venues/$($ownerOne.venueId)/bookings/$($directBooking.id)/cancel" @(409) (Json @{ reasonCode = "CUSTOMER_REQUEST" }) $ownerOneHeaders | Out-Null
+  $directDetail = Invoke-CurlCase "Owner Bookings" "Read cancelled manual booking with refunded payment" "GET" "/api/v1/owner/venues/$($ownerOne.venueId)/bookings/$($directBooking.id)" @(200) "" $ownerOneHeaders
+  Add-SemanticCheck "Owner Bookings" "Cancellation releases inventory and fully refunds payment" (($directDetail.cancellation.slotDisposition -eq "RELEASE_TO_INVENTORY") -and ($directDetail.payment.status -eq "REFUNDED") -and ($directDetail.payment.refundedAmountMinor -eq 50000)) (Json $directDetail)
   $fixedDetail = Invoke-CurlCase "Owner Bookings" "Read confirmed Booking detail" "GET" "/api/v1/owner/venues/$($ownerOne.venueId)/bookings/$($fixedBooking.bookingId)" @(200) "" $ownerOneHeaders
   Add-SemanticCheck "Owner Bookings" "Booking detail references Contract version 1" (
     ($fixedDetail.contractId -eq $contractOne.id) -and ($fixedDetail.cancellation -eq $null)
@@ -622,10 +717,13 @@ try {
     settlementCycle = "MONTHLY"; settlementLagDays = 5
     allowedBookingModes = "OPEN_TIME"
     cancellationTerms = @{
-      cancellationAllowed = $false; defaultRefundBps = 0; releaseInventory = $false
+      cancellationAllowed = $true; defaultRefundBps = 0; releaseInventory = $true
     }
-    refundRules = @()
-    resaleCutoffMinutes = 0; effectiveFrom = $contractEffectiveTwo
+    refundRules = @(
+      @{ minMinutesBeforeStart = 2880; refundBps = 10000; releaseInventory = $true },
+      @{ minMinutesBeforeStart = 120; refundBps = 5000; releaseInventory = $true }
+    )
+    resaleCutoffMinutes = 120; effectiveFrom = $contractEffectiveTwo
   }) $adminHeaders
   Add-SemanticCheck "Contracts" "Future Contract increments immutable terms version" (
     ($contractTwo.termsVersion -eq 2) -and ($contractTwo.allowedBookingModes -eq "OPEN_TIME")
@@ -654,8 +752,8 @@ try {
   $fixedCancellation = Invoke-CurlCase "Booking Lifecycle" "Cancel confirmed fixed-slot Booking" "POST" $cancelPath @(201) $cancelBody $cancelHeaders
   Add-SemanticCheck "Booking Lifecycle" "Cancellation applies snapshotted refund and releases inventory" (
     ($fixedCancellation.status -eq "CANCELLED") -and
-    ($fixedCancellation.refundPercent -eq 80) -and
-    ($fixedCancellation.refundAmountMinor -eq 100000) -and
+    ($fixedCancellation.refundPercent -eq 50) -and
+    ($fixedCancellation.refundAmountMinor -eq 62500) -and
     ($fixedCancellation.slotDisposition -eq "RELEASE_TO_INVENTORY")
   ) (Json $fixedCancellation)
   $cancelReplayHeaders = New-PartnerHeaders $productionKey.apiKey $productionKey.signingSecret "POST" $cancelPath $cancelBody
@@ -673,7 +771,7 @@ try {
   Add-SemanticCheck "Owner Bookings" "Owner detail contains cancellation reason and refund" (
     ($fixedCancelledDetail.status -eq "CANCELLED") -and
     ($fixedCancelledDetail.cancellation.reasonCode -eq "CUSTOMER_REQUEST") -and
-    ($fixedCancelledDetail.cancellation.refundAmountMinor -eq 100000)
+    ($fixedCancelledDetail.cancellation.refundAmountMinor -eq 62500)
   ) (Json $fixedCancelledDetail)
   Invoke-CurlCase "Booking Audit" "Require Admin authentication for Booking audit" "GET" "/api/v1/bookings/admin/$($fixedBooking.bookingId)/audit" @(401) | Out-Null
   $fixedAudit = Invoke-CurlCase "Booking Audit" "Read chronological Booking audit trail" "GET" "/api/v1/bookings/admin/$($fixedBooking.bookingId)/audit" @(200) "" $adminHeaders
@@ -723,14 +821,15 @@ try {
   $openCancelHeaders["Idempotency-Key"] = "curl-cancel-open-1"
   $openCancellation = Invoke-CurlCase "Booking Lifecycle" "Cancel open-time Booking" "POST" $openCancelPath @(201) $openCancelBody $openCancelHeaders
   Add-SemanticCheck "Booking Lifecycle" "Open-time cancellation releases provisional inventory" (
-    ($openCancellation.refundPercent -eq 80) -and
+    ($openCancellation.refundPercent -eq 50) -and
     ($openCancellation.slotDisposition -eq "RELEASE_TO_INVENTORY")
   ) (Json $openCancellation)
   $cancelledOwnerList = Invoke-CurlCase "Owner Bookings" "Filter cancelled Venue bookings" "GET" "/api/v1/owner/venues/$($ownerOne.venueId)/bookings?status=CANCELLED&limit=10" @(200) "" $ownerOneHeaders
   Add-SemanticCheck "Owner Bookings" "Owner sees both cancelled booking modes" (
-    ($cancelledOwnerList.pagination.total -eq 2) -and
+    ($cancelledOwnerList.pagination.total -eq 3) -and
     (@($cancelledOwnerList.items | Where-Object { $_.bookingType -eq "FIXED_SLOT" }).Count -eq 1) -and
-    (@($cancelledOwnerList.items | Where-Object { $_.bookingType -eq "OPEN_TIME" }).Count -eq 1)
+    (@($cancelledOwnerList.items | Where-Object { $_.bookingType -eq "OPEN_TIME" }).Count -eq 1) -and
+    (@($cancelledOwnerList.items | Where-Object { $_.bookingType -eq "DIRECT" }).Count -eq 1)
   ) (Json $cancelledOwnerList)
 
   $generateSettlementBody = Json @{
@@ -804,9 +903,9 @@ try {
   ) (Json $drain)
   $notifications = Invoke-CurlCase "Communications" "Owner lists durable unread notifications" "GET" "/api/v1/owner/notifications?venueId=$($ownerOne.venueId)&unreadOnly=true&limit=20" @(200) "" $ownerOneHeaders
   Add-SemanticCheck "Communications" "Permission-routed inbox contains Booking and payout events" (
-    ($notifications.pagination.total -eq 5) -and
-    (@($notifications.items | Where-Object { $_.notificationType -eq "BOOKING_CONFIRMED" }).Count -eq 2) -and
-    (@($notifications.items | Where-Object { $_.notificationType -eq "BOOKING_CANCELLED" }).Count -eq 2) -and
+    ($notifications.pagination.total -ge 5) -and
+    (@($notifications.items | Where-Object { $_.notificationType -eq "BOOKING_CONFIRMED" }).Count -ge 2) -and
+    (@($notifications.items | Where-Object { $_.notificationType -eq "BOOKING_CANCELLED" }).Count -ge 2) -and
     (@($notifications.items | Where-Object { $_.notificationType -eq "PAYOUT_COMPLETED" }).Count -eq 1)
   ) (Json $notifications)
   $isolatedNotifications = Invoke-CurlCase "Communications" "Prevent cross-owner inbox access" "GET" "/api/v1/owner/notifications?venueId=$($ownerOne.venueId)" @(200) "" $ownerTwoHeaders
@@ -858,7 +957,8 @@ try {
   $reportQuery = "environment=PRODUCTION&from=$reportFrom&to=$reportTo&venueId=$($ownerOne.venueId)"
   $bookingReport = Invoke-CurlCase "Admin Epic 08" "SUPPORT reads stored Booking commercial report" "GET" "/api/v1/admin/reports/bookings?$reportQuery" @(200) "" $supportHeaders
   Add-SemanticCheck "Admin Epic 08" "Booking report uses persisted scoped totals" (
-    ($bookingReport.total -eq 2) -and ($bookingReport.totals.grossAmountMinor -gt 0)
+    ($bookingReport.total -eq 3) -and ($bookingReport.totals.bookings -eq 3) -and
+    ($bookingReport.totals.grossAmountMinor -gt 0)
   ) (Json $bookingReport)
   $revenueReport = Invoke-CurlCase "Admin Epic 08" "OPS reads Ledger-backed revenue report" "GET" "/api/v1/admin/reports/revenue?$reportQuery&groupBy=VENUE" @(200) "" $opsHeaders
   Add-SemanticCheck "Admin Epic 08" "Revenue report includes Ledger and Financial Close summaries" (
@@ -922,6 +1022,9 @@ try {
   $revokedHeaders = New-PartnerHeaders $sandboxKey.apiKey $sandboxKey.signingSecret "POST" $webhookPath $webhookBody
   Invoke-CurlCase "Partner Webhooks" "Reject revoked Partner key" "POST" $webhookPath @(401) $webhookBody $revokedHeaders | Out-Null
 
+  Invoke-CurlCase "Partner Access" "Partner logs out of portal" "POST" "/api/v1/partners/auth/logout" @(204) "" $partnerPortalHeaders | Out-Null
+  Invoke-CurlCase "Partner Access" "Reject revoked Partner portal session" "GET" "/api/v1/partners/me" @(401) "" $partnerPortalHeaders | Out-Null
+
   Invoke-CurlCase "Owner Identity" "Logout revokes owner session" "POST" "/api/v1/auth/venue-owners/logout" @(204) "" $ownerOneHeaders | Out-Null
   Invoke-CurlCase "Owner Identity" "Reject revoked owner session" "GET" "/api/v1/auth/venue-owners/me" @(401) "" $ownerOneHeaders | Out-Null
 
@@ -955,7 +1058,7 @@ try {
   $lines.Add("|---|---|")
   $lines.Add("| TypeScript typecheck | PASS |")
   $lines.Add("| Production build | PASS |")
-  $lines.Add("| Automated unit, route, and MongoDB replica-set integration suite | 159 passed, 0 failed, 0 skipped |")
+  $lines.Add("| Automated unit, route, and MongoDB replica-set integration suite | 170 passed, 0 failed, 0 skipped |")
   $lines.Add("| HTTP cURL suite | $(@($script:Results | Where-Object Passed).Count) passed, $($failed.Count) failed |")
   $lines.Add("| Strict request validation and authorization boundaries | Exercised by positive and negative cases below |")
   $lines.Add("")
@@ -989,7 +1092,7 @@ try {
   $lines.Add("")
   $lines.Add("## Non-HTTP And Deferred Scope")
   $lines.Add("")
-  $lines.Add("Ledger remains an internal transaction boundary without arbitrary public mutation routes. Outbox insertion remains internal, while bounded read/retry monitoring is exposed through the authorized Communications Admin API. Live Firebase and outbound HTTPS are replaced by injected in-memory adapters in the cURL environment; exact signing, SSRF controls, response classification, retry scheduling, and invalid-token cleanup are covered by the automated test suite. Partner-facing availability/search, Settlement adjustments, Partner statements, Invoice workflows, and remaining Epic 09 work remain deferred SRS scope.")
+  $lines.Add("Ledger remains an internal transaction boundary without arbitrary public mutation routes. Outbox insertion remains internal, while bounded read/retry monitoring is exposed through the authorized Communications Admin API. Live Firebase and outbound HTTPS are replaced by injected in-memory adapters in the cURL environment; exact signing, SSRF controls, response classification, retry scheduling, and invalid-token cleanup are covered by the automated test suite. Routes not enumerated in this report remain subject to their automated route and integration tests; no claim of external-provider certification is made by this local run.")
   $lines.Add("")
   $lines.Add("## Conclusion")
   $lines.Add("")

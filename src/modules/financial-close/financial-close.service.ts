@@ -538,7 +538,17 @@ export function createFinancialCloseService(input: {
         );
         const financialDb = input.database.db;
         if (financialDb) {
-          const venueIds = await financialDb.collection<LedgerEntryDocument>('ledger_entries').distinct('venue_id',{settlement_id:completed._id},{session}) as ObjectId[];
+          const venueIds = await financialDb
+            .collection<LedgerEntryDocument>('ledger_entries')
+            .aggregate<{ _id: ObjectId }>(
+              [
+                { $match: { settlement_id: completed._id } },
+                { $group: { _id: '$venue_id' } },
+              ],
+              { session },
+            )
+            .map(({ _id }) => _id)
+            .toArray();
           for (const venueId of venueIds) {
             await input.outboxRepository.enqueue({aggregateType:'SETTLEMENT',aggregateId:completed._id,partnerId:null,venueId,environment:completed.environment,eventType:'SETTLEMENT_COMPLETED',eventVersion:2,correlationId:`${values.correlationId}:venue:${venueId.toHexString()}`,payload:{settlement_id:completed._id.toHexString(),venue_id:venueId.toHexString(),status:completed.status,period_start:completed.period_start.toISOString(),period_end:completed.period_end.toISOString(),currency:completed.currency},now:timestamp,session});
           }
