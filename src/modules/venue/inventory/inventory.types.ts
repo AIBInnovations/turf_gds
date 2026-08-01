@@ -50,7 +50,7 @@ export interface SlotDocument {
   hold_partner_id: ObjectId | null;
   hold_expires_at: Date | null;
   hold_created_at: Date | null;
-  source: 'SYSTEM_GENERATED' | 'OWNER_DASHBOARD' | 'ADMIN' | 'BOOKING';
+  source: 'SYSTEM_GENERATED' | 'OWNER_DASHBOARD' | 'ADMIN' | 'BOOKING' | 'EXTERNAL_CONNECTOR';
   booking_id: ObjectId | null;
   audit_history: SlotAuditDocument[];
   version: number;

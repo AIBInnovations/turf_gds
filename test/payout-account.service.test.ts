@@ -16,7 +16,7 @@ const fixedNow = new Date('2026-07-28T00:00:00.000Z');
 function fixture() {
   const accounts: VenuePayoutAccountDocument[] = [];
   const permissions: string[] = [];
-  const repository: PayoutAccountRepository = {
+  const repository = {
     async insert(value) {
       if (accounts.some(({ vault_account_token }) =>
         vault_account_token === value.vault_account_token)) {
@@ -46,7 +46,7 @@ function fixture() {
       account.updated_at = input.now;
       return account;
     },
-  };
+  } as PayoutAccountRepository;
   const ownerAccessService = {
     async requirePermission(
       _ownerId: string,
@@ -62,6 +62,7 @@ function fixture() {
     service: createPayoutAccountService({
       repository,
       ownerAccessService,
+      mediaStorage: { async ping(){}, async uploadBuffer(){throw new Error('not used');}, async delete(){} },
       now: () => fixedNow,
     }),
   };

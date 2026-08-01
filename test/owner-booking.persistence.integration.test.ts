@@ -82,6 +82,8 @@ test('Owner Booking persistence enforces filters, detail scope, cancellation, an
     const service = createOwnerBookingService({
       repository: createOwnerBookingRepository(database),
       ownerAccessService,
+      database,
+      outboxRepository: { async enqueue() {} },
     });
 
     const courtId = new ObjectId();

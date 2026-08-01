@@ -46,13 +46,16 @@ export function createCanonicalRequest(input: {
   method: string;
   path: string;
   body: Buffer;
+  nonce?: string;
 }): string {
-  return [
+  const values = [
     input.timestamp,
     input.method.toUpperCase(),
     input.path,
     hashRequestBody(input.body),
-  ].join('\n');
+  ];
+  if (input.nonce) values.push(input.nonce);
+  return values.join('\n');
 }
 
 export function verifyHmacSignature(

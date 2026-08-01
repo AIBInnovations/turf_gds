@@ -320,6 +320,12 @@ export function createBookingLifecycleService(input: {
             at: timestamp,
             session,
           });
+          const ownerAgreement = await input.database.db.collection<{
+            version:number; status:'ACCEPTED'; cancellation_policy:{cancellation_allowed:boolean;default_refund_bps:number;owner_cancellation_notice_minutes:number;refund_rules:Array<{min_minutes_before_start:number;refund_bps:number}>};
+          }>('venue_onboarding_agreements').find({ venue_id: slot.venue_id, status: 'ACCEPTED' }, { session }).sort({ version: -1 }).limit(1).next();
+          if (!ownerAgreement) {
+            throw conflict('VENUE_CANCELLATION_POLICY_REQUIRED','The Venue Owner must accept a cancellation policy before Partner bookings can be confirmed');
+          }
           assertBookable(context, slot.booking_type);
           const amounts = calculateAmounts(
             slot.price_minor,
@@ -347,9 +353,15 @@ export function createBookingLifecycleService(input: {
             ...amounts,
             currency: 'INR',
             cancellation_terms_snapshot: {
-              cancellation_terms: context.contract.cancellation_terms,
-              refund_rules: context.contract.refund_rules,
-              resale_cutoff_minutes: context.contract.resale_cutoff_minutes,
+              source: 'VENUE_OWNER_ONBOARDING_AGREEMENT',
+              venue_agreement_version: ownerAgreement.version,
+              cancellation_terms: {
+                cancellation_allowed: ownerAgreement.cancellation_policy.cancellation_allowed,
+                default_refund_bps: ownerAgreement.cancellation_policy.default_refund_bps,
+                release_inventory: true,
+              },
+              refund_rules: { rules: ownerAgreement.cancellation_policy.refund_rules.map(rule=>({ ...rule, release_inventory:true })) },
+              resale_cutoff_minutes: ownerAgreement.cancellation_policy.owner_cancellation_notice_minutes,
               commission_rate_bps: context.contract.commission_rate_bps,
               tax_rate_bps: context.contract.tax_rate_bps,
               terms_version: context.contract.terms_version,
@@ -914,7 +926,7 @@ async function enqueueBookingEvent(
       booking_id: booking._id.toHexString(),
       venue_id: booking.venue_id.toHexString(),
       court_id: booking.court_id.toHexString(),
-      partner_id: booking.partner_id.toHexString(),
+      partner_id: booking.partner_id?.toHexString() ?? null,
       booking_type: booking.booking_type,
       starts_at: booking.starts_at.toISOString(),
       ends_at: booking.ends_at.toISOString(),
@@ -980,7 +992,7 @@ function sameRequest(
 function bookingView(booking: BookingDocument): Record<string, unknown> {
   return {
     bookingId: booking._id.toHexString(),
-    slotId: booking.slot_id.toHexString(),
+    slotId: booking.slot_id?.toHexString() ?? null,
     venueId: booking.venue_id.toHexString(),
     courtId: booking.court_id.toHexString(),
     bookingType: booking.booking_type,

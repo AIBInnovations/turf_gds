@@ -31,9 +31,16 @@ const ownerNotificationSchema: Document = {
   ],
   properties: {
     notification_type: {
-      enum: ['BOOKING_CONFIRMED', 'BOOKING_CANCELLED', 'PAYOUT_COMPLETED'],
+      enum: [
+        'BOOKING_CONFIRMED', 'BOOKING_CANCELLED', 'PAYOUT_PENDING',
+        'PAYOUT_COMPLETED', 'PAYOUT_FAILED', 'SETTLEMENT_CREATED',
+        'SETTLEMENT_COMPLETED', 'CONTRACT_PROPOSED', 'CONTRACT_ACCEPTED',
+        'KYC_SUBMITTED', 'KYC_VERIFIED', 'KYC_REJECTED',
+        'PAYMENT_RECORDED', 'PAYMENT_REFUNDED', 'VENUE_UPDATED',
+        'COURT_UPDATED', 'AVAILABILITY_CHANGED',
+      ],
     },
-    aggregate_type: { enum: ['BOOKING', 'PAYOUT'] },
+    aggregate_type: { enum: ['BOOKING','PAYMENT','SETTLEMENT','PAYOUT','CONTRACT','KYC','VENUE','COURT','INVENTORY'] },
     aggregate_id: { bsonType: 'objectId' },
     venue_id: { bsonType: 'objectId' },
     payload: { bsonType: 'object' },
@@ -107,6 +114,7 @@ const kycVerificationValidator = documentValidator(
     'status',
     'is_current',
     'reviewed_by',
+    'preliminary_reviewed_by','preliminary_reviewed_at','preliminary_status','preliminary_checklist','preliminary_notes',
     'reviewed_at',
     'rejection_reason',
     'expires_at',
@@ -120,6 +128,7 @@ const kycVerificationValidator = documentValidator(
     status: { enum: ['PENDING', 'VERIFIED', 'REJECTED', 'EXPIRED'] },
     is_current: { bsonType: 'bool' },
     reviewed_by: { bsonType: ['objectId', 'null'] },
+    preliminary_reviewed_by:{bsonType:['objectId','null']},preliminary_reviewed_at:{bsonType:['date','null']},preliminary_status:{enum:['APPROVED','REJECTED',null]},preliminary_checklist:{bsonType:['object','null']},preliminary_notes:{bsonType:['string','null']},
     reviewed_at: { bsonType: ['date', 'null'] },
     rejection_reason: { bsonType: ['string', 'null'] },
     expires_at: { bsonType: ['date', 'null'] },
@@ -141,7 +150,7 @@ const kycDocumentValidator = documentValidator(
     kyc_verification_id: { bsonType: 'objectId' },
     document_type: {
       enum: [
-        'PAN', 'AADHAAR', 'GST_CERTIFICATE', 'BUSINESS_REGISTRATION',
+        'PAN', 'AADHAAR', 'GST_CERTIFICATE', 'PASSBOOK', 'BUSINESS_REGISTRATION',
         'ADDRESS_PROOF', 'ID_PROOF',
       ],
     },
@@ -162,6 +171,7 @@ const kycDocumentValidator = documentValidator(
         created_at: { bsonType: 'date' },
       },
     },
+    details: { bsonType: 'object' },
     status: { enum: ['PENDING', 'ACCEPTED', 'REJECTED'] },
     rejection_reason: { bsonType: ['string', 'null'] },
     created_at: { bsonType: 'date' },
@@ -185,6 +195,13 @@ const partnerValidator = documentValidator(
   {
     legal_name: { bsonType: 'string' },
     display_name: { bsonType: 'string' },
+    email: { bsonType: 'string' },
+    phone_e164: { bsonType: 'string' },
+    password_hash: { bsonType: 'string' },
+    failed_login_count: { bsonType: 'int', minimum: 0 },
+    locked_until: { bsonType: ['date', 'null'] },
+    last_login_at: { bsonType: ['date', 'null'] },
+    sessions: { bsonType: 'array', maxItems: 10 },
     kyc_status: { enum: ['PENDING', 'VERIFIED', 'REJECTED', 'EXPIRED'] },
     status: { enum: ['PENDING', 'ACTIVE', 'SUSPENDED'] },
     rate_limit_tier: { enum: ['STARTER', 'STANDARD', 'ENTERPRISE'] },
@@ -226,6 +243,13 @@ const partnerKeyValidator = documentValidator(
   },
 );
 
+const partnerPayoutAccountValidator = documentValidator(
+  ['partner_id','label','account_holder_name','bank_name','ifsc_code','account_last4','account_vault_token','status','is_default','failure_reason','documents','version','created_at','updated_at'],
+  {
+    partner_id:{bsonType:'objectId'},label:{bsonType:'string'},account_holder_name:{bsonType:'string'},bank_name:{bsonType:'string'},ifsc_code:{bsonType:'string'},account_last4:{bsonType:'string'},account_vault_token:{bsonType:'string'},status:{enum:['PENDING','VERIFIED','FAILED','DISABLED']},is_default:{bsonType:'bool'},failure_reason:{bsonType:['string','null']},documents:{bsonType:'array'},version:{bsonType:'int',minimum:1},created_at:{bsonType:'date'},updated_at:{bsonType:'date'},
+  },
+);
+
 const usageValidator = documentValidator(
   [
     'partner_id',
@@ -247,6 +271,7 @@ const usageValidator = documentValidator(
     error_count: { bsonType: ['int', 'long'] },
     rate_limited_count: { bsonType: ['int', 'long'] },
     p95_latency_ms: { bsonType: ['int', 'long'] },
+    latency_samples: { bsonType: 'array', maxItems: 500, items: { bsonType: ['int', 'long'] } },
     rate_limit_window_started_at: { bsonType: 'date' },
     rate_limit_window_count: { bsonType: ['int', 'long'] },
     created_at: { bsonType: 'date' },
@@ -271,6 +296,7 @@ const webhookValidator = documentValidator(
     environment: { enum: ['SANDBOX', 'PRODUCTION'] },
     url: { bsonType: 'string' },
     signing_secret_hash: { bsonType: 'string' },
+    secret_version: { bsonType: 'int', minimum: 1 },
     subscribed_event_types: {
       bsonType: 'array',
       minItems: 1,
@@ -417,6 +443,10 @@ async function ensureValidatedCollection(
 }
 
 export async function initializeIdentityPersistence(db: Db): Promise<void> {
+  if(await db.listCollections({name:'kyc_verifications'},{nameOnly:true}).hasNext()){
+    await db.command({collMod:'kyc_verifications',validationLevel:'off'});
+    await db.collection('kyc_verifications').updateMany({preliminary_reviewed_by:{$exists:false}},{$set:{preliminary_reviewed_by:null,preliminary_reviewed_at:null,preliminary_status:null,preliminary_checklist:null,preliminary_notes:null}});
+  }
   if (
     await db
       .listCollections({ name: 'api_usage_daily' }, { nameOnly: true })
@@ -435,6 +465,9 @@ export async function initializeIdentityPersistence(db: Db): Promise<void> {
   }
   await migrateCommunicationsEmbeds(db);
   await ensureValidatedCollection(db, 'admin_users', adminValidator);
+  await ensureValidatedCollection(db,'admin_revoked_tokens',documentValidator(['jti','admin_id','expires_at','created_at'],{jti:{bsonType:'string'},admin_id:{bsonType:'objectId'},expires_at:{bsonType:'date'},created_at:{bsonType:'date'}}));
+  await db.collection('admin_revoked_tokens').createIndex({jti:1},{unique:true,name:'uq_admin_revoked_token'});
+  await db.collection('admin_revoked_tokens').createIndex({expires_at:1},{expireAfterSeconds:0,name:'ttl_admin_revoked_token'});
   await ensureValidatedCollection(db, 'venue_owners', ownerValidator);
   await ensureValidatedCollection(
     db,
@@ -462,6 +495,7 @@ export async function initializeIdentityPersistence(db: Db): Promise<void> {
     'partner_api_keys',
     partnerKeyValidator,
   );
+  await ensureValidatedCollection(db,'partner_payout_accounts',partnerPayoutAccountValidator);
   await ensureValidatedCollection(
     db,
     'api_usage_daily',
@@ -565,10 +599,18 @@ export async function initializeIdentityPersistence(db: Db): Promise<void> {
       collation: { locale: 'en', strength: 2 },
     },
   );
+  await db.collection('partners').createIndex(
+    { email: 1 },
+    { unique: true, sparse: true, name: 'uq_partners_email', collation: { locale: 'en', strength: 2 } },
+  );
   await db.collection('partner_api_keys').createIndex(
     { key_prefix: 1 },
     { unique: true, name: 'uq_partner_keys_prefix' },
   );
+  await db.collection('partner_auth_replays').createIndex({key_id:1,signature_hash:1},{unique:true,name:'uq_partner_auth_replay'});
+  await db.collection('partner_auth_replays').createIndex({expires_at:1},{expireAfterSeconds:0,name:'ttl_partner_auth_replay'});
+  await db.collection('partner_payout_accounts').createIndex({partner_id:1,status:1,created_at:-1},{name:'ix_partner_payout_accounts'});
+  await db.collection('partner_payout_accounts').createIndex({partner_id:1,is_default:1},{unique:true,partialFilterExpression:{is_default:true},name:'uq_partner_default_payout_account'});
   await db.collection('api_usage_daily').createIndex(
     { partner_id: 1, environment: 1, usage_date: 1 },
     { unique: true, name: 'uq_partner_usage_daily' },

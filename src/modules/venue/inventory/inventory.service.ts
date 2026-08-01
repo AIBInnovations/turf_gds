@@ -11,6 +11,7 @@ import type {
 } from './inventory.types.js';
 import type { InventoryRepository } from './inventory.repository.js';
 import type { VenueRepository } from '../profile/venue.repository.js';
+import type { OwnerEventPublisher } from '../../../shared/communications/owner-event-publisher.js';
 
 export interface InventoryService {
   createPricingRule(input: PricingInput): Promise<object>;
@@ -93,6 +94,7 @@ export function createInventoryService(input: {
   courtRepository: CourtRepository;
   ownerAccessService: OwnerAccessService;
   database: DatabaseConnection;
+  events?: OwnerEventPublisher;
   now?: () => Date;
 }): InventoryService {
   const now = input.now ?? (() => new Date());
@@ -123,6 +125,7 @@ export function createInventoryService(input: {
     const timestamp = now();
     const rule = pricingDocument(values, timestamp);
     await input.repository.insertPricingRule(rule);
+    await input.events?.publish({aggregateType:'INVENTORY',aggregateId:rule._id,venueId:oid(values.venueId),eventType:'AVAILABILITY_CHANGED',eventVersion:1,correlationId:`pricing-create:${rule._id.toHexString()}`,payload:{venueId:values.venueId,courtId:values.courtId,pricingRuleId:rule._id.toHexString(),action:'PRICING_CREATED'},now:timestamp});
     return presentPricing(rule);
   }
 
@@ -185,6 +188,7 @@ export function createInventoryService(input: {
     if (!updated) {
       throw notFound('PRICING_RULE_NOT_FOUND', 'Pricing rule was not found');
     }
+    await input.events?.publish({aggregateType:'INVENTORY',aggregateId:updated._id,venueId:oid(values.venueId),eventType:'AVAILABILITY_CHANGED',eventVersion:1,correlationId:`pricing-update:${updated._id.toHexString()}:${updated.updated_at.getTime()}`,payload:{venueId:values.venueId,courtId:values.courtId,pricingRuleId:updated._id.toHexString(),action:'PRICING_UPDATED'},now:updated.updated_at});
     return presentPricing(updated);
   }
 
@@ -294,9 +298,9 @@ export function createInventoryService(input: {
             candidate.ends_at > slot.starts_at,
         ),
     );
-    return {
-      created: await input.repository.bulkUpsertSlots(generatable),
-    };
+    const created = await input.repository.bulkUpsertSlots(generatable);
+    if(created>0) await input.events?.publish({aggregateType:'INVENTORY',aggregateId:court._id,venueId:venue._id,eventType:'AVAILABILITY_CHANGED',eventVersion:court.version,correlationId:values.correlationId,payload:{venueId:values.venueId,courtId:values.courtId,action:'SLOTS_GENERATED',created},now:timestamp});
+    return { created };
   }
 
   async function listInventory(
@@ -338,6 +342,7 @@ export function createInventoryService(input: {
           'Slot is held, booked, blocked, or stale',
         );
       }
+      await input.events?.publish({aggregateType:'INVENTORY',aggregateId:updated._id,venueId:oid(values.venueId),eventType:'AVAILABILITY_CHANGED',eventVersion:updated.version,correlationId:values.correlationId,payload:{venueId:values.venueId,courtId:values.courtId,slotId:updated._id.toHexString(),action:'BLOCKED'},now:updated.updated_at});
       return presentSlot(updated);
     }
     if (
@@ -424,6 +429,7 @@ export function createInventoryService(input: {
       }
       await input.repository.insertOpenBlock(slot, session);
     });
+    await input.events?.publish({aggregateType:'INVENTORY',aggregateId:slot._id,venueId:venue._id,eventType:'AVAILABILITY_CHANGED',eventVersion:slot.version,correlationId:values.correlationId,payload:{venueId:values.venueId,courtId:values.courtId,slotId:slot._id.toHexString(),action:'BLOCKED'},now:timestamp});
     return presentSlot(slot);
   }
 
@@ -450,6 +456,7 @@ export function createInventoryService(input: {
       if (!deleted) {
         throw conflict('SLOT_VERSION_CONFLICT', 'Slot changed concurrently');
       }
+      await input.events?.publish({aggregateType:'INVENTORY',aggregateId:slot._id,venueId:oid(values.venueId),eventType:'AVAILABILITY_CHANGED',eventVersion:slot.version+1,correlationId:values.correlationId,payload:{venueId:values.venueId,courtId:values.courtId,slotId:slot._id.toHexString(),action:'RELEASED'},now:now()});
       return;
     }
     const updated = await input.repository.updateFixedSlot({
@@ -466,6 +473,7 @@ export function createInventoryService(input: {
     if (!updated) {
       throw conflict('SLOT_VERSION_CONFLICT', 'Slot changed concurrently');
     }
+    await input.events?.publish({aggregateType:'INVENTORY',aggregateId:updated._id,venueId:oid(values.venueId),eventType:'AVAILABILITY_CHANGED',eventVersion:updated.version,correlationId:values.correlationId,payload:{venueId:values.venueId,courtId:values.courtId,slotId:updated._id.toHexString(),action:'RELEASED'},now:updated.updated_at});
     return presentSlot(updated);
   }
 

@@ -3,6 +3,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import {
   createAdminAuthenticationHook,
   requireAdminContext,
+  getBearerToken,
 } from '../shared/auth-context.js';
 import type { AdminAuthService } from './auth.service.js';
 
@@ -45,6 +46,7 @@ const adminAuthRoutes: FastifyPluginAsync<AdminAuthRoutesOptions> = async (
       };
     },
   );
+  fastify.post('/logout',{preHandler:createAdminAuthenticationHook(options.service)},async(request,reply)=>{if(!options.service.logout)return reply.status(503).send({error:{code:'ADMIN_LOGOUT_UNAVAILABLE',message:'Admin logout is unavailable',requestId:request.id}});await options.service.logout(getBearerToken(request));return reply.status(204).send();});
 };
 
 export default adminAuthRoutes;

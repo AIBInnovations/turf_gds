@@ -36,6 +36,8 @@ function createKycFake(verified = true): KycService {
     async uploadDocument() {
       throw new Error('not used');
     },
+    async updateDocumentDetails(){},
+    async listDocuments(){return[];},
     async submit() {},
     async getCurrent() {
       throw new Error('not used');

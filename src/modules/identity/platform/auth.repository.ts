@@ -8,6 +8,8 @@ export interface AdminAuthRepository {
   findById(id: ObjectId): Promise<AdminUserDocument | null>;
   recordLogin(id: ObjectId, now: Date): Promise<void>;
   createAdmin(admin: AdminUserDocument): Promise<void>;
+  revokeToken?(jti:string,adminId:ObjectId,expiresAt:Date,now:Date):Promise<void>;
+  isTokenRevoked?(jti:string):Promise<boolean>;
 }
 
 export function createAdminAuthRepository(
@@ -32,5 +34,7 @@ export function createAdminAuthRepository(
     async createAdmin(admin) {
       await admins().insertOne(admin);
     },
+    async revokeToken(jti,adminId,expiresAt,now){await database.db.collection('admin_revoked_tokens').updateOne({jti},{$setOnInsert:{_id:new ObjectId(),jti,admin_id:adminId,expires_at:expiresAt,created_at:now}},{upsert:true});},
+    async isTokenRevoked(jti){return Boolean(await database.db.collection('admin_revoked_tokens').findOne({jti},{projection:{_id:1}}));},
   };
 }

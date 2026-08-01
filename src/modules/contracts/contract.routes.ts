@@ -41,9 +41,6 @@ const contractRoutes: FastifyPluginAsync<ContractRoutesOptions> =
               'settlementCycle',
               'settlementLagDays',
               'allowedBookingModes',
-              'cancellationTerms',
-              'refundRules',
-              'resaleCutoffMinutes',
               'effectiveFrom',
             ],
             properties: {

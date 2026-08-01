@@ -52,6 +52,8 @@ function createFixture(kycVerified: boolean) {
     async uploadDocument() {
       throw new Error('not used');
     },
+    async updateDocumentDetails(){throw new Error('not used');},
+    async listDocuments(){return[];},
     async submit() {
       throw new Error('not used');
     },

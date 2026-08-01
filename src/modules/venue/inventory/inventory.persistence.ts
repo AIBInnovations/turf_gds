@@ -111,7 +111,7 @@ const slotValidator: Document = {
       hold_created_at: { bsonType: ['date', 'null'] },
       booking_id: { bsonType: ['objectId', 'null'] },
       source: {
-        enum: ['SYSTEM_GENERATED', 'OWNER_DASHBOARD', 'ADMIN', 'BOOKING'],
+        enum: ['SYSTEM_GENERATED', 'OWNER_DASHBOARD', 'ADMIN', 'BOOKING', 'EXTERNAL_CONNECTOR'],
       },
       audit_history: { bsonType: 'array', maxItems: 100 },
       version: { bsonType: 'int', minimum: 1 },

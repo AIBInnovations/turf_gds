@@ -17,6 +17,8 @@
     "test": "tsx --test test/**/*.test.ts",
     "test:load": "tsx test/load/partner-api-load.ts",
     "admin:create": "tsx src/scripts/create-admin.ts"
+    ,"db:init": "tsx src/scripts/initialize-database.ts"
+    ,"verify": "npm run typecheck && npm run build && npm test"
   },
   "dependencies": {
     "@fastify/multipart": "^10.1.0",

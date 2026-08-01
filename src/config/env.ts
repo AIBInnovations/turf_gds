@@ -20,6 +20,7 @@ export interface AppConfig {
   port: number;
   logLevel: LogLevel;
   readinessCacheTtlMs: number;
+  runMigrationsOnStartup?: boolean;
   mongodb: {
     uri: string;
     database: string;
@@ -68,6 +69,14 @@ export interface AppConfig {
   };
   adminOperations?: {
     inventoryMinimumCoverageDays: number;
+  };
+  razorpay?: {
+    enabled: boolean;
+    keyId?: string;
+    keySecret?: string;
+    webhookSecret?: string;
+    accountNumber?: string;
+    baseUrl: string;
   };
 }
 
@@ -148,6 +157,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
           .replace(/\\n/g, '\n'),
       }
     : { enabled: false };
+  const razorpayEnabled = readBoolean('RAZORPAY_ENABLED', env.RAZORPAY_ENABLED, false);
   return {
     nodeEnv: readEnum(
       'NODE_ENV',
@@ -170,6 +180,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       0,
       300_000,
     ),
+    runMigrationsOnStartup: readBoolean('DB_RUN_MIGRATIONS_ON_STARTUP',env.DB_RUN_MIGRATIONS_ON_STARTUP,env.NODE_ENV!=='production'),
     mongodb: {
       uri: readRequired('MONGODB_URI', env.MONGODB_URI),
       database: readRequired('MONGODB_DATABASE', env.MONGODB_DATABASE),
@@ -339,6 +350,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
         1,
         31,
       ),
+    },
+    razorpay: razorpayEnabled ? {
+      enabled: true,
+      keyId: readRequired('RAZORPAY_KEY_ID', env.RAZORPAY_KEY_ID),
+      keySecret: readRequired('RAZORPAY_KEY_SECRET', env.RAZORPAY_KEY_SECRET),
+      webhookSecret: readRequired('RAZORPAY_WEBHOOK_SECRET', env.RAZORPAY_WEBHOOK_SECRET),
+      accountNumber: readRequired('RAZORPAY_ACCOUNT_NUMBER', env.RAZORPAY_ACCOUNT_NUMBER),
+      baseUrl: env.RAZORPAY_BASE_URL?.trim() || 'https://api.razorpay.com',
+    } : {
+      enabled: false,
+      baseUrl: env.RAZORPAY_BASE_URL?.trim() || 'https://api.razorpay.com',
     },
   };
 }

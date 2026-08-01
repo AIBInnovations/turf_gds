@@ -90,10 +90,7 @@ const ownerBookingRoutes: FastifyPluginAsync<OwnerBookingRoutesOptions> =
             type: 'object',
             additionalProperties: false,
             required: ['venueId', 'bookingId'],
-            properties: {
-              venueId: objectId,
-              bookingId: objectId,
-            },
+            properties: { venueId: objectId, bookingId: objectId },
           },
         },
       },
@@ -106,6 +103,95 @@ const ownerBookingRoutes: FastifyPluginAsync<OwnerBookingRoutesOptions> =
         });
       },
     );
+
+    // [UPDATED 2026-07-31] Owner direct booking creation
+    fastify.post<{
+      Params: { venueId: string };
+      Body: {
+        courtId: string;
+        startsAt: string;
+        endsAt: string;
+        customerName?: string;
+        customerPhone?: string;
+        reasonNote?: string;
+      };
+    }>(
+      '/:venueId/bookings',
+      {
+        preHandler: authenticate,
+        schema: {
+          params: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['venueId'],
+            properties: { venueId: objectId },
+          },
+          body: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['courtId', 'startsAt', 'endsAt'],
+            properties: {
+              courtId: objectId,
+              startsAt: dateTime,
+              endsAt: dateTime,
+              customerName: { type: 'string', minLength: 1, maxLength: 200 },
+              customerPhone: { type: 'string', minLength: 1, maxLength: 30 },
+              reasonNote: { type: 'string', minLength: 1, maxLength: 500 },
+            },
+          },
+        },
+      },
+      async (request, reply) => {
+        const owner = requireOwnerContext(request);
+        const result = await options.service.createDirectBooking({
+          actorOwnerId: owner.ownerId,
+          venueId: request.params.venueId,
+          correlationId: request.id,
+          ...request.body,
+        });
+        return reply.status(201).send(result);
+      },
+    );
+
+    // [UPDATED 2026-07-31] Owner booking cancellation
+    fastify.post<{
+      Params: { venueId: string; bookingId: string };
+      Body: { reasonCode: string; reasonText?: string };
+    }>(
+      '/:venueId/bookings/:bookingId/cancel',
+      {
+        preHandler: authenticate,
+        schema: {
+          params: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['venueId', 'bookingId'],
+            properties: { venueId: objectId, bookingId: objectId },
+          },
+          body: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['reasonCode'],
+            properties: {
+              reasonCode: { type: 'string', minLength: 1, maxLength: 100, pattern: '^[A-Za-z0-9_-]+$' },
+              reasonText: { type: 'string', minLength: 1, maxLength: 1000 },
+            },
+          },
+        },
+      },
+      async (request) => {
+        const owner = requireOwnerContext(request);
+        return options.service.cancelBooking({
+          actorOwnerId: owner.ownerId,
+          venueId: request.params.venueId,
+          bookingId: request.params.bookingId,
+          correlationId: request.id,
+          ...request.body,
+        });
+      },
+    );
+    fastify.post<{Params:{venueId:string;bookingId:string};Body:{amountMinor:number;method:'CASH'|'CARD'|'UPI'|'BANK_TRANSFER'|'OTHER';reference?:string;notes?:string}}>('/:venueId/bookings/:bookingId/payment',{preHandler:authenticate,schema:{params:{type:'object',additionalProperties:false,required:['venueId','bookingId'],properties:{venueId:objectId,bookingId:objectId}},body:{type:'object',additionalProperties:false,required:['amountMinor','method'],properties:{amountMinor:{type:'integer',minimum:0},method:{enum:['CASH','CARD','UPI','BANK_TRANSFER','OTHER']},reference:{type:'string',minLength:1,maxLength:200},notes:{type:'string',minLength:1,maxLength:500}}}}},async(request,reply)=>{const owner=requireOwnerContext(request);return reply.status(201).send(await options.service.recordPayment({actorOwnerId:owner.ownerId,venueId:request.params.venueId,bookingId:request.params.bookingId,correlationId:request.id,...request.body}));});
+    fastify.post<{Params:{venueId:string;bookingId:string};Body:{amountMinor:number;version:number;notes?:string}}>('/:venueId/bookings/:bookingId/payment/refund',{preHandler:authenticate,schema:{params:{type:'object',additionalProperties:false,required:['venueId','bookingId'],properties:{venueId:objectId,bookingId:objectId}},body:{type:'object',additionalProperties:false,required:['amountMinor','version'],properties:{amountMinor:{type:'integer',minimum:1},version:{type:'integer',minimum:1},notes:{type:'string',minLength:1,maxLength:500}}}}},async(request)=>{const owner=requireOwnerContext(request);return options.service.refundPayment({actorOwnerId:owner.ownerId,venueId:request.params.venueId,bookingId:request.params.bookingId,correlationId:request.id,...request.body});});
   };
 
 export default ownerBookingRoutes;

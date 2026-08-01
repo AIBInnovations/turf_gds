@@ -9,6 +9,7 @@ import type {
   OutboxEventDocument,
   OwnerNotificationDocument,
   OwnerNotificationType,
+  OwnerNotificationAggregateType,
   WebhookDeliveryDocument,
 } from './communications.types.js';
 
@@ -88,7 +89,7 @@ export interface CommunicationsRepository {
   markNotificationRead(input: {
     ownerId: ObjectId;
     notificationType: OwnerNotificationType;
-    aggregateType: 'BOOKING' | 'PAYOUT';
+    aggregateType: OwnerNotificationAggregateType;
     aggregateId: ObjectId;
     now: Date;
   }): Promise<'UPDATED' | 'ALREADY_READ' | 'NOT_FOUND'>;

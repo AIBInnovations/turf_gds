@@ -6,6 +6,7 @@ import {
 } from '../shared/auth-context.js';
 import type { PartnerAccessService } from './partner-access.service.js';
 import type { PartnerPortalService } from './partner-portal.service.js';
+import { createSimplePdf } from '../../../shared/documents/simple-pdf.js';
 
 export interface PartnerPortalRoutesOptions {
   service: PartnerPortalService;
@@ -233,6 +234,8 @@ const partnerPortalRoutes: FastifyPluginAsync<PartnerPortalRoutesOptions> =
       },
     );
 
+    fastify.get<{Params:{settlementId:string}}>('/partners/me/settlements/:settlementId/statement.pdf',{config:{rawBody:true},preHandler:authenticate,schema:{params:{type:'object',additionalProperties:false,required:['settlementId'],properties:{settlementId:objectId}}}},async(request,reply)=>{const partner=requirePartnerScope(request,'finance:read');const value=await options.service.getSettlement({settlementId:request.params.settlementId,partnerId:partner.partnerId,environment:partner.environment});return reply.header('content-type','application/pdf').header('content-disposition',`attachment; filename="partner-settlement-${request.params.settlementId}.pdf"`).send(createSimplePdf('Partner Settlement Statement',documentLines(value)));});
+
     fastify.get<{
       Querystring: { cursor?: string; limit?: number };
     }>(
@@ -252,6 +255,121 @@ const partnerPortalRoutes: FastifyPluginAsync<PartnerPortalRoutesOptions> =
         const partner = requirePartnerScope(request, 'finance:read');
         return options.service.listInvoices({
           ...request.query,
+          partnerId: partner.partnerId,
+          environment: partner.environment,
+        });
+      },
+    );
+
+    fastify.get<{ Params: { bookingId: string } }>(
+      '/partners/me/bookings/:bookingId',
+      {
+        config: { rawBody: true },
+        preHandler: authenticate,
+        schema: {
+          params: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['bookingId'],
+            properties: { bookingId: objectId },
+          },
+        },
+      },
+      async (request) => {
+        const partner = requirePartnerScope(request, 'reports:read');
+        return options.service.getBooking({
+          bookingId: request.params.bookingId,
+          partnerId: partner.partnerId,
+          environment: partner.environment,
+        });
+      },
+    );
+
+    fastify.get<{
+      Querystring: {
+        latitude: number;
+        longitude: number;
+        radiusMeters: number;
+        sportType:
+          | 'FOOTBALL' | 'CRICKET' | 'BADMINTON' | 'TENNIS'
+          | 'PICKLEBALL' | 'MULTI_SPORT' | 'OTHER';
+        cursor?: string;
+        limit?: number;
+      };
+    }>(
+      '/venues/search',
+      {
+        config: { rawBody: true },
+        preHandler: authenticate,
+        schema: {
+          querystring: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['latitude', 'longitude', 'radiusMeters', 'sportType'],
+            properties: {
+              latitude: { type: 'number', minimum: -90, maximum: 90 },
+              longitude: { type: 'number', minimum: -180, maximum: 180 },
+              radiusMeters: { type: 'integer', minimum: 100, maximum: 100_000 },
+              sportType: {
+                enum: [
+                  'FOOTBALL', 'CRICKET', 'BADMINTON', 'TENNIS',
+                  'PICKLEBALL', 'MULTI_SPORT', 'OTHER',
+                ],
+              },
+              ...cursorPaging,
+            },
+          },
+        },
+      },
+      async (request) => {
+        const partner = requirePartnerScope(request, 'availability:read');
+        return options.service.searchVenues({
+          ...request.query,
+          partnerId: partner.partnerId,
+          environment: partner.environment,
+        });
+      },
+    );
+
+    fastify.get<{
+      Params: { venueId: string };
+      Querystring: {
+        startsAt: string;
+        endsAt: string;
+        bookingType?: 'OPEN_TIME' | 'FIXED_SLOT';
+        cursor?: string;
+        limit?: number;
+      };
+    }>(
+      '/venues/:venueId/availability',
+      {
+        config: { rawBody: true },
+        preHandler: authenticate,
+        schema: {
+          params: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['venueId'],
+            properties: { venueId: objectId },
+          },
+          querystring: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['startsAt', 'endsAt'],
+            properties: {
+              startsAt: { type: 'string', format: 'date-time' },
+              endsAt: { type: 'string', format: 'date-time' },
+              bookingType: { enum: ['OPEN_TIME', 'FIXED_SLOT'] },
+              ...cursorPaging,
+            },
+          },
+        },
+      },
+      async (request) => {
+        const partner = requirePartnerScope(request, 'availability:read');
+        return options.service.getVenueAvailability({
+          ...request.query,
+          venueId: request.params.venueId,
           partnerId: partner.partnerId,
           environment: partner.environment,
         });
@@ -281,6 +399,10 @@ const partnerPortalRoutes: FastifyPluginAsync<PartnerPortalRoutesOptions> =
         });
       },
     );
+
+    fastify.get<{Params:{invoiceId:string}}>('/partners/me/invoices/:invoiceId/invoice.pdf',{config:{rawBody:true},preHandler:authenticate,schema:{params:{type:'object',additionalProperties:false,required:['invoiceId'],properties:{invoiceId:objectId}}}},async(request,reply)=>{const partner=requirePartnerScope(request,'finance:read');const value=await options.service.getInvoice({invoiceId:request.params.invoiceId,partnerId:partner.partnerId,environment:partner.environment});return reply.header('content-type','application/pdf').header('content-disposition',`attachment; filename="partner-invoice-${request.params.invoiceId}.pdf"`).send(createSimplePdf('Partner Invoice',documentLines(value)));});
   };
+
+function documentLines(value:unknown):string[]{if(!value||typeof value!=='object')return[String(value)];return Object.entries(value as Record<string,unknown>).flatMap(([key,item])=>item===undefined?[]:[`${key}: ${typeof item==='object'?JSON.stringify(item):String(item)}`]);}
 
 export default partnerPortalRoutes;

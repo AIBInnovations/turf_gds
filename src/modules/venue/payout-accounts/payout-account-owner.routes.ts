@@ -82,6 +82,11 @@ const payoutAccountOwnerRoutes: FastifyPluginAsync<
       });
     },
   );
+  fastify.get<{Params:{venueId:string;accountId:string}}>('/:venueId/payout-accounts/:accountId',{preHandler:authenticate,schema:{params:accountParams()}},async(request)=>{const owner=requireOwnerContext(request);return options.service.get({actorOwnerId:owner.ownerId,...request.params});});
+  fastify.patch<{Params:{venueId:string;accountId:string};Body:{version:number;accountHolderName:string;bankName:string;ifscCode:string}}>('/:venueId/payout-accounts/:accountId',{preHandler:authenticate,schema:{params:accountParams(),body:{type:'object',additionalProperties:false,required:['version','accountHolderName','bankName','ifscCode'],properties:{version:{type:'integer',minimum:1},accountHolderName:text(2,160),bankName:text(2,160),ifscCode:{type:'string',pattern:'^[A-Za-z]{4}0[A-Za-z0-9]{6}$'}}}}},async(request)=>{const owner=requireOwnerContext(request);return options.service.update({actorOwnerId:owner.ownerId,...request.params,...request.body});});
+  fastify.delete<{Params:{venueId:string;accountId:string};Querystring:{version:number}}>('/:venueId/payout-accounts/:accountId',{preHandler:authenticate,schema:{params:accountParams(),querystring:{type:'object',additionalProperties:false,required:['version'],properties:{version:{type:'integer',minimum:1}}}}},async(request)=>{const owner=requireOwnerContext(request);return options.service.disable({actorOwnerId:owner.ownerId,...request.params,...request.query});});
+  fastify.post<{Params:{venueId:string;accountId:string}}>('/:venueId/payout-accounts/:accountId/default',{preHandler:authenticate,schema:{params:accountParams()}},async(request)=>{const owner=requireOwnerContext(request);return options.service.setDefault({actorOwnerId:owner.ownerId,...request.params});});
+  fastify.post<{Params:{venueId:string;accountId:string};Querystring:{version:number;documentType:string}}>('/:venueId/payout-accounts/:accountId/documents',{preHandler:authenticate,schema:{params:accountParams(),querystring:{type:'object',additionalProperties:false,required:['version','documentType'],properties:{version:{type:'integer',minimum:1},documentType:{type:'string',pattern:'^[A-Za-z][A-Za-z0-9_-]{1,99}$'}}}}},async(request,reply)=>{const owner=requireOwnerContext(request);const part=await request.file();if(!part)return reply.status(400).send({error:{code:'PAYOUT_DOCUMENT_REQUIRED',message:'A multipart document is required',requestId:request.id}});return reply.status(201).send(await options.service.uploadDocument({actorOwnerId:owner.ownerId,...request.params,...request.query,filename:part.filename,mimeType:part.mimetype,buffer:await part.toBuffer()}));});
 };
 
 function venueParams() {
@@ -98,5 +103,6 @@ function venueParams() {
 function text(minLength: number, maxLength: number) {
   return { type: 'string', minLength, maxLength } as const;
 }
+function accountParams(){return{type:'object',additionalProperties:false,required:['venueId','accountId'],properties:{venueId:{type:'string',pattern:'^[a-fA-F0-9]{24}$'},accountId:{type:'string',pattern:'^[a-fA-F0-9]{24}$'}}}as const;}
 
 export default payoutAccountOwnerRoutes;

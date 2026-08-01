@@ -8,6 +8,19 @@ export const EXTERNAL_EVENT_TYPES = [
   'payout.pending',
   'payout.completed',
   'payout.failed',
+  'contract.proposed',
+  'contract.accepted',
+  'kyc.submitted',
+  'kyc.verified',
+  'kyc.rejected',
+  'payment.recorded',
+  'payment.refunded',
+  'venue.updated',
+  'court.updated',
+  'inventory.changed',
+  'remittance.required',
+  'remittance.received',
+  'payout.reversed',
 ] as const;
 
 export type ExternalEventType = (typeof EXTERNAL_EVENT_TYPES)[number];
@@ -17,7 +30,25 @@ export type DevicePlatform = 'ANDROID' | 'IOS' | 'WEB';
 export type OwnerNotificationType =
   | 'BOOKING_CONFIRMED'
   | 'BOOKING_CANCELLED'
-  | 'PAYOUT_COMPLETED';
+  | 'PAYOUT_PENDING'
+  | 'PAYOUT_COMPLETED'
+  | 'PAYOUT_FAILED'
+  | 'SETTLEMENT_CREATED'
+  | 'SETTLEMENT_COMPLETED'
+  | 'CONTRACT_PROPOSED'
+  | 'CONTRACT_ACCEPTED'
+  | 'KYC_SUBMITTED'
+  | 'KYC_VERIFIED'
+  | 'KYC_REJECTED'
+  | 'PAYMENT_RECORDED'
+  | 'PAYMENT_REFUNDED'
+  | 'VENUE_UPDATED'
+  | 'COURT_UPDATED'
+  | 'AVAILABILITY_CHANGED';
+
+export type OwnerNotificationAggregateType =
+  | 'BOOKING' | 'PAYMENT' | 'SETTLEMENT' | 'PAYOUT' | 'CONTRACT'
+  | 'KYC' | 'VENUE' | 'COURT' | 'INVENTORY';
 
 export interface FcmTokenDocument {
   token: string;
@@ -29,7 +60,7 @@ export interface FcmTokenDocument {
 
 export interface OwnerNotificationDocument {
   notification_type: OwnerNotificationType;
-  aggregate_type: 'BOOKING' | 'PAYOUT';
+  aggregate_type: OwnerNotificationAggregateType;
   aggregate_id: ObjectId;
   venue_id: ObjectId;
   payload: Record<string, unknown>;
@@ -102,6 +133,19 @@ export function externalEventType(value: string): ExternalEventType {
     PAYOUT_PENDING: 'payout.pending',
     PAYOUT_PAID: 'payout.completed',
     PAYOUT_FAILED: 'payout.failed',
+    CONTRACT_PROPOSED: 'contract.proposed',
+    CONTRACT_ACCEPTED: 'contract.accepted',
+    KYC_SUBMITTED: 'kyc.submitted',
+    KYC_VERIFIED: 'kyc.verified',
+    KYC_REJECTED: 'kyc.rejected',
+    PAYMENT_RECORDED: 'payment.recorded',
+    PAYMENT_REFUNDED: 'payment.refunded',
+    VENUE_UPDATED: 'venue.updated',
+    COURT_UPDATED: 'court.updated',
+    AVAILABILITY_CHANGED: 'inventory.changed',
+    REMITTANCE_REQUIRED: 'remittance.required',
+    REMITTANCE_RECEIVED: 'remittance.received',
+    PAYOUT_REVERSED: 'payout.reversed',
   };
   const result = mapped[value];
   if (!result) throw new Error(`Unsupported Communications event: ${value}`);

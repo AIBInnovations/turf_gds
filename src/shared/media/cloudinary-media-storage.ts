@@ -39,6 +39,7 @@ export interface MediaStorage {
     publicId: string,
     resourceType?: Exclude<MediaResourceType, 'auto'>,
   ): Promise<void>;
+  signedUrl?(publicId:string,expiresAt:Date):string;
 }
 
 export class CloudinaryMediaStorage implements MediaStorage {
@@ -118,4 +119,6 @@ export class CloudinaryMediaStorage implements MediaStorage {
       invalidate: true,
     });
   }
+
+  public signedUrl(publicId:string,expiresAt:Date):string{return this.client.url(publicId,{type:'authenticated',sign_url:true,secure:true,expires_at:Math.floor(expiresAt.getTime()/1000)});}
 }

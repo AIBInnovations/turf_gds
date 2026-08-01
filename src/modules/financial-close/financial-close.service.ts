@@ -291,6 +291,9 @@ export function createFinancialCloseService(input: {
             timestamp,
             session,
           );
+          for (const venueId of uniqueIds(entries.map(({ venue_id }) => venue_id))) {
+            await input.outboxRepository.enqueue({aggregateType:'SETTLEMENT',aggregateId:created._id,partnerId:null,venueId,environment:created.environment,eventType:'SETTLEMENT_DRAFT_CREATED',eventVersion:1,correlationId:`${values.correlationId}:venue:${venueId.toHexString()}`,payload:{settlement_id:created._id.toHexString(),venue_id:venueId.toHexString(),status:created.status,period_start:created.period_start.toISOString(),period_end:created.period_end.toISOString(),currency:created.currency},now:timestamp,session});
+          }
         });
       } catch (error) {
         if (duplicate(error)) {
@@ -533,6 +536,13 @@ export function createFinancialCloseService(input: {
           timestamp,
           session,
         );
+        const financialDb = input.database.db;
+        if (financialDb) {
+          const venueIds = await financialDb.collection<LedgerEntryDocument>('ledger_entries').distinct('venue_id',{settlement_id:completed._id},{session}) as ObjectId[];
+          for (const venueId of venueIds) {
+            await input.outboxRepository.enqueue({aggregateType:'SETTLEMENT',aggregateId:completed._id,partnerId:null,venueId,environment:completed.environment,eventType:'SETTLEMENT_COMPLETED',eventVersion:2,correlationId:`${values.correlationId}:venue:${venueId.toHexString()}`,payload:{settlement_id:completed._id.toHexString(),venue_id:venueId.toHexString(),status:completed.status,period_start:completed.period_start.toISOString(),period_end:completed.period_end.toISOString(),currency:completed.currency},now:timestamp,session});
+          }
+        }
       });
       if (!completed) throw new Error('Completion transaction returned no result');
       return settlementView(completed);
@@ -976,9 +986,9 @@ export function createFinancialCloseService(input: {
         entries = await input.ledgerService.postAdjustment({
           booking: {
             bookingId: booking._id,
-            partnerId: booking.partner_id,
+            partnerId: booking.partner_id ?? null,
             venueId: booking.venue_id,
-            contractId: booking.contract_id,
+            contractId: booking.contract_id ?? null,
             environment: booking.environment,
           },
           lines: values.lines,

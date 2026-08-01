@@ -4,6 +4,7 @@ import type { OwnerAccessService } from '../../identity/owner/owner-access.servi
 import { AppError } from '../../../shared/errors/app-error.js';
 import type { MediaStorage } from '../../../shared/media/cloudinary-media-storage.js';
 import type { VenueRepository } from './venue.repository.js';
+import type { OwnerEventPublisher } from '../../../shared/communications/owner-event-publisher.js';
 import type {
   AddressDocument,
   VenueDocument,
@@ -63,6 +64,7 @@ export function createVenueOwnerService(input: {
   repository: VenueRepository;
   ownerAccessService: OwnerAccessService;
   mediaStorage: MediaStorage;
+  events?: OwnerEventPublisher;
   now?: () => Date;
 }): VenueOwnerService {
   const now = input.now ?? (() => new Date());
@@ -116,6 +118,7 @@ export function createVenueOwnerService(input: {
       throw versionConflict(current?.version ?? existing.version);
     }
 
+    await input.events?.publish({aggregateType:'VENUE',aggregateId:updated._id,venueId:updated._id,eventType:'VENUE_UPDATED',eventVersion:updated.version,correlationId:values.correlationId,payload:{venueId:values.venueId,changedFields},now:updated.updated_at});
     return presentVenue(updated);
   }
 
@@ -195,6 +198,7 @@ export function createVenueOwnerService(input: {
         throw versionConflict(current?.version ?? existing.version);
       }
 
+      await input.events?.publish({aggregateType:'VENUE',aggregateId:updated._id,venueId:updated._id,eventType:'VENUE_UPDATED',eventVersion:updated.version,correlationId:values.correlationId,payload:{venueId:values.venueId,changedFields:['media']},now:updated.updated_at});
       return presentVenue(updated);
     } catch (error) {
       await input.mediaStorage

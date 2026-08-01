@@ -21,6 +21,8 @@ import partnerAccessRoutes from '../modules/identity/partner/partner-access.rout
 import type { PartnerAccessService } from '../modules/identity/partner/partner-access.service.js';
 import partnerPortalRoutes from '../modules/identity/partner/partner-portal.routes.js';
 import type { PartnerPortalService } from '../modules/identity/partner/partner-portal.service.js';
+import partnerPayoutAccountRoutes from '../modules/identity/partner/partner-payout-account.routes.js';
+import type { PartnerPayoutAccountService } from '../modules/identity/partner/partner-payout-account.service.js';
 import adminAuthRoutes from '../modules/identity/platform/auth.routes.js';
 import type { AdminAuthService } from '../modules/identity/platform/auth.service.js';
 import courtOwnerRoutes from '../modules/venue/courts/court-owner.routes.js';
@@ -32,12 +34,22 @@ import payoutAccountAdminRoutes from '../modules/venue/payout-accounts/payout-ac
 import payoutAccountOwnerRoutes from '../modules/venue/payout-accounts/payout-account-owner.routes.js';
 import type { PayoutAccountService } from '../modules/venue/payout-accounts/payout-account.service.js';
 import type { InventoryService } from '../modules/venue/inventory/inventory.service.js';
+import venueContentRoutes from '../modules/venue/content/venue-content.routes.js';
+import type { VenueContentService } from '../modules/venue/content/venue-content.service.js';
+import ownerDashboardRoutes from '../modules/venue/dashboard/owner-dashboard.routes.js';
+import type { OwnerDashboardService } from '../modules/venue/dashboard/owner-dashboard.service.js';
+import onboardingAgreementRoutes from '../modules/venue/onboarding-agreement/onboarding-agreement.routes.js';
+import type { OnboardingAgreementService } from '../modules/venue/onboarding-agreement/onboarding-agreement.service.js';
 import adminCommunicationsRoutes from '../shared/communications/admin-communications.routes.js';
 import ownerCommunicationsRoutes from '../shared/communications/owner-communications.routes.js';
 import ownerDeviceRoutes from '../shared/communications/owner-device.routes.js';
 import type { CommunicationsService } from '../shared/communications/communications.service.js';
 import adminEpic08Routes from '../modules/admin/epic08/admin-epic08.routes.js';
 import type { AdminEpic08Service } from '../modules/admin/epic08/admin-epic08.service.js';
+import inventorySyncRoutes from '../modules/inventory-sync/inventory-sync.routes.js';
+import type { InventorySyncService } from '../modules/inventory-sync/inventory-sync.service.js';
+import treasuryRoutes from '../modules/treasury/treasury.routes.js';
+import type { TreasuryService } from '../modules/treasury/treasury.service.js';
 
 export interface ApiV1RoutesOptions {
   identityService: IdentityService;
@@ -47,9 +59,13 @@ export interface ApiV1RoutesOptions {
   kycService: KycService;
   partnerAccessService: PartnerAccessService;
   partnerPortalService: PartnerPortalService;
+  partnerPayoutAccountService: PartnerPayoutAccountService;
   venueOwnerService: VenueOwnerService;
   courtOwnerService: CourtOwnerService;
   inventoryService: InventoryService;
+  venueContentService: VenueContentService;
+  ownerDashboardService: OwnerDashboardService;
+  onboardingAgreementService: OnboardingAgreementService;
   payoutAccountService: PayoutAccountService;
   ownerBookingService: OwnerBookingService;
   bookingLifecycleService: BookingLifecycleService;
@@ -57,6 +73,8 @@ export interface ApiV1RoutesOptions {
   financialCloseService: FinancialCloseService;
   communicationsService: CommunicationsService;
   adminEpic08Service: AdminEpic08Service;
+  inventorySyncService: InventorySyncService;
+  treasuryService: TreasuryService;
 }
 
 const apiV1Routes: FastifyPluginAsync<ApiV1RoutesOptions> = async (
@@ -100,6 +118,21 @@ const apiV1Routes: FastifyPluginAsync<ApiV1RoutesOptions> = async (
     prefix: '/owner/venues',
     service: options.inventoryService,
     ownerAccessService: options.ownerAccessService,
+  });
+  await fastify.register(venueContentRoutes, {
+    prefix: '/owner/venues',
+    service: options.venueContentService,
+    ownerAccessService: options.ownerAccessService,
+  });
+  await fastify.register(ownerDashboardRoutes, {
+    prefix: '/owner/venues',
+    service: options.ownerDashboardService,
+    ownerAccessService: options.ownerAccessService,
+  });
+  await fastify.register(onboardingAgreementRoutes, {
+    service: options.onboardingAgreementService,
+    ownerAccessService: options.ownerAccessService,
+    adminAuthService: options.adminAuthService,
   });
   await fastify.register(payoutAccountOwnerRoutes, {
     prefix: '/owner/venues',
@@ -151,10 +184,17 @@ const apiV1Routes: FastifyPluginAsync<ApiV1RoutesOptions> = async (
     service: options.kycService,
     ownerAccessService: options.ownerAccessService,
     adminAuthService: options.adminAuthService,
+    partnerAccessService: options.partnerAccessService,
   });
   await fastify.register(partnerAccessRoutes, {
     prefix: '/partners',
     service: options.partnerAccessService,
+    adminAuthService: options.adminAuthService,
+  });
+  await fastify.register(partnerPayoutAccountRoutes, {
+    prefix: '/partners',
+    service: options.partnerPayoutAccountService,
+    partnerAccessService: options.partnerAccessService,
     adminAuthService: options.adminAuthService,
   });
   await fastify.register(partnerPortalRoutes, {
@@ -169,6 +209,16 @@ const apiV1Routes: FastifyPluginAsync<ApiV1RoutesOptions> = async (
   await fastify.register(adminEpic08Routes, {
     prefix: '/admin',
     service: options.adminEpic08Service,
+    adminAuthService: options.adminAuthService,
+  });
+  await fastify.register(inventorySyncRoutes, {
+    service: options.inventorySyncService,
+    adminAuthService: options.adminAuthService,
+    ownerAccessService: options.ownerAccessService,
+  });
+  await fastify.register(treasuryRoutes, {
+    service: options.treasuryService,
+    partnerAccessService: options.partnerAccessService,
     adminAuthService: options.adminAuthService,
   });
 };

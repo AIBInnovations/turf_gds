@@ -86,6 +86,31 @@ export interface PartnerPortalService {
     environment: PartnerEnvironment;
     invoiceId: string;
   }): Promise<unknown>;
+  getBooking(input: {
+    partnerId: string;
+    environment: PartnerEnvironment;
+    bookingId: string;
+  }): Promise<unknown>;
+  searchVenues(input: {
+    partnerId: string;
+    environment: PartnerEnvironment;
+    latitude: number;
+    longitude: number;
+    radiusMeters: number;
+    sportType: CourtDocument['sport_type'];
+    cursor?: string;
+    limit?: number;
+  }): Promise<{ items: unknown[]; nextCursor: string | null }>;
+  getVenueAvailability(input: {
+    partnerId: string;
+    environment: PartnerEnvironment;
+    venueId: string;
+    startsAt: string;
+    endsAt: string;
+    bookingType?: BookingMode;
+    cursor?: string;
+    limit?: number;
+  }): Promise<{ items: unknown[]; nextCursor: string | null }>;
 }
 
 export function createPartnerPortalService(db: Db): PartnerPortalService {
@@ -365,6 +390,220 @@ export function createPartnerPortalService(db: Db): PartnerPortalService {
       if (!settlement) notFound('INVOICE_NOT_FOUND');
       return invoiceView(invoice!);
     },
+
+    async getBooking(input) {
+      const booking = await db.collection<BookingDocument>('bookings').findOne({
+        _id: oid(input.bookingId),
+        partner_id: oid(input.partnerId),
+        environment: input.environment,
+      });
+      if (!booking) notFound('BOOKING_NOT_FOUND');
+      return bookingView(booking!);
+    },
+
+    async searchVenues(input) {
+      const limit = boundedLimit(input.limit);
+      const partnerId = oid(input.partnerId);
+
+      const venues = await db.collection<VenueDocument>('venues').aggregate<
+        VenueDocument & { distance_meters: number }
+      >([
+        {
+          $geoNear: {
+            near: { type: 'Point', coordinates: [input.longitude, input.latitude] },
+            distanceField: 'distance_meters',
+            maxDistance: input.radiusMeters,
+            spherical: true,
+            query: { environment: input.environment, status: 'ACTIVE' },
+          },
+        },
+        { $limit: 500 },
+      ]).toArray();
+      if (venues.length === 0) return { items: [], nextCursor: null };
+
+      const contracts = await db.collection<ContractDocument>(
+        'partner_venue_contracts',
+      ).find({
+        partner_id: partnerId,
+        venue_id: { $in: venues.map(({ _id }) => _id) },
+        status: 'ACTIVE',
+      }).toArray();
+      const contractedVenueIds = new Set(
+        contracts.map((c) => c.venue_id.toHexString()),
+      );
+      const eligible = venues.filter((v) =>
+        contractedVenueIds.has(v._id.toHexString()),
+      );
+
+      const courts = eligible.length
+        ? await db.collection<CourtDocument>('courts').find({
+            venue_id: { $in: eligible.map(({ _id }) => _id) },
+            status: 'AVAILABLE',
+            sport_type: input.sportType,
+          }).toArray()
+        : [];
+      const courtCountByVenue = new Map<string, number>();
+      for (const court of courts) {
+        const key = court.venue_id.toHexString();
+        courtCountByVenue.set(key, (courtCountByVenue.get(key) ?? 0) + 1);
+      }
+
+      const items = eligible
+        .filter((v) => (courtCountByVenue.get(v._id.toHexString()) ?? 0) > 0)
+        .map((v) => ({
+          venueId: v._id.toHexString(),
+          legalName: v.legal_name,
+          displayName: v.display_name,
+          address: v.address,
+          timezone: v.timezone,
+          distanceMeters: Math.round(
+            (v as VenueDocument & { distance_meters: number }).distance_meters,
+          ),
+          courtCount: courtCountByVenue.get(v._id.toHexString()) ?? 0,
+          currency: v.currency,
+        }));
+
+      const after = decodeCursor(input.cursor);
+      const filtered = after
+        ? items.filter((item) => venueKey(item) > after)
+        : items;
+      const page = filtered.slice(0, limit);
+      return {
+        items: page,
+        nextCursor:
+          filtered.length > limit && page.length
+            ? encodeCursor(venueKey(page[page.length - 1]!))
+            : null,
+      };
+    },
+
+    async getVenueAvailability(input) {
+      const startsAt = instant(input.startsAt, 'startsAt');
+      const endsAt = instant(input.endsAt, 'endsAt');
+      if (startsAt >= endsAt) invalid('INVALID_AVAILABILITY_RANGE');
+      const durationMinutes = (endsAt.getTime() - startsAt.getTime()) / 60_000;
+      if (durationMinutes > 24 * 60) invalid('AVAILABILITY_RANGE_TOO_LARGE');
+      const limit = boundedLimit(input.limit);
+      const partnerId = oid(input.partnerId);
+      const venueId = oid(input.venueId);
+
+      const venue = await db.collection<VenueDocument>('venues').findOne({
+        _id: venueId,
+        environment: input.environment,
+        status: 'ACTIVE',
+      });
+      if (!venue) notFound('VENUE_NOT_FOUND');
+
+      const contract = await db.collection<ContractDocument>(
+        'partner_venue_contracts',
+      ).findOne({
+        partner_id: partnerId,
+        venue_id: venueId,
+        status: 'ACTIVE',
+        effective_from: { $lte: startsAt },
+        $or: [{ effective_to: null }, { effective_to: { $gt: startsAt } }],
+      });
+      if (!contract) notFound('CONTRACT_NOT_FOUND');
+
+      const courts = await db.collection<CourtDocument>('courts').find({
+        venue_id: venueId,
+        status: 'AVAILABLE',
+        ...(input.bookingType ? { booking_mode: { $in: [input.bookingType, 'BOTH'] } } : {}),
+      }).toArray();
+      const courtIds = courts.map(({ _id }) => _id);
+
+      const fixedSlots = courtIds.length
+        ? await db.collection<SlotDocument>('slots').find({
+            court_id: { $in: courtIds },
+            environment: input.environment,
+            booking_type: 'FIXED_SLOT',
+            status: 'AVAILABLE',
+            starts_at: { $gte: startsAt },
+            ends_at: { $lte: endsAt },
+          }).sort({ starts_at: 1, _id: 1 }).toArray()
+        : [];
+      const pricingRules = courtIds.length
+        ? await db.collection<PricingRuleDocument>('pricing_rules').find({
+            court_id: { $in: courtIds },
+            active: true,
+            effective_from: { $lte: startsAt },
+            $or: [{ effective_to: null }, { effective_to: { $gt: startsAt } }],
+          }).sort({ priority: -1, created_at: 1 }).toArray()
+        : [];
+
+      const fixedByCourt = groupBy(fixedSlots, (s) => s.court_id.toHexString());
+      const rulesByCourt = groupBy(pricingRules, (r) => r.court_id.toHexString());
+      const items: Array<Record<string, unknown>> = [];
+
+      for (const court of courts) {
+        const base = {
+          venueId: venue!._id.toHexString(),
+          courtId: court._id.toHexString(),
+          courtName: court.name,
+          sportType: court.sport_type,
+          contractId: contract!._id.toHexString(),
+          currency: 'INR',
+        };
+        if (
+          input.bookingType !== 'OPEN_TIME' &&
+          allows(court.booking_mode, contract!.allowed_booking_modes, 'FIXED_SLOT')
+        ) {
+          for (const slot of fixedByCourt.get(court._id.toHexString()) ?? []) {
+            items.push({
+              ...base,
+              availabilityId: slot._id.toHexString(),
+              bookingType: 'FIXED_SLOT',
+              startsAt: slot.starts_at.toISOString(),
+              endsAt: slot.ends_at.toISOString(),
+              priceMinor: slot.price_minor,
+            });
+          }
+        }
+        if (
+          input.bookingType !== 'FIXED_SLOT' &&
+          allows(court.booking_mode, contract!.allowed_booking_modes, 'OPEN_TIME') &&
+          durationMinutes >= court.min_booking_minutes &&
+          durationMinutes % court.booking_increment_minutes === 0 &&
+          insideOperatingHours(court, venue!.timezone, startsAt, endsAt)
+        ) {
+          const overlap = await db.collection<SlotDocument>('slots').findOne({
+            court_id: court._id,
+            environment: input.environment,
+            status: { $in: ['HELD', 'BOOKED', 'BLOCKED', 'UNAVAILABLE'] },
+            starts_at: { $lt: endsAt },
+            ends_at: { $gt: startsAt },
+          });
+          const rule = matchingRule(
+            rulesByCourt.get(court._id.toHexString()) ?? [],
+            venue!.timezone,
+            startsAt,
+          );
+          if (!overlap && rule) {
+            items.push({
+              ...base,
+              availabilityId: null,
+              bookingType: 'OPEN_TIME',
+              startsAt: startsAt.toISOString(),
+              endsAt: endsAt.toISOString(),
+              priceMinor: Math.round(rule.price_minor * durationMinutes / 60),
+            });
+          }
+        }
+      }
+
+      const after = decodeCursor(input.cursor);
+      const filtered = after
+        ? items.filter((item) => availabilityKey(item) > after)
+        : items;
+      const page = filtered.slice(0, limit);
+      return {
+        items: page,
+        nextCursor:
+          filtered.length > limit && page.length
+            ? encodeCursor(availabilityKey(page[page.length - 1]!))
+            : null,
+      };
+    },
   };
 }
 
@@ -552,6 +791,13 @@ function groupBy<T>(values: T[], key: (value: T) => string): Map<string, T[]> {
 
 function uniqueIds(values: ObjectId[]): ObjectId[] {
   return [...new Map(values.map((value) => [value.toHexString(), value])).values()];
+}
+
+function venueKey(value: Record<string, unknown>): string {
+  return [
+    String(value.distanceMeters).padStart(12, '0'),
+    value.venueId,
+  ].join('|');
 }
 
 function availabilityKey(value: Record<string, unknown>): string {

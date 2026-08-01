@@ -4,8 +4,11 @@ import type { AdminAuthService } from '../platform/auth.service.js';
 import {
   createAdminAuthenticationHook,
   createPartnerAuthenticationHook,
+  createPartnerPortalAuthenticationHook,
   requireAdminRole,
+  requirePartnerPortalContext,
   requirePartnerScope,
+  getBearerToken,
 } from '../shared/auth-context.js';
 import type { PartnerAccessService } from './partner-access.service.js';
 import type { PartnerEnvironment } from './partner-access.types.js';
@@ -26,6 +29,7 @@ const partnerAccessRoutes: FastifyPluginAsync<PartnerAccessRoutesOptions> =
       options.adminAuthService,
     );
     const partnerAuth = createPartnerAuthenticationHook(options.service);
+    const portalAuth = createPartnerPortalAuthenticationHook(options.service);
 
     fastify.addHook('onRequest', async (request) => {
       startedAt.set(request, performance.now());
@@ -51,7 +55,7 @@ const partnerAccessRoutes: FastifyPluginAsync<PartnerAccessRoutesOptions> =
     });
 
     fastify.post<{
-      Body: { legalName: string; displayName: string };
+      Body: { legalName: string; displayName: string; email: string; phoneE164: string; password: string };
     }>(
       '/applications',
       {
@@ -59,7 +63,7 @@ const partnerAccessRoutes: FastifyPluginAsync<PartnerAccessRoutesOptions> =
           body: {
             type: 'object',
             additionalProperties: false,
-            required: ['legalName', 'displayName'],
+            required: ['legalName', 'displayName', 'email', 'phoneE164', 'password'],
             properties: {
               legalName: { type: 'string', minLength: 2, maxLength: 200 },
               displayName: {
@@ -67,6 +71,9 @@ const partnerAccessRoutes: FastifyPluginAsync<PartnerAccessRoutesOptions> =
                 minLength: 2,
                 maxLength: 200,
               },
+              email: { type: 'string', format: 'email', maxLength: 320 },
+              phoneE164: { type: 'string', pattern: '^\\+[1-9][0-9]{7,14}$' },
+              password: { type: 'string', minLength: 12, maxLength: 128 },
             },
           },
         },
@@ -74,6 +81,16 @@ const partnerAccessRoutes: FastifyPluginAsync<PartnerAccessRoutesOptions> =
       async (request, reply) =>
         reply.status(201).send(await options.service.apply(request.body)),
     );
+
+    fastify.post<{ Body: { email: string; password: string } }>('/auth/login', {
+      schema: { body: { type: 'object', additionalProperties: false, required: ['email','password'], properties: { email: { type: 'string', format: 'email', maxLength: 320 }, password: { type: 'string', minLength: 1, maxLength: 128 } } } },
+    }, async (request) => options.service.login(request.body));
+
+    fastify.get('/me', { preHandler: portalAuth }, async (request) => {
+      const partner = requirePartnerPortalContext(request);
+      return { partnerId: partner.partnerId, status: partner.status };
+    });
+    fastify.post('/auth/logout',{preHandler:portalAuth},async(request,reply)=>{const partner=requirePartnerPortalContext(request);await options.service.logoutPortalSession(partner.partnerId,getBearerToken(request));return reply.status(204).send();});
 
     fastify.patch<{
       Params: { partnerId: string };
@@ -262,6 +279,12 @@ const partnerAccessRoutes: FastifyPluginAsync<PartnerAccessRoutesOptions> =
         );
       },
     );
+
+    fastify.get('/webhooks',{config:{rawBody:true},preHandler:partnerAuth},async request=>{const partner=requirePartnerScope(request,'webhooks:write');return options.service.listWebhooks({partnerId:partner.partnerId,environment:partner.environment});});
+
+    fastify.post<{Params:{webhookId:string}}>('/webhooks/:webhookId/rotate-secret',{config:{rawBody:true},preHandler:partnerAuth,schema:{params:{type:'object',additionalProperties:false,required:['webhookId'],properties:{webhookId:{type:'string',pattern:'^[a-fA-F0-9]{24}$'}}}}},async request=>{const partner=requirePartnerScope(request,'webhooks:write');return options.service.rotateWebhookSecret({webhookId:request.params.webhookId,partnerId:partner.partnerId,environment:partner.environment});});
+
+    fastify.post<{Params:{webhookId:string}}>('/webhooks/:webhookId/test',{config:{rawBody:true},preHandler:partnerAuth,schema:{params:{type:'object',additionalProperties:false,required:['webhookId'],properties:{webhookId:{type:'string',pattern:'^[a-fA-F0-9]{24}$'}}}}},async request=>{const partner=requirePartnerScope(request,'webhooks:write');return options.service.testWebhook({webhookId:request.params.webhookId,partnerId:partner.partnerId,environment:partner.environment});});
 
     fastify.put<{
       Params: { webhookId: string };

@@ -1,142 +1,100 @@
 # Venue Owner API
 
-All routes are under `/api/v1` and require a Venue Owner Bearer session.
+All routes are under `/api/v1`. Owner routes require a revocable Venue Owner
+Bearer session and enforce exact Venue membership and role permissions.
 
-## Venue Profile
+## Profile, courts, pricing, and availability
 
-| Method | Route | Permission | Purpose |
-|---|---|---|---|
-| GET | `/owner/venues/:venueId` | Active membership | Read the scoped Venue profile |
-| PATCH | `/owner/venues/:venueId` | `MANAGE_VENUE` | Update profile fields using optimistic versioning |
-| POST | `/owner/venues/:venueId/media?version=:version` | `MANAGE_VENUE` | Upload public media and embed its metadata |
+- `GET/PATCH /owner/venues/:venueId` reads and versions the core profile.
+- `POST /owner/venues/:venueId/media?version=` uploads Venue media.
+- `POST/GET/PATCH /owner/venues/:venueId/courts[...]` manages Courts.
+- `POST /owner/venues/:venueId/courts/:courtId/media?version=` uploads Court media.
+- `PUT /owner/venues/:venueId/courts/:courtId/operating-hours` replaces hours.
+- `POST/GET/PATCH .../pricing-rules[...]` manages effective INR pricing.
+- `POST .../slots/generate` generates fixed inventory.
+- `GET .../inventory` reads the availability calendar.
+- `POST .../inventory/block` and `POST .../inventory/:slotId/release` manually block and release inventory.
 
-PATCH accepts `version` and one or more of:
+All mutations use optimistic versions, Venue scoping, bounded audit history,
+and correlation IDs. Media bytes are stored in Cloudinary; public delivery
+metadata is embedded in the owning aggregate.
 
-- `legalName`
-- `displayName`
-- `timezone`
-- complete `address`
-- `latitude` and `longitude` together
-- `currency`, which can only be `INR`
+## Flexible venue content
 
-Every successful mutation increments `Venue.version` and appends a bounded
-audit event containing the Venue Owner actor, correlation ID, timestamp, and
-changed fields. A stale version returns `VENUE_VERSION_CONFLICT`.
+- `GET /owner/venues/:venueId/content?locale=en-IN`
+- `PUT /owner/venues/:venueId/content?locale=en-IN`
 
-Venue media accepts JPEG, PNG, WebP, and MP4 up to 10 MB. Cloudinary stores the
-bytes; MongoDB embeds only public delivery metadata. The Venue aggregate is
-bounded to 20 media items. If persistence fails after upload, the uploaded
-object is deleted.
+Content is a flexible JSON object, localized, limited to 256 KiB, and protected
+by optimistic versioning. Top-level keys must be stable identifier-style names.
+This supports descriptions, amenities, facilities, policies, directions, FAQs,
+and future content without changing the core Venue schema.
 
-Identity owns membership and permission decisions. Venue owns profile, media,
-version, and audit persistence. An owner cannot read or mutate another Venue
-without an active membership, and mutation additionally requires
-`MANAGE_VENUE`.
+## Direct bookings, payments, refunds, and cancellation
 
-## Courts
+- `GET /owner/venues/:venueId/bookings`
+- `GET /owner/venues/:venueId/bookings/:bookingId`
+- `POST /owner/venues/:venueId/bookings`
+- `POST /owner/venues/:venueId/bookings/:bookingId/payment`
+- `POST /owner/venues/:venueId/bookings/:bookingId/payment/refund`
+- `POST /owner/venues/:venueId/bookings/:bookingId/cancel`
 
-| Method | Route | Permission | Purpose |
-|---|---|---|---|
-| POST | `/owner/venues/:venueId/courts` | `MANAGE_COURTS` | Create a Court |
-| GET | `/owner/venues/:venueId/courts` | Active membership | List Venue Courts |
-| GET | `/owner/venues/:venueId/courts/:courtId` | Active membership | Read a Venue-scoped Court |
-| PATCH | `/owner/venues/:venueId/courts/:courtId` | `MANAGE_COURTS` | Update Court configuration or status |
-| POST | `/owner/venues/:venueId/courts/:courtId/media?version=:version` | `MANAGE_COURTS` | Upload Court media metadata |
-| PUT | `/owner/venues/:venueId/courts/:courtId/operating-hours` | `MANAGE_AVAILABILITY` | Replace operating hours using Court versioning |
+Direct creation atomically validates the active Venue and Court, rejects
+unavailable overlap, creates booked inventory, creates a `DIRECT` Booking, and
+enqueues a notification. Direct payments support cash, card, UPI, bank transfer,
+and other methods, plus partial/full refunds. Cancelling a paid direct booking
+fully refunds the remaining paid amount and releases inventory transactionally.
+Direct payments do not enter Partner contract settlement accounting.
 
-Court names are case-insensitively unique within a Venue. Booking mode must be
-`FIXED_SLOT`, `OPEN_TIME`, or `BOTH`. Minimum booking duration is at least 60
-minutes and must be divisible by the booking increment. A Court inherits the
-Venue timezone unless a valid IANA timezone is supplied.
+## Onboarding agreement and cancellation policy
 
-Court updates and media uploads use `Court.version` for optimistic concurrency.
-Setting status to `INACTIVE` disables the Court for later inventory generation
-and search behavior. Court media has the same public Cloudinary metadata,
-10 MB file, 20-item bound, and failed-write cleanup rules as Venue media.
+- `POST /admin/onboarding/venues/:venueId/agreement` proposes terms.
+- `GET /owner/venues/:venueId/onboarding-agreement` returns current terms.
+- `POST /owner/venues/:venueId/onboarding-agreement/accept` accepts one version.
 
-Operating hours use ISO weekdays 1-7 and `HH:mm` local times. Each day may
-appear once, opening must precede closing, and the complete replacement is
-sorted and saved with optimistic Court versioning.
+The agreement includes contract text, commission basis points, settlement cycle
+and lag, cancellation permission, default/no-show refund basis points, owner
+cancellation notice, and refund tiers. Acceptance records the owner, exact
+version, timestamp, IP address, and audit event. Production onboarding approval
+requires verified BUSINESS KYC and an accepted agreement. Partner-specific
+distribution contracts remain independently versioned by the Contracts module.
 
-## Pricing And Inventory
+## KYC and payout accounts
 
-| Method | Route | Permission | Purpose |
-|---|---|---|---|
-| POST | `/owner/venues/:venueId/courts/:courtId/pricing-rules` | `MANAGE_PRICING` | Create an effective-dated INR pricing rule |
-| GET | `/owner/venues/:venueId/courts/:courtId/pricing-rules` | `MANAGE_PRICING` | List Court pricing rules |
-| PATCH | `/owner/venues/:venueId/courts/:courtId/pricing-rules/:pricingRuleId` | `MANAGE_PRICING` | Edit or deactivate a pricing rule |
-| POST | `/owner/venues/:venueId/courts/:courtId/slots/generate` | `MANAGE_AVAILABILITY` | Generate up to 31 days of fixed inventory |
-| GET | `/owner/venues/:venueId/courts/:courtId/inventory?from=:from&to=:to` | `MANAGE_AVAILABILITY` | Read the owner inventory calendar |
-| POST | `/owner/venues/:venueId/courts/:courtId/inventory/block` | `MANAGE_AVAILABILITY` | Block a fixed Slot or an open-time interval |
-| POST | `/owner/venues/:venueId/courts/:courtId/inventory/:slotId/release` | `MANAGE_AVAILABILITY` | Release owner-blocked inventory |
+KYC supports draft creation, authenticated Cloudinary document upload,
+submission, current-status reads, and Admin review.
 
-The highest-priority active pricing rule wins. Generation is idempotent,
-preserves the Venue environment, ignores inactive Courts and Venues, and does
-not create availability over held, booked, blocked, or unavailable intervals.
-Fixed Slot changes use Slot versions. Open-time block creation uses the Court
-version as a transactional mutex and rejects conflicting durable inventory.
-Slot audit history records the actor, state change, reason, correlation ID, and
-timestamp.
+- `POST/GET /owner/venues/:venueId/payout-accounts`
+- `GET/PATCH/DELETE /owner/venues/:venueId/payout-accounts/:accountId`
+- `POST /owner/venues/:venueId/payout-accounts/:accountId/default`
+- `POST /owner/venues/:venueId/payout-accounts/:accountId/documents?version=&documentType=`
 
-## Payout Accounts
+The API accepts only vault tokens and masked account metadata, never raw account
+numbers. Owners can inspect details, update and re-submit, disable, choose a
+verified default, and upload protected PDF/image evidence. Admin verification
+supports penny-drop and documented manual review.
 
-| Method | Route | Permission | Purpose |
-|---|---|---|---|
-| POST | `/owner/venues/:venueId/payout-accounts` | `MANAGE_VENUE` | Add tokenized payout metadata |
-| GET | `/owner/venues/:venueId/payout-accounts` | `VIEW_FINANCE` | List masked payout accounts |
+## Dashboard and notifications
 
-The API accepts a vault token and last four digits; it never accepts, persists,
-or returns a raw account number. New accounts remain `PENDING`. Verification
-is recorded only by an authenticated `ADMIN`; `OPS` and `SUPPORT`
-cannot verify accounts. `PENNY_DROP` identifies the evidence source and
-`MANUAL` supports an authorized documented review. The API does not claim to
-be a bank-account vault: tokenization occurs at the configured vault boundary,
-and GDS deliberately never accepts raw account numbers.
+- `GET /owner/venues/:venueId/dashboard?from=&to=` returns booking counts and
+  values, direct-booking counts, inventory occupancy, Court health, unread
+  notifications, upcoming bookings, and recent payouts.
+- `GET /owner/notifications` lists the bounded durable inbox.
+- `PATCH /owner/notifications/read` marks a notification read.
+- Device endpoints register and remove FCM tokens for best-effort push delivery.
 
-## Bookings
+Notification identities cover bookings, cancellation, payment/refund,
+settlement, payout, onboarding contracts, KYC, Venue, Court, and availability.
+Transactional producers are wired for booking, payment/refund, payout, KYC,
+and onboarding-agreement events. The outbox worker preserves the durable inbox
+even when push delivery fails.
 
-| Method | Route | Permission | Purpose |
-|---|---|---|---|
-| GET | `/owner/venues/:venueId/bookings` | `VIEW_BOOKINGS` | List bookings for one scoped Venue |
-| GET | `/owner/venues/:venueId/bookings/:bookingId` | `VIEW_BOOKINGS` | Read one Venue-scoped booking and its cancellation outcome |
+## Finance and downloadable documents
 
-The list accepts optional `from`, `to`, `courtId`, and `status` filters.
-`from` is inclusive and `to` is exclusive against the booking start time.
-Supported statuses are `CONFIRMED`, `CANCELLED`, `REFUND_PENDING`, `REFUNDED`,
-and `DISPUTED`.
-Pagination uses `page` (default 1) and `limit` (default 50, maximum 100), and
-returns `items` plus page, limit, total, and page-count metadata.
+- `GET /owner/venues/:venueId/finance/settlements[/:settlementId]`
+- `GET /owner/venues/:venueId/finance/payouts[/:payoutId]`
+- `GET /owner/venues/:venueId/finance/settlements/:settlementId/statement.pdf`
+- `GET /owner/venues/:venueId/finance/settlements/:settlementId/invoice.pdf`
 
-Both list and detail responses expose the Partner's
-`externalBookingReference` where present. Cancellation detail includes the
-reason, refund basis points and amount, whether inventory was released, and
-the cancellation timestamp. Confirmation/cancellation idempotency keys and
-embedded audit internals are not exposed to Venue Users.
-
-Booking reads require `VIEW_BOOKINGS` on the exact Venue before MongoDB is
-queried. Booking detail lookup includes the Venue ID in its database predicate,
-so an identifier from another Venue returns `BOOKING_NOT_FOUND`. There is no
-Venue Owner booking-creation route in v1. Venue Users continue to perform their
-permitted operational action—blocking or releasing availability—through the
-Venue inventory routes.
-
-## Venue Owner Capability Order
-
-Within the canonical Venue module, Venue Owner capabilities proceed as:
-
-1. Venue profile and media - complete
-2. Courts, court media, and operating hours - complete
-3. Pricing rules - complete
-4. Inventory generation and manual blocking/release - complete
-5. Payout-account management - complete
-
-The implemented Venue Owner slice of the canonical Venue module is complete
-except for the Partner-facing availability route. The
-underlying availability rules are retained in the Venue service, but no
-Partner availability route is registered. Admin payout verification and
-Partner-Venue cancellation terms have no actor-facing routes in this phase;
-their Admin-owned fields remain null or pending.
-
-The Venue Owner read/dashboard slice and the separate Partner Booking
-lifecycle are complete. Partner hold, confirmation, and cancellation remain
-outside the Venue Owner API and are documented in `booking-api.md`.
+The statement and invoice are generated from the owner-scoped immutable
+Settlement and Ledger allocation view. Cross-Venue access is rejected before a
+document is generated.

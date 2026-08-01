@@ -12,6 +12,7 @@ import type {
   OutboxEventDocument,
   OwnerNotificationDocument,
   OwnerNotificationType,
+  OwnerNotificationAggregateType,
   WebhookDeliveryDocument,
   WebhookEnvelope,
 } from './communications.types.js';
@@ -38,7 +39,7 @@ export interface CommunicationsService {
   markNotificationRead(input: {
     ownerId: string;
     notificationType: OwnerNotificationType;
-    aggregateType: 'BOOKING' | 'PAYOUT';
+    aggregateType: OwnerNotificationAggregateType;
     aggregateId: string;
   }): Promise<void>;
   listDeliveries(input: {
@@ -147,12 +148,8 @@ export function createCommunicationsService(input: {
       };
     },
     async markNotificationRead(values) {
-      if (
-        (values.notificationType.startsWith('BOOKING_') &&
-          values.aggregateType !== 'BOOKING') ||
-        (values.notificationType === 'PAYOUT_COMPLETED' &&
-          values.aggregateType !== 'PAYOUT')
-      ) {
+      const expectedAggregate = notificationAggregate(values.notificationType);
+      if (values.aggregateType !== expectedAggregate) {
         throw badRequest(
           'INVALID_NOTIFICATION_IDENTITY',
           'Notification and aggregate types do not match',
@@ -305,7 +302,7 @@ export function createCommunicationsService(input: {
       }
       const secret = deriveSigningSecret(
         input.authConfig.partnerCredentialMasterSecret,
-        `webhook:${endpoint._id.toHexString()}`,
+        (endpoint.secret_version??1)===1?`webhook:${endpoint._id.toHexString()}`:`webhook:${endpoint._id.toHexString()}:v${endpoint.secret_version}`,
       );
       if (hashCredential(secret) !== endpoint.signing_secret_hash) {
         deliveries[index] = terminalDelivery(
@@ -443,8 +440,8 @@ export function createCommunicationsService(input: {
 
 function ownerTarget(event: OutboxEventDocument): {
   type: OwnerNotificationType;
-  aggregateType: 'BOOKING' | 'PAYOUT';
-  permission: 'VIEW_BOOKINGS' | 'VIEW_FINANCE';
+  aggregateType: import('./communications.types.js').OwnerNotificationAggregateType;
+  permission: import('../../modules/identity/owner/owner.types.js').VenuePermission;
 } | null {
   if (event.event_type === 'BOOKING_CONFIRMED') {
     return {
@@ -467,7 +464,37 @@ function ownerTarget(event: OutboxEventDocument): {
       permission: 'VIEW_FINANCE',
     };
   }
+  const mapped = {
+    PAYOUT_PENDING: ['PAYOUT_PENDING', 'PAYOUT', 'VIEW_FINANCE'],
+    PAYOUT_FAILED: ['PAYOUT_FAILED', 'PAYOUT', 'VIEW_FINANCE'],
+    SETTLEMENT_DRAFT_CREATED: ['SETTLEMENT_CREATED', 'SETTLEMENT', 'VIEW_FINANCE'],
+    SETTLEMENT_COMPLETED: ['SETTLEMENT_COMPLETED', 'SETTLEMENT', 'VIEW_FINANCE'],
+    CONTRACT_PROPOSED: ['CONTRACT_PROPOSED', 'CONTRACT', 'MANAGE_VENUE'],
+    CONTRACT_ACCEPTED: ['CONTRACT_ACCEPTED', 'CONTRACT', 'MANAGE_VENUE'],
+    KYC_SUBMITTED: ['KYC_SUBMITTED', 'KYC', 'MANAGE_KYC'],
+    KYC_VERIFIED: ['KYC_VERIFIED', 'KYC', 'MANAGE_KYC'],
+    KYC_REJECTED: ['KYC_REJECTED', 'KYC', 'MANAGE_KYC'],
+    PAYMENT_RECORDED: ['PAYMENT_RECORDED', 'PAYMENT', 'VIEW_FINANCE'],
+    PAYMENT_REFUNDED: ['PAYMENT_REFUNDED', 'PAYMENT', 'VIEW_FINANCE'],
+    VENUE_UPDATED: ['VENUE_UPDATED', 'VENUE', 'MANAGE_VENUE'],
+    COURT_UPDATED: ['COURT_UPDATED', 'COURT', 'MANAGE_COURTS'],
+    AVAILABILITY_CHANGED: ['AVAILABILITY_CHANGED', 'INVENTORY', 'MANAGE_AVAILABILITY'],
+  } as const;
+  const value = mapped[event.event_type as keyof typeof mapped];
+  if (value) return { type: value[0], aggregateType: value[1], permission: value[2] };
   return null;
+}
+
+function notificationAggregate(type: OwnerNotificationType): import('./communications.types.js').OwnerNotificationAggregateType {
+  if (type.startsWith('BOOKING_')) return 'BOOKING';
+  if (type.startsWith('PAYMENT_')) return 'PAYMENT';
+  if (type.startsWith('SETTLEMENT_')) return 'SETTLEMENT';
+  if (type.startsWith('PAYOUT_')) return 'PAYOUT';
+  if (type.startsWith('CONTRACT_')) return 'CONTRACT';
+  if (type.startsWith('KYC_')) return 'KYC';
+  if (type === 'VENUE_UPDATED') return 'VENUE';
+  if (type === 'COURT_UPDATED') return 'COURT';
+  return 'INVENTORY';
 }
 
 function webhookEnvelope(event: OutboxEventDocument): WebhookEnvelope {

@@ -47,6 +47,7 @@ function createFixture() {
     contractId: '687f00000000000000000116',
     environment: 'PRODUCTION' as const,
     externalBookingReference: 'PARTNER-42',
+    customerReference: null,
     bookingType: 'FIXED_SLOT' as const,
     startsAt: '2026-08-01T10:00:00.000Z',
     endsAt: '2026-08-01T11:00:00.000Z',
@@ -71,8 +72,12 @@ function createFixture() {
     },
     async getDetail(input) {
       calls.detail = input;
-      return { ...item, cancellation: null };
+      return { ...item, cancellation: null, payment: null };
     },
+    async createDirectBooking() { throw new Error('not used'); },
+    async cancelBooking() { throw new Error('not used'); },
+    async recordPayment() { throw new Error('not used'); },
+    async refundPayment() { throw new Error('not used'); },
   };
 
   return { calls, ownerAccessService, service };
@@ -146,7 +151,7 @@ test('owner booking detail derives venue and booking scope', async () => {
   await app.close();
 });
 
-test('owner booking routes reject invalid filters and expose no creation path', async () => {
+test('owner booking routes reject invalid filters and invalid creation payloads', async () => {
   const fixture = createFixture();
   const app = await buildTestApp(fixture);
 
@@ -164,7 +169,7 @@ test('owner booking routes reject invalid filters and expose no creation path', 
 
   assert.equal(invalid.statusCode, 400);
   assert.equal(invalid.json().error.code, 'VALIDATION_ERROR');
-  assert.equal(creation.statusCode, 404);
+  assert.equal(creation.statusCode, 400);
   assert.equal(fixture.calls.list, undefined);
   await app.close();
 });

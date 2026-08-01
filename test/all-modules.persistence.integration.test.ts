@@ -21,6 +21,7 @@ const expectedCollections = [
   'api_usage_daily',
   'audit_events',
   'booking_cancellations',
+  'booking_payments',
   'bookings',
   'courts',
   'invoices',
@@ -37,14 +38,16 @@ const expectedCollections = [
   'settlements',
   'slots',
   'venue_owner_memberships',
+  'venue_onboarding_agreements',
   'venue_owners',
+  'venue_contents',
   'venue_payout_accounts',
   'venue_role_permissions',
   'venues',
   'webhook_endpoints',
 ].sort();
 
-test('all authoritative ERD collections initialize with strict validators and no VenueContent collection', async (context) => {
+test('all production collections initialize with strict validators, including flexible Venue content', async (context) => {
   const uri = process.env.MONGODB_URI;
   if (!uri) {
     context.skip('MONGODB_URI is not configured');
@@ -81,7 +84,7 @@ test('all authoritative ERD collections initialize with strict validators and no
       await database.db.listCollections({}, { nameOnly: true }).toArray()
     ).map(({ name }) => name).sort();
     assert.deepEqual(names, expectedCollections);
-    assert.equal(names.includes('venue_contents'), false);
+    assert.equal(names.includes('venue_contents'), true);
 
     for (const collection of [
       'ledger_entries',
@@ -91,6 +94,9 @@ test('all authoritative ERD collections initialize with strict validators and no
       'invoices',
       'outbox_events',
       'audit_events',
+      'booking_payments',
+      'venue_contents',
+      'venue_onboarding_agreements',
     ]) {
       await assert.rejects(
         database.db.collection(collection).insertOne({ invalid: true }),
@@ -112,6 +118,9 @@ test('all authoritative ERD collections initialize with strict validators and no
       ['invoices', 'uq_invoice_settlement_type'],
       ['outbox_events', 'uq_outbox_event_identity'],
       ['audit_events', 'uq_audit_event_identity'],
+      ['booking_payments', 'uq_booking_payment_booking'],
+      ['venue_contents', 'uq_venue_content_locale'],
+      ['venue_onboarding_agreements', 'uq_onboarding_agreement_version'],
     ];
     for (const [collection, indexName] of requiredIndexes) {
       const indexes = await database.db.collection(collection).indexes();
