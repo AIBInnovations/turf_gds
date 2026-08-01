@@ -18,7 +18,7 @@ import type { VenueDocument } from '../src/modules/venue/profile/venue.types.js'
 import { MongoDatabaseConnection } from '../src/shared/database/database-connection.js';
 import { AppError } from '../src/shared/errors/app-error.js';
 
-test('Inventory and payout-account persistence enforce their independent boundaries', async (context) => {
+test('Venue operations persistence initializes inventory, content, and payout boundaries', async (context) => {
   const uri = process.env.MONGODB_URI;
   if (!uri) {
     context.skip('MONGODB_URI is not configured');
@@ -225,7 +225,7 @@ test('Inventory and payout-account persistence enforce their independent boundar
     const names = collections.map((value) => value.name);
     assert.equal(names.includes('pricing_rules'), true);
     assert.equal(names.includes('slots'), true);
-    assert.equal(names.includes('venue_contents'), false);
+    assert.equal(names.includes('venue_contents'), true);
     assert.equal(names.includes('venue_payout_accounts'), true);
   } finally {
     if (databaseName.startsWith('turf_gds_venue_ops_it_')) {

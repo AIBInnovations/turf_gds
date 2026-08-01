@@ -28,6 +28,7 @@ import type {
 } from '../src/modules/venue/inventory/inventory.types.js';
 import { initializeVenuePersistence } from '../src/modules/venue/profile/venue.persistence.js';
 import type { VenueDocument } from '../src/modules/venue/profile/venue.types.js';
+import type { VenueOnboardingAgreementDocument } from '../src/modules/venue/onboarding-agreement/onboarding-agreement.types.js';
 import { MongoDatabaseConnection } from '../src/shared/database/database-connection.js';
 import { AppError } from '../src/shared/errors/app-error.js';
 
@@ -429,6 +430,40 @@ async function seed(
     created_at: now,
     updated_at: now,
   });
+  const ownerId = new ObjectId();
+  await database.db
+    .collection<VenueOnboardingAgreementDocument>('venue_onboarding_agreements')
+    .insertOne({
+      _id: new ObjectId(),
+      venue_id: venueId,
+      owner_id: ownerId,
+      title: 'Booking lifecycle venue agreement',
+      terms_text: 'The owner accepts the booking and cancellation terms.',
+      template_id: null,
+      template_version: null,
+      terms_hash: 'booking-lifecycle-agreement-v1',
+      platform_commission_bps: 1_000,
+      settlement_cycle: 'T_PLUS_N',
+      settlement_lag_days: 2,
+      cancellation_policy: {
+        cancellation_allowed: true,
+        default_refund_bps: 5_000,
+        no_show_refund_bps: 0,
+        owner_cancellation_notice_minutes: 30,
+        refund_rules: [{ min_minutes_before_start: 60, refund_bps: 10_000 }],
+      },
+      status: 'ACCEPTED',
+      version: 1,
+      proposed_by: ownerId,
+      proposed_at: now,
+      accepted_by: ownerId,
+      accepted_at: now,
+      acceptance_ip: '127.0.0.1',
+      acceptance_user_agent: 'integration-test',
+      audit_history: [],
+      created_at: now,
+      updated_at: now,
+    });
   await database.db.collection<CourtDocument>('courts').insertOne({
     _id: courtId,
     venue_id: venueId,

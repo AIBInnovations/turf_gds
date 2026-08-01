@@ -152,6 +152,7 @@ app.post('/__curl-test/shutdown', async (_request, reply) => {
   setTimeout(() => {
     void shutdown().finally(() => process.exit(0));
   }, 25);
+  setTimeout(() => process.exit(0), 2_000).unref();
 });
 app.post('/__curl-test/communications/drain', async () => ({
   processed: await communicationsService.drain('curl-test-worker', 100),
