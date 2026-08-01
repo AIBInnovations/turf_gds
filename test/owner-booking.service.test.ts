@@ -105,6 +105,16 @@ function createFixture(options: {
         ? cancellation()
         : null;
     },
+    async findPayment() { return null; },
+    async insertDirectBooking() {},
+    async findForVenueWithSession(id, idBooking) {
+      return documents.find(
+        (item) => item.venue_id.equals(id) && item._id.equals(idBooking),
+      ) ?? null;
+    },
+    async cancelOwnerBooking() { return null; },
+    async insertCancellation() {},
+    async releaseDirectSlot() {},
   };
   const ownerAccessService: OwnerAccessService = {
     async authenticateOwner() {
@@ -148,6 +158,8 @@ function createFixture(options: {
     service: createOwnerBookingService({
       repository,
       ownerAccessService,
+      database: { db: null, withTransaction: async () => {}, close: async () => {} } as never,
+      outboxRepository: { async enqueue() {} },
     }),
     getFilters: () => filters,
     getPermission: () => permission,

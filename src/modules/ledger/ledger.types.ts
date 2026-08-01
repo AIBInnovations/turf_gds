@@ -32,9 +32,9 @@ export interface LedgerEntryDocument {
 
 export interface LedgerBookingSnapshot {
   bookingId: ObjectId;
-  partnerId: ObjectId;
+  partnerId: ObjectId | null;
   venueId: ObjectId;
-  contractId: ObjectId;
+  contractId: ObjectId | null;
   environment: LedgerEnvironment;
   grossAmountMinor: number;
   commissionAmountMinor: number;

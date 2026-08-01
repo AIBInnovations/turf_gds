@@ -13,6 +13,7 @@ import { initializeOutboxPersistence } from './shared/communications/outbox.pers
 import { createOutboxRepository } from './shared/communications/outbox.repository.js';
 import { createCommunicationsRepository } from './shared/communications/communications.repository.js';
 import { createCommunicationsService } from './shared/communications/communications.service.js';
+import { createOwnerEventPublisher } from './shared/communications/owner-event-publisher.js';
 import type { CommunicationsService } from './shared/communications/communications.service.js';
 import {
   createFirebasePushDelivery,
@@ -49,6 +50,7 @@ import { createOwnerAccessRepository } from './modules/identity/owner/owner-acce
 import { createOwnerAccessService } from './modules/identity/owner/owner-access.service.js';
 import { createPartnerAccessRepository } from './modules/identity/partner/partner-access.repository.js';
 import { createPartnerAccessService } from './modules/identity/partner/partner-access.service.js';
+import { createPartnerPayoutAccountService } from './modules/identity/partner/partner-payout-account.service.js';
 import { createPartnerPortalService } from './modules/identity/partner/partner-portal.service.js';
 import { initializeIdentityPersistence } from './modules/identity/persistence.js';
 import { initializeVenuePersistence } from './modules/venue/profile/venue.persistence.js';
@@ -61,6 +63,10 @@ import { createInventoryRepository } from './modules/venue/inventory/inventory.r
 import { createInventoryService } from './modules/venue/inventory/inventory.service.js';
 import { createPayoutAccountRepository } from './modules/venue/payout-accounts/payout-account.repository.js';
 import { createPayoutAccountService } from './modules/venue/payout-accounts/payout-account.service.js';
+import { createVenueContentRepository } from './modules/venue/content/venue-content.repository.js';
+import { createVenueContentService } from './modules/venue/content/venue-content.service.js';
+import { createOwnerDashboardService } from './modules/venue/dashboard/owner-dashboard.service.js';
+import { createOnboardingAgreementService } from './modules/venue/onboarding-agreement/onboarding-agreement.service.js';
 import cloudinaryPlugin from './plugins/cloudinary.js';
 import errorHandlerPlugin from './plugins/error-handler.js';
 import mongodbPlugin from './plugins/mongodb.js';
@@ -71,6 +77,12 @@ import type { DatabaseConnection } from './shared/database/database-connection.j
 import type { MediaStorage } from './shared/media/cloudinary-media-storage.js';
 import { createPartnerRateLimiter } from './shared/rate-limit/partner-rate-limiter.js';
 import { initializeAuditPersistence } from './shared/audit/audit.persistence.js';
+import { createInventorySyncService } from './modules/inventory-sync/inventory-sync.service.js';
+import { initializeTreasuryPersistence } from './modules/treasury/treasury.persistence.js';
+import { createRazorpayProvider } from './modules/treasury/razorpay.provider.js';
+import { createTreasuryService } from './modules/treasury/treasury.service.js';
+import openapiRoutes from './routes/openapi.js';
+import observabilityPlugin from './plugins/observability.js';
 
 export interface BuildAppOptions {
   config?: AppConfig;
@@ -130,6 +142,7 @@ export async function buildApp(
   });
 
   await app.register(errorHandlerPlugin);
+  await app.register(observabilityPlugin);
   await app.register(multipart, {
     limits: {
       fileSize: config.kyc.maxFileBytes,
@@ -157,8 +170,9 @@ export async function buildApp(
   await app.register(healthRoutes, {
     cacheTtlMs: config.readinessCacheTtlMs,
   });
+  app.addHook('onSend',async(_request,reply,payload)=>{reply.header('x-content-type-options','nosniff').header('x-frame-options','DENY').header('referrer-policy','no-referrer').header('cache-control',reply.getHeader('cache-control')??'no-store');return payload;});
 
-  if (!options.database) {
+  if (!options.database && config.runMigrationsOnStartup !== false) {
     await initializeIdentityPersistence(app.database.db);
     await initializeVenuePersistence(app.database.db);
     await initializeContractPersistence(app.database.db);
@@ -167,6 +181,7 @@ export async function buildApp(
     await initializeFinancialClosePersistence(app.database.db);
     await initializeOutboxPersistence(app.database.db);
     await initializeAuditPersistence(app.database.db);
+    await initializeTreasuryPersistence(app.database.db);
   }
 
   const venueService = createVenueService({
@@ -184,16 +199,19 @@ export async function buildApp(
     identityService,
     repository: createOwnerAccessRepository(app.database),
   });
+  const ownerEvents = createOwnerEventPublisher(app.database, createOutboxRepository(app.database));
   const venueOwnerService = createVenueOwnerService({
     repository: createVenueRepository(app.database),
     ownerAccessService,
     mediaStorage: app.mediaStorage,
+    events: ownerEvents,
   });
   const courtOwnerService = createCourtOwnerService({
     repository: createCourtRepository(app.database),
     venueRepository: createVenueRepository(app.database),
     ownerAccessService,
     mediaStorage: app.mediaStorage,
+    events: ownerEvents,
   });
   const inventoryService = createInventoryService({
     repository: createInventoryRepository(app.database),
@@ -201,11 +219,20 @@ export async function buildApp(
     courtRepository: createCourtRepository(app.database),
     ownerAccessService,
     database: app.database,
+    events: ownerEvents,
   });
   const payoutAccountService = createPayoutAccountService({
     repository: createPayoutAccountRepository(app.database),
     ownerAccessService,
+    mediaStorage: app.mediaStorage,
   });
+  const venueContentService = createVenueContentService({
+    repository: createVenueContentRepository(app.database),
+    ownerAccessService,
+    events: ownerEvents,
+  });
+  const ownerDashboardService = createOwnerDashboardService({ database: app.database, ownerAccessService });
+  const onboardingAgreementService = createOnboardingAgreementService({ database: app.database, ownerAccessService, outboxRepository: createOutboxRepository(app.database) });
   const adminAuthService = createAdminAuthService({
     repository: createAdminAuthRepository(app.database),
     authConfig: config.auth,
@@ -214,12 +241,15 @@ export async function buildApp(
     repository: createKycRepository(app.database),
     mediaStorage: app.mediaStorage,
     config: config.kyc,
+    database: app.database,
+    outboxRepository: createOutboxRepository(app.database),
   });
   const adminOnboardingService = createAdminOnboardingService({
     identityService,
     kycService,
     venueService,
     database: app.database,
+    agreementService: onboardingAgreementService,
   });
   const partnerAccessRepository = createPartnerAccessRepository(app.database);
   const partnerAccessService = createPartnerAccessService({
@@ -242,6 +272,8 @@ export async function buildApp(
   const ownerBookingService = createOwnerBookingService({
     repository: createOwnerBookingRepository(app.database),
     ownerAccessService,
+    database: app.database,
+    outboxRepository: createOutboxRepository(app.database),
   });
   const ledgerService = createLedgerService(
     createLedgerRepository(app.database),
@@ -264,6 +296,10 @@ export async function buildApp(
   const contractService = createContractService({
     repository: createContractRepository(app.database),
     database: app.database,
+    venueCancellationPolicy: async (venueId) => {
+      const value=await app.database.db.collection<{version:number;status:string;cancellation_policy:{cancellation_allowed:boolean;default_refund_bps:number;owner_cancellation_notice_minutes:number;refund_rules:Array<{min_minutes_before_start:number;refund_bps:number}>}}>('\u0076enue_onboarding_agreements').find({venue_id:venueId,status:'ACCEPTED'}).sort({version:-1}).limit(1).next();
+      return value?{cancellationAllowed:value.cancellation_policy.cancellation_allowed,defaultRefundBps:value.cancellation_policy.default_refund_bps,ownerCancellationNoticeMinutes:value.cancellation_policy.owner_cancellation_notice_minutes,refundRules:value.cancellation_policy.refund_rules.map(r=>({minMinutesBeforeStart:r.min_minutes_before_start,refundBps:r.refund_bps})),agreementVersion:value.version}:null;
+    },
   });
   const financialCloseService = createFinancialCloseService({
     repository: createFinancialCloseRepository(app.database),
@@ -271,6 +307,11 @@ export async function buildApp(
     outboxRepository: createOutboxRepository(app.database),
     ownerAccessService,
     database: app.database,
+  });
+  const treasuryService = createTreasuryService({
+    database: app.database,
+    provider: createRazorpayProvider(config.razorpay ?? { enabled: false, baseUrl: 'https://api.razorpay.com' }),
+    financialClose: financialCloseService,
   });
   const communicationsService =
     options.communicationsService ??
@@ -304,10 +345,14 @@ export async function buildApp(
     adminOnboardingService,
     kycService,
     partnerAccessService,
+    partnerPayoutAccountService: createPartnerPayoutAccountService(app.database.db, app.mediaStorage),
     partnerPortalService: createPartnerPortalService(app.database.db),
     venueOwnerService,
     courtOwnerService,
     inventoryService,
+    venueContentService,
+    ownerDashboardService,
+    onboardingAgreementService,
     payoutAccountService,
     ownerBookingService,
     bookingLifecycleService,
@@ -315,7 +360,10 @@ export async function buildApp(
     financialCloseService,
     communicationsService,
     adminEpic08Service,
+    inventorySyncService: createInventorySyncService(app.database, config.auth.partnerCredentialMasterSecret),
+    treasuryService,
   });
+  await app.register(openapiRoutes,{prefix:'/api/v1'});
 
   return app;
 }

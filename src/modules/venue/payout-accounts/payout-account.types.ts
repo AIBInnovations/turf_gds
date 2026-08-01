@@ -14,6 +14,20 @@ export interface VenuePayoutAccountDocument {
   verified_at: Date | null;
   verification_failure_reason: string | null;
   verification_method: 'PENNY_DROP' | 'MANUAL';
+  is_default: boolean;
+  documents: Array<{
+    document_id: ObjectId;
+    document_type: string;
+    provider: 'CLOUDINARY';
+    storage_key: string;
+    secure_url: string;
+    mime_type: string;
+    original_filename: string;
+    bytes: number;
+    checksum: string | null;
+    uploaded_at: Date;
+  }>;
+  version: number;
   audit_history: unknown[];
   created_at: Date;
   updated_at: Date;

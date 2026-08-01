@@ -13,6 +13,7 @@ import type {
 } from './court.types.js';
 import type { VenueRepository } from '../profile/venue.repository.js';
 import type { VenueMediaDocument } from '../profile/venue.types.js';
+import type { OwnerEventPublisher } from '../../../shared/communications/owner-event-publisher.js';
 
 const COURT_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 const COURT_MEDIA_MAX_ITEMS = 20;
@@ -102,6 +103,7 @@ export function createCourtOwnerService(input: {
   venueRepository: VenueRepository;
   ownerAccessService: OwnerAccessService;
   mediaStorage: MediaStorage;
+  events?: OwnerEventPublisher;
   now?: () => Date;
 }): CourtOwnerService {
   const now = input.now ?? (() => new Date());
@@ -176,6 +178,7 @@ export function createCourtOwnerService(input: {
       throw error;
     }
 
+    await input.events?.publish({aggregateType:'COURT',aggregateId:court._id,venueId,eventType:'COURT_UPDATED',eventVersion:court.version,correlationId:values.correlationId,payload:{courtId:court._id.toHexString(),venueId:values.venueId,action:'CREATED'},now:timestamp});
     return presentCourt(court);
   }
 
@@ -255,6 +258,7 @@ export function createCourtOwnerService(input: {
         );
       }
 
+      await input.events?.publish({aggregateType:'COURT',aggregateId:updated._id,venueId,eventType:'COURT_UPDATED',eventVersion:updated.version,correlationId:values.correlationId,payload:{courtId:values.courtId,venueId:values.venueId,changedFields},now:updated.updated_at});
       return presentCourt(updated);
     } catch (error) {
       if (isDuplicateKeyError(error)) {
@@ -346,6 +350,7 @@ export function createCourtOwnerService(input: {
         );
       }
 
+      await input.events?.publish({aggregateType:'COURT',aggregateId:updated._id,venueId,eventType:'COURT_UPDATED',eventVersion:updated.version,correlationId:values.correlationId,payload:{courtId:values.courtId,venueId:values.venueId,changedFields:['media']},now:updated.updated_at});
       return presentCourt(updated);
     } catch (error) {
       await input.mediaStorage
@@ -398,6 +403,7 @@ export function createCourtOwnerService(input: {
         current?.version ?? existing.version,
       );
     }
+    await input.events?.publish({aggregateType:'COURT',aggregateId:updated._id,venueId,eventType:'COURT_UPDATED',eventVersion:updated.version,correlationId:values.correlationId,payload:{courtId:values.courtId,venueId:values.venueId,changedFields:['operating_hours']},now:updated.updated_at});
     return presentCourt(updated);
   }
 

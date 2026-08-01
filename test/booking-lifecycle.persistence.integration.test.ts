@@ -138,7 +138,7 @@ test('Booking lifecycle atomically holds, confirms, snapshots, cancels, audits, 
     const booking = await database.db
       .collection<BookingDocument>('bookings')
       .findOne({ _id: bookingId });
-    assert.equal(booking?.contract_id.equals(ids.contractId), true);
+    assert.equal(booking?.contract_id?.equals(ids.contractId), true);
     assert.equal(booking?.audit_history.length, 1);
     const confirmationLedger = await database.db
       .collection('ledger_entries')

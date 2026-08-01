@@ -204,9 +204,9 @@ export function createLedgerService(
         (line): LedgerEntryDocument => ({
           _id: new ObjectId(),
           booking_id: input.booking.bookingId,
-          partner_id: input.booking.partnerId,
+          partner_id: financialId(input.booking.partnerId, 'partnerId'),
           venue_id: input.booking.venueId,
-          contract_id: input.booking.contractId,
+          contract_id: financialId(input.booking.contractId, 'contractId'),
           settlement_id: null,
           payout_id: null,
           reverses_entry_id: null,
@@ -303,9 +303,9 @@ function entry(
   return {
     _id: new ObjectId(),
     booking_id: input.booking.bookingId,
-    partner_id: input.booking.partnerId,
+    partner_id: financialId(input.booking.partnerId, 'partnerId'),
     venue_id: input.booking.venueId,
-    contract_id: input.booking.contractId,
+    contract_id: financialId(input.booking.contractId, 'contractId'),
     settlement_id: null,
     payout_id: null,
     reverses_entry_id: null,
@@ -346,6 +346,16 @@ function assertBookingAmounts(booking: LedgerBookingSnapshot): void {
       'Booking financial components must equal gross amount',
     );
   }
+}
+
+function financialId(value: ObjectId | null, field: string): ObjectId {
+  if (!value) {
+    throw invalid(
+      'LEDGER_FINANCIAL_SCOPE_REQUIRED',
+      `${field} is required for a Ledger journal`,
+    );
+  }
+  return value;
 }
 
 function assertScope(

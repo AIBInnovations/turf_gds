@@ -1,6 +1,9 @@
 import type { Db, Document } from 'mongodb';
 import { initializeInventoryPersistence } from '../inventory/inventory.persistence.js';
 import { initializePayoutAccountPersistence } from '../payout-accounts/payout-account.persistence.js';
+import { initializeVenueContentPersistence } from '../content/venue-content.persistence.js';
+import { initializeOnboardingAgreementPersistence } from '../onboarding-agreement/onboarding-agreement.persistence.js';
+import { initializeInventorySyncPersistence } from '../../inventory-sync/inventory-sync.persistence.js';
 
 const venueValidator: Document = {
   $jsonSchema: {
@@ -352,4 +355,7 @@ export async function initializeVenuePersistence(db: Db): Promise<void> {
   );
   await initializeInventoryPersistence(db);
   await initializePayoutAccountPersistence(db);
+  await initializeVenueContentPersistence(db);
+  await initializeOnboardingAgreementPersistence(db);
+  await initializeInventorySyncPersistence(db);
 }

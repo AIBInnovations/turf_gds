@@ -1,7 +1,7 @@
-import type {
-  ClientSession,
+import {
   ObjectId,
-  UpdateFilter,
+  type ClientSession,
+  type UpdateFilter,
 } from 'mongodb';
 
 import type { DatabaseConnection } from '../../shared/database/database-connection.js';
@@ -429,7 +429,7 @@ export function createBookingLifecycleRepository(
       };
       const result = await slots().updateOne(
         {
-          _id: input.booking.slot_id,
+          _id: input.booking.slot_id ?? new ObjectId(),
           booking_id: input.booking._id,
           status: 'BOOKED',
         },
@@ -438,7 +438,7 @@ export function createBookingLifecycleRepository(
       );
       if (result.modifiedCount === 1) {
         const slot = await slots().findOne(
-          { _id: input.booking.slot_id },
+          { _id: input.booking.slot_id ?? new ObjectId() },
           { session: input.session },
         );
         if (slot) await archiveLatest(database, 'SLOT', slot, input.session);

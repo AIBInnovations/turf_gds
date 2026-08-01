@@ -78,6 +78,8 @@ function createFixture() {
         status: 'PENDING',
       };
     },
+    async updateDocumentDetails(){},
+    async listDocuments(){return[];},
     async submit() {},
     async getCurrent(input) {
       calls.getCurrent = input;

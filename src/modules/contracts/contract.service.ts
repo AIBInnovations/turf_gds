@@ -20,17 +20,17 @@ export interface SaveContractInput {
   settlementCycle: SettlementCycle;
   settlementLagDays: number;
   allowedBookingModes: ContractBookingMode;
-  cancellationTerms: {
+  cancellationTerms?: {
     cancellationAllowed: boolean;
     defaultRefundBps: number;
     releaseInventory: boolean;
   };
-  refundRules: Array<{
+  refundRules?: Array<{
     minMinutesBeforeStart: number;
     refundBps: number;
     releaseInventory: boolean;
   }>;
-  resaleCutoffMinutes: number;
+  resaleCutoffMinutes?: number;
   effectiveFrom: string;
 }
 
@@ -96,6 +96,7 @@ export interface ContractService {
 export function createContractService(input: {
   repository: ContractRepository;
   database: DatabaseConnection;
+  venueCancellationPolicy?: (venueId:ObjectId)=>Promise<{cancellationAllowed:boolean;defaultRefundBps:number;ownerCancellationNoticeMinutes:number;refundRules:Array<{minMinutesBeforeStart:number;refundBps:number}>;agreementVersion:number}|null>;
   now?: () => Date;
 }): ContractService {
   const now = input.now ?? (() => new Date());
@@ -125,7 +126,14 @@ export function createContractService(input: {
       const partnerId = toObjectId(values.partnerId);
       const venueId = toObjectId(values.venueId);
       const adminId = toObjectId(values.adminId);
+      const venuePolicy = input.venueCancellationPolicy ? await input.venueCancellationPolicy(venueId) : null;
+      if (input.venueCancellationPolicy && !venuePolicy) throw new AppError({code:'VENUE_CANCELLATION_POLICY_REQUIRED',message:'The Venue Owner must accept a cancellation policy before a Partner contract can be created',statusCode:409});
       const terms = normalizeTerms(values);
+      if (venuePolicy && values.cancellationTerms && (
+        values.cancellationTerms.cancellationAllowed !== venuePolicy.cancellationAllowed ||
+        values.cancellationTerms.defaultRefundBps !== venuePolicy.defaultRefundBps ||
+        (values.refundRules ?? []).some((rule,index)=>rule.minMinutesBeforeStart!==venuePolicy.refundRules[index]?.minMinutesBeforeStart||rule.refundBps!==venuePolicy.refundRules[index]?.refundBps)
+      )) throw new AppError({code:'CONTRACT_CANCELLATION_POLICY_CONFLICT',message:'Partner-Venue cancellation terms must match the Venue Owner accepted policy',statusCode:409});
       const [partner, venue] = await Promise.all([
         input.repository.findPartner(partnerId),
         input.repository.findVenue(venueId),
@@ -185,9 +193,9 @@ export function createContractService(input: {
           commission_rate_bps: values.commissionRateBps,
           tax_rate_bps: values.taxRateBps,
           allowed_booking_modes: values.allowedBookingModes,
-          cancellation_terms: terms.cancellationTerms,
-          resale_cutoff_minutes: values.resaleCutoffMinutes,
-          refund_rules: { rules: terms.refundRules },
+          cancellation_terms: venuePolicy ? { cancellation_allowed:venuePolicy.cancellationAllowed,default_refund_bps:venuePolicy.defaultRefundBps,release_inventory:true } : terms.cancellationTerms,
+          resale_cutoff_minutes: venuePolicy?.ownerCancellationNoticeMinutes ?? values.resaleCutoffMinutes ?? 0,
+          refund_rules: { rules: venuePolicy ? venuePolicy.refundRules.map(rule=>({min_minutes_before_start:rule.minMinutesBeforeStart,refund_bps:rule.refundBps,release_inventory:true})) : terms.refundRules },
           terms_version: (latest?.terms_version ?? 0) + 1,
           effective_from: terms.effectiveFrom,
           effective_to: null,
@@ -196,7 +204,7 @@ export function createContractService(input: {
             actor_type: 'ADMIN',
             actor_id: adminId,
             correlation_id: new ObjectId().toHexString(),
-            changes: { terms_version: (latest?.terms_version ?? 0) + 1 },
+            changes: { terms_version: (latest?.terms_version ?? 0) + 1, cancellation_policy_source: venuePolicy ? 'VENUE_OWNER_AGREEMENT' : 'LEGACY_INPUT', venue_agreement_version: venuePolicy?.agreementVersion ?? null },
             occurred_at: timestamp,
           }],
           created_at: timestamp,
@@ -260,26 +268,27 @@ function normalizeTerms(values: SaveContractInput): {
   if (!['OPEN_TIME', 'FIXED_SLOT', 'BOTH'].includes(values.allowedBookingModes)) {
     throw invalidTerms('Allowed booking mode is invalid');
   }
-  if (!Number.isInteger(values.resaleCutoffMinutes) || values.resaleCutoffMinutes < 0) {
+  if (values.resaleCutoffMinutes !== undefined && (!Number.isInteger(values.resaleCutoffMinutes) || values.resaleCutoffMinutes < 0)) {
     throw invalidTerms('Resale cutoff must be a non-negative integer');
   }
   const effectiveFrom = new Date(values.effectiveFrom);
   if (Number.isNaN(effectiveFrom.getTime())) {
     throw invalidTerms('Effective date must be a valid ISO-8601 timestamp');
   }
+  const legacyTerms=values.cancellationTerms;
   const cancellationTerms: CancellationTermsDocument = {
-    cancellation_allowed: values.cancellationTerms.cancellationAllowed,
+    cancellation_allowed: legacyTerms?.cancellationAllowed ?? false,
     default_refund_bps: validateBps(
-      values.cancellationTerms.defaultRefundBps,
+      legacyTerms?.defaultRefundBps ?? 0,
       'Default refund',
     ),
-    release_inventory: values.cancellationTerms.releaseInventory,
+    release_inventory: legacyTerms?.releaseInventory ?? false,
   };
   const thresholds = new Set<number>();
-  if (values.refundRules.length > 50) {
+  if ((values.refundRules?.length ?? 0) > 50) {
     throw invalidTerms('A contract can contain at most 50 refund rules');
   }
-  const refundRules = values.refundRules.map((rule) => {
+  const refundRules = (values.refundRules ?? []).map((rule) => {
     if (
       !Number.isInteger(rule.minMinutesBeforeStart) ||
       rule.minMinutesBeforeStart < 0 ||

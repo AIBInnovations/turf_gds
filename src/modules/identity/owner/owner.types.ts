@@ -12,6 +12,7 @@ export const PERMISSIONS = [
   'VIEW_FINANCE',
   'VIEW_BOOKINGS',
   'MANAGE_AVAILABILITY',
+  'MANAGE_BOOKINGS', // [UPDATED 2026-07-31] Owner direct booking and cancellation
 ] as const;
 export type VenuePermission = (typeof PERMISSIONS)[number];
 

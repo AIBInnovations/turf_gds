@@ -12,6 +12,11 @@ import type {
 export interface PartnerAccessRepository {
   createPartner(partner: PartnerDocument): Promise<boolean>;
   findPartner(id: ObjectId): Promise<PartnerDocument | null>;
+  findPartnerByEmail?(email: string): Promise<PartnerDocument | null>;
+  recordFailedLogin?(id: ObjectId, maxAttempts: number, lockedUntil: Date, now: Date): Promise<void>;
+  recordSuccessfulLogin?(id: ObjectId, tokenHash: string, expiresAt: Date, now: Date): Promise<boolean>;
+  findBySessionTokenHash?(tokenHash: string, now: Date): Promise<PartnerDocument | null>;
+  revokeSession?(partnerId:ObjectId,tokenHash:string,now:Date):Promise<boolean>;
   approveSandbox(
     partnerId: ObjectId,
     adminId: ObjectId,
@@ -36,6 +41,7 @@ export interface PartnerAccessRepository {
     prefix: string,
   ): Promise<PartnerApiKeyDocument | null>;
   touchApiKey(id: ObjectId, now: Date): Promise<void>;
+  claimRequestSignature?(keyId:ObjectId,signatureHash:string,expiresAt:Date):Promise<boolean>;
   revokeApiKey(id: ObjectId, now: Date): Promise<boolean>;
   recordUsage(input: {
     partnerId: ObjectId;
@@ -60,6 +66,9 @@ export interface PartnerAccessRepository {
     now: Date;
   }): Promise<{ count: number }>;
   insertWebhook(endpoint: WebhookEndpointDocument): Promise<boolean>;
+  listWebhooks?(partnerId:ObjectId,environment:PartnerEnvironment):Promise<WebhookEndpointDocument[]>;
+  findWebhook?(id:ObjectId,partnerId:ObjectId,environment:PartnerEnvironment):Promise<WebhookEndpointDocument|null>;
+  rotateWebhookSecret?(id:ObjectId,partnerId:ObjectId,environment:PartnerEnvironment,secretHash:string,secretVersion:number,now:Date):Promise<boolean>;
   verifyWebhook(id: ObjectId, now: Date): Promise<boolean>;
   replaceWebhookSubscriptions(
     id: ObjectId,
@@ -87,6 +96,7 @@ export function createPartnerAccessRepository(
     database.db.collection<ApiUsageDailyDocument>('api_usage_daily');
   const webhooks = () =>
     database.db.collection<WebhookEndpointDocument>('webhook_endpoints');
+  const authReplays=()=>database.db.collection<{_id:ObjectId;key_id:ObjectId;signature_hash:string;expires_at:Date}>('partner_auth_replays');
 
   return {
     async createPartner(partner) {
@@ -103,6 +113,38 @@ export function createPartnerAccessRepository(
     findPartner(id) {
       return partners().findOne({ _id: id });
     },
+    findPartnerByEmail(email) {
+      return partners().findOne({ email });
+    },
+    async claimRequestSignature(keyId,signatureHash,expiresAt){try{await authReplays().insertOne({_id:new ObjectId(),key_id:keyId,signature_hash:signatureHash,expires_at:expiresAt});return true;}catch(error){if(isDuplicateKeyError(error))return false;throw error;}},
+    async recordFailedLogin(id, maxAttempts, lockedUntil, now) {
+      const value = await partners().findOne({ _id: id }, { projection: { failed_login_count: 1 } });
+      const failures = (value?.failed_login_count ?? 0) + 1;
+      await partners().updateOne({ _id: id }, {
+        $set: {
+          failed_login_count: failures,
+          locked_until: failures >= maxAttempts ? lockedUntil : null,
+          updated_at: now,
+        },
+      });
+    },
+    async recordSuccessfulLogin(id, tokenHash, expiresAt, now) {
+      const result = await partners().updateOne(
+        { _id: id, status: { $ne: 'SUSPENDED' } },
+        {
+          $set: { failed_login_count: 0, locked_until: null, last_login_at: now, updated_at: now },
+          $push: { sessions: { $each: [{ token_hash: tokenHash, expires_at: expiresAt, created_at: now }], $slice: -10 } },
+        },
+      );
+      return result.modifiedCount > 0;
+    },
+    findBySessionTokenHash(tokenHash, now) {
+      return partners().findOne({
+        status: { $ne: 'SUSPENDED' },
+        sessions: { $elemMatch: { token_hash: tokenHash, expires_at: { $gt: now } } },
+      });
+    },
+    async revokeSession(partnerId,tokenHash,now){const result=await partners().updateOne({_id:partnerId,'sessions.token_hash':tokenHash},{$pull:{sessions:{token_hash:tokenHash}},$set:{updated_at:now}});return result.modifiedCount>0;},
     async approveSandbox(partnerId, adminId, correlationId, now) {
       const result = await partners().updateOne(
         { _id: partnerId, status: 'PENDING', sandbox_approved_at: null },
@@ -210,6 +252,7 @@ export function createPartnerAccessRepository(
     async recordUsage(input) {
       const usageDate = new Date(input.now);
       usageDate.setUTCHours(0, 0, 0, 0);
+      const latency = Math.max(0, Math.round(input.latencyMs));
       await usage().updateOne(
         {
           partner_id: input.partnerId,
@@ -222,9 +265,7 @@ export function createPartnerAccessRepository(
             error_count: input.statusCode >= 400 ? 1 : 0,
             rate_limited_count: input.rateLimited ? 1 : 0,
           },
-          $max: {
-            p95_latency_ms: Math.max(0, Math.round(input.latencyMs)),
-          },
+          $push: { latency_samples: { $each: [latency], $slice: -500 } },
           $set: { updated_at: input.now },
           $setOnInsert: {
             _id: new ObjectId(),
@@ -233,6 +274,16 @@ export function createPartnerAccessRepository(
           },
         },
         { upsert: true },
+      );
+      const sample = await usage().findOne(
+        { partner_id: input.partnerId, environment: input.environment, usage_date: usageDate },
+        { projection: { latency_samples: 1 } },
+      );
+      const sorted = [...(sample?.latency_samples ?? [latency])].sort((a, b) => a - b);
+      const p95 = sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)] ?? latency;
+      await usage().updateOne(
+        { partner_id: input.partnerId, environment: input.environment, usage_date: usageDate },
+        { $set: { p95_latency_ms: p95 } },
       );
     },
     async setRateLimitTier(
@@ -325,6 +376,9 @@ export function createPartnerAccessRepository(
         throw error;
       }
     },
+    listWebhooks(partnerId,environment){return webhooks().find({partner_id:partnerId,environment}).sort({created_at:-1}).toArray();},
+    findWebhook(id,partnerId,environment){return webhooks().findOne({_id:id,partner_id:partnerId,environment});},
+    async rotateWebhookSecret(id,partnerId,environment,secretHash,secretVersion,now){const result=await webhooks().updateOne({_id:id,partner_id:partnerId,environment,status:{$ne:'DISABLED'}},{$set:{signing_secret_hash:secretHash,secret_version:secretVersion,status:'PENDING',verified_at:null,updated_at:now}});return result.modifiedCount>0;},
     async verifyWebhook(id, now) {
       const result = await webhooks().updateOne(
         { _id: id, status: 'PENDING' },

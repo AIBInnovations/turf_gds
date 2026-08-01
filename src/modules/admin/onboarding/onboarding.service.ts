@@ -3,6 +3,7 @@ import type { DatabaseConnection } from '../../../shared/database/database-conne
 import type { KycService } from '../../identity/kyc/kyc.service.js';
 import type { IdentityService } from '../../identity/owner/owner-auth.service.js';
 import type { VenueService } from '../../venue/profile/venue.service.js';
+import type { OnboardingAgreementService } from '../../venue/onboarding-agreement/onboarding-agreement.service.js';
 
 export interface AdminOnboardingService {
   approveVenueOnboarding(input: {
@@ -18,6 +19,7 @@ export function createAdminOnboardingService(input: {
   kycService: KycService;
   venueService: VenueService;
   database: DatabaseConnection;
+  agreementService?: OnboardingAgreementService;
 }): AdminOnboardingService {
   async function approveVenueOnboarding(values: {
     ownerId: string;
@@ -37,6 +39,16 @@ export function createAdminOnboardingService(input: {
         throw new AppError({
           code: 'OWNER_KYC_REQUIRED',
           message: 'Verified BUSINESS KYC is required',
+          statusCode: 409,
+        });
+      }
+      if (
+        input.agreementService &&
+        !(await input.agreementService.isAccepted(values.ownerId, values.venueId, session))
+      ) {
+        throw new AppError({
+          code: 'ONBOARDING_AGREEMENT_REQUIRED',
+          message: 'The Venue Owner must accept the proposed contract and cancellation policy',
           statusCode: 409,
         });
       }

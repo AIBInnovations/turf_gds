@@ -10,6 +10,8 @@ import {
   verifyHmacSignature,
 } from '../../../shared/auth/partner-signature.js';
 import { AppError } from '../../../shared/errors/app-error.js';
+import { DUMMY_PASSWORD_HASH, hashPassword, verifyPassword } from '../../../shared/auth/password.js';
+import { generateSessionToken, hashSessionToken } from '../../../shared/auth/session-token.js';
 import type {
   PartnerRateLimiter,
   RateLimitDecision,
@@ -20,6 +22,7 @@ import {
   type ExternalEventType,
 } from '../../../shared/communications/communications.types.js';
 import type { KycService } from '../kyc/kyc.service.js';
+import { createSecureWebhookTransport } from '../../../shared/communications/webhook-transport.js';
 import type { PartnerAccessRepository } from './partner-access.repository.js';
 import type { PartnerEnvironment } from './partner-access.types.js';
 
@@ -27,7 +30,19 @@ export interface PartnerAccessService {
   apply(input: {
     legalName: string;
     displayName: string;
+    email: string;
+    phoneE164: string;
+    password: string;
   }): Promise<{ partnerId: string; status: 'PENDING' }>;
+  login(input: { email: string; password: string }): Promise<{
+    sessionToken: string;
+    expiresAt: string;
+    partner: { id: string; legalName: string; displayName: string; email: string; status: string };
+  }>;
+  authenticatePortalSession(token: string): Promise<{
+    actorType: 'PARTNER_PORTAL'; partnerId: string; status: 'PENDING'|'ACTIVE';
+  }>;
+  logoutPortalSession(partnerId:string,token:string):Promise<void>;
   approveSandbox(input: {
     partnerId: string;
     adminId: string;
@@ -69,6 +84,7 @@ export interface PartnerAccessService {
     method: string;
     path: string;
     body: Buffer;
+    nonce?: string;
   }): Promise<{
     actorType: 'PARTNER';
     partnerId: string;
@@ -99,6 +115,9 @@ export interface PartnerAccessService {
     signingSecret: string;
     subscribedEvents: ExternalEventType[];
   }>;
+  listWebhooks(input:{partnerId:string;environment:PartnerEnvironment}):Promise<unknown[]>;
+  rotateWebhookSecret(input:{webhookId:string;partnerId:string;environment:PartnerEnvironment}):Promise<{signingSecret:string;status:'PENDING'}>;
+  testWebhook(input:{webhookId:string;partnerId:string;environment:PartnerEnvironment}):Promise<{status:'ACTIVE';responseCode:number|null}>;
   replaceWebhookSubscriptions(input: {
     webhookId: string;
     partnerId: string;
@@ -127,10 +146,19 @@ export function createPartnerAccessService(input: {
   ): ReturnType<PartnerAccessService['apply']> {
     const timestamp = now();
     const partnerId = new ObjectId();
+    const email = values.email.trim().toLowerCase();
+    const passwordHash = await hashPassword(values.password);
     const created = await input.repository.createPartner({
       _id: partnerId,
       legal_name: values.legalName.trim(),
       display_name: values.displayName.trim(),
+      email,
+      phone_e164: values.phoneE164.trim(),
+      password_hash: passwordHash,
+      failed_login_count: 0,
+      locked_until: null,
+      last_login_at: null,
+      sessions: [],
       kyc_status: 'PENDING',
       status: 'PENDING',
       rate_limit_tier: 'STARTER',
@@ -150,6 +178,35 @@ export function createPartnerAccessService(input: {
       });
     }
     return { partnerId: partnerId.toHexString(), status: 'PENDING' };
+  }
+
+  async function login(values: Parameters<PartnerAccessService['login']>[0]) {
+    const timestamp = now();
+    const partner = await input.repository.findPartnerByEmail?.(values.email.trim().toLowerCase()) ?? null;
+    if (!partner) {
+      await verifyPassword(values.password, DUMMY_PASSWORD_HASH);
+      throw invalidPartnerCredentials();
+    }
+    if (partner.status === 'SUSPENDED') throw new AppError({ code: 'PARTNER_SUSPENDED', message: 'This Partner account is suspended', statusCode: 403 });
+    if (partner.locked_until && partner.locked_until > timestamp) throw new AppError({ code: 'PARTNER_ACCOUNT_LOCKED', message: 'Too many failed login attempts', statusCode: 423, details: { lockedUntil: partner.locked_until.toISOString() } });
+    if (!partner.password_hash || !(await verifyPassword(values.password, partner.password_hash))) {
+      await input.repository.recordFailedLogin?.(partner._id, input.authConfig.maxLoginAttempts, new Date(timestamp.getTime() + input.authConfig.lockMinutes * 60_000), timestamp);
+      throw invalidPartnerCredentials();
+    }
+    const sessionToken = generateSessionToken();
+    const expiresAt = new Date(timestamp.getTime() + input.authConfig.sessionTtlHours * 60 * 60_000);
+    if (!(await input.repository.recordSuccessfulLogin?.(partner._id, hashSessionToken(sessionToken), expiresAt, timestamp))) throw invalidPartnerCredentials();
+    return { sessionToken, expiresAt: expiresAt.toISOString(), partner: { id: partner._id.toHexString(), legalName: partner.legal_name, displayName: partner.display_name, email: partner.email ?? '', status: partner.status } };
+  }
+
+  async function authenticatePortalSession(token: string) {
+    const partner = await input.repository.findBySessionTokenHash?.(hashSessionToken(token), now()) ?? null;
+    if (!partner) throw invalidPartnerCredentials();
+    return { actorType: 'PARTNER_PORTAL' as const, partnerId: partner._id.toHexString(), status: partner.status as 'PENDING'|'ACTIVE' };
+  }
+
+  async function logoutPortalSession(partnerId:string,token:string){
+    if(!input.repository.revokeSession||!(await input.repository.revokeSession(toObjectId(partnerId),hashSessionToken(token),now())))throw invalidPartnerCredentials();
   }
 
   async function approveSandbox(
@@ -320,12 +377,16 @@ export function createPartnerAccessService(input: {
           method: values.method,
           path: values.path,
           body: values.body,
+          ...(values.nonce ? { nonce: values.nonce } : {}),
         }),
         signingSecret,
         values.signature,
       )
     ) {
       throw invalidPartnerAuthentication();
+    }
+    if (input.repository.claimRequestSignature && !(await input.repository.claimRequestSignature(key._id,hashCredential(`${values.timestamp}:${values.nonce ?? ''}:${values.signature}`),new Date(now().getTime()+input.authConfig.partnerHmacMaxSkewSeconds*1_000)))) {
+      throw new AppError({code:'PARTNER_REQUEST_REPLAYED',message:'This signed Partner request was already used',statusCode:409});
     }
 
     const partner = await input.repository.findPartner(key.partner_id);
@@ -423,10 +484,7 @@ export function createPartnerAccessService(input: {
 
     const webhookId = new ObjectId();
     const subscribedEvents = normalizeSubscriptions(values.subscribedEvents);
-    const signingSecret = deriveSigningSecret(
-      input.authConfig.partnerCredentialMasterSecret,
-      `webhook:${webhookId.toHexString()}`,
-    );
+    const signingSecret = webhookSecret(input.authConfig.partnerCredentialMasterSecret,webhookId,1);
     const timestamp = now();
     const created = await input.repository.insertWebhook({
       _id: webhookId,
@@ -434,6 +492,7 @@ export function createPartnerAccessService(input: {
       environment: values.environment,
       url: parsedUrl.toString(),
       signing_secret_hash: hashCredential(signingSecret),
+      secret_version: 1,
       subscribed_event_types: subscribedEvents,
       status: 'PENDING',
       verified_at: null,
@@ -455,6 +514,26 @@ export function createPartnerAccessService(input: {
       signingSecret,
       subscribedEvents,
     };
+  }
+
+  async function listWebhooks(values:Parameters<PartnerAccessService['listWebhooks']>[0]){
+    const rows=await input.repository.listWebhooks?.(toObjectId(values.partnerId),values.environment)??[];
+    return rows.map(v=>({webhookId:v._id.toHexString(),url:v.url,environment:v.environment,subscribedEvents:v.subscribed_event_types,status:v.status,verifiedAt:v.verified_at?.toISOString()??null,secretVersion:v.secret_version??1,createdAt:v.created_at.toISOString(),updatedAt:v.updated_at.toISOString()}));
+  }
+
+  async function rotateWebhookSecret(values:Parameters<PartnerAccessService['rotateWebhookSecret']>[0]){
+    const id=toObjectId(values.webhookId);const endpoint=await input.repository.findWebhook?.(id,toObjectId(values.partnerId),values.environment);
+    if(!endpoint)throw transitionNotAllowed();const version=(endpoint.secret_version??1)+1;const signingSecret=webhookSecret(input.authConfig.partnerCredentialMasterSecret,id,version);
+    if(!(await input.repository.rotateWebhookSecret?.(id,endpoint.partner_id,values.environment,hashCredential(signingSecret),version,now())))throw transitionNotAllowed();
+    return{signingSecret,status:'PENDING' as const};
+  }
+
+  async function testWebhook(values:Parameters<PartnerAccessService['testWebhook']>[0]){
+    const id=toObjectId(values.webhookId);const endpoint=await input.repository.findWebhook?.(id,toObjectId(values.partnerId),values.environment);if(!endpoint||endpoint.status==='DISABLED')throw transitionNotAllowed();
+    const secret=webhookSecret(input.authConfig.partnerCredentialMasterSecret,id,endpoint.secret_version??1);if(hashCredential(secret)!==endpoint.signing_secret_hash)throw transitionNotAllowed();
+    const result=await createSecureWebhookTransport().deliver({url:endpoint.url,secret,eventId:new ObjectId().toHexString(),eventType:'webhook.test',body:JSON.stringify({eventType:'webhook.test',webhookId:values.webhookId,environment:values.environment}),timeoutMs:10_000,now:now()});
+    if(!result.delivered)throw new AppError({code:'WEBHOOK_TEST_FAILED',message:'The webhook endpoint did not accept the signed test event',statusCode:424,details:{responseCode:result.attempt.response_code,error:result.attempt.error}});
+    await verifyWebhook(values.webhookId);return{status:'ACTIVE' as const,responseCode:result.attempt.response_code};
   }
 
   async function replaceWebhookSubscriptions(
@@ -504,6 +583,9 @@ export function createPartnerAccessService(input: {
 
   return {
     apply,
+    login,
+    authenticatePortalSession,
+    logoutPortalSession,
     approveSandbox,
     approveProduction,
     recordIntegrationReview,
@@ -514,11 +596,19 @@ export function createPartnerAccessService(input: {
     recordApiUsage,
     consumeRateLimit,
     registerWebhook,
+    listWebhooks,
+    rotateWebhookSecret,
+    testWebhook,
     replaceWebhookSubscriptions,
     verifyWebhook,
     disableWebhook,
   };
 }
+
+function invalidPartnerCredentials(): AppError {
+  return new AppError({ code: 'INVALID_PARTNER_CREDENTIALS', message: 'The Partner credentials are invalid', statusCode: 401 });
+}
+function webhookSecret(master:string,id:ObjectId,version:number){return deriveSigningSecret(master,version===1?`webhook:${id.toHexString()}`:`webhook:${id.toHexString()}:v${version}`);}
 
 function normalizeSubscriptions(values: readonly string[]): ExternalEventType[] {
   const unique = [...new Set(values.map((value) => value.trim().toLowerCase()))];

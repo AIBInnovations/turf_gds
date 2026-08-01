@@ -132,8 +132,11 @@ ENTERPRISE 1000.
 - `GET /api/v1/partners/me/invoices[/:invoiceId]` (`finance:read`)
 
 Financial Close also supports Admin-only post-settlement Ledger adjustments
-and structured B2B Invoice creation, issue, and void workflows. Invoice
-document rendering remains out of scope.
+and structured B2B Invoice creation, issue, and void workflows. Settlement
+statements and invoices are available as downloadable PDFs.
+
+The machine-readable API entry point is `GET /api/v1/openapi.json`, and
+Prometheus-compatible process metrics are exposed at `GET /metrics`.
 
 The load harness defaults to 50 concurrent clients. Configure
 `LOAD_BASE_URL`, `LOAD_PARTNER_API_KEY`, `LOAD_PARTNER_SIGNING_SECRET`, and

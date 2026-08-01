@@ -7,6 +7,7 @@ export type KycDocumentType =
   | 'PAN'
   | 'AADHAAR'
   | 'GST_CERTIFICATE'
+  | 'PASSBOOK'
   | 'BUSINESS_REGISTRATION'
   | 'ADDRESS_PROOF'
   | 'ID_PROOF';
@@ -19,6 +20,11 @@ export interface KycVerificationDocument {
   status: KycStatus;
   is_current: boolean;
   reviewed_by: ObjectId | null;
+  preliminary_reviewed_by?: ObjectId | null;
+  preliminary_reviewed_at?: Date | null;
+  preliminary_status?: 'APPROVED' | 'REJECTED' | null;
+  preliminary_checklist?: Record<string, boolean> | null;
+  preliminary_notes?: string | null;
   reviewed_at: Date | null;
   rejection_reason: string | null;
   expires_at: Date | null;
@@ -41,6 +47,7 @@ export interface KycDocumentDocument {
   kyc_verification_id: ObjectId;
   file: KycFileDocument;
   document_type: KycDocumentType;
+  details?: Record<string, string>;
   status: 'PENDING' | 'ACCEPTED' | 'REJECTED';
   rejection_reason: string | null;
   created_at: Date;

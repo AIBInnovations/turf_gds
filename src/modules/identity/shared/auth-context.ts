@@ -23,6 +23,11 @@ export type IdentityContext =
       keyId: string;
       environment: 'SANDBOX' | 'PRODUCTION';
       scopes: string[];
+    }
+  | {
+      actorType: 'PARTNER_PORTAL';
+      partnerId: string;
+      status: 'PENDING' | 'ACTIVE';
     };
 
 declare module 'fastify' {
@@ -73,6 +78,7 @@ export function createPartnerAuthenticationHook(
     const apiKey = request.headers['x-api-key'];
     const signature = request.headers['x-signature'];
     const timestamp = request.headers['x-timestamp'];
+    const nonce = request.headers['x-request-id'];
 
     if (
       typeof apiKey !== 'string' ||
@@ -92,6 +98,7 @@ export function createPartnerAuthenticationHook(
         typeof request.rawBody === 'string'
           ? Buffer.from(request.rawBody, 'utf8')
           : request.rawBody ?? Buffer.alloc(0),
+      ...(typeof nonce === 'string' && nonce.trim() ? { nonce: nonce.trim() } : {}),
     });
     request.identity = identity;
     if (!service.consumeRateLimit) return;
@@ -113,6 +120,14 @@ export function createPartnerAuthenticationHook(
         },
       });
     }
+  };
+}
+
+export function createPartnerPortalAuthenticationHook(
+  service: PartnerAccessService,
+): preHandlerHookHandler {
+  return async (request) => {
+    request.identity = await service.authenticatePortalSession(getBearerToken(request));
   };
 }
 
@@ -160,6 +175,13 @@ export function requirePartnerContext(
     throw authenticationRequired();
   }
 
+  return request.identity;
+}
+
+export function requirePartnerPortalContext(
+  request: FastifyRequest,
+): Extract<IdentityContext, { actorType: 'PARTNER_PORTAL' }> {
+  if (request.identity?.actorType !== 'PARTNER_PORTAL') throw authenticationRequired();
   return request.identity;
 }
 

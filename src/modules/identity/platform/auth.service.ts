@@ -30,6 +30,7 @@ export interface AdminAuthService {
     adminId: string;
     role: AdminRole;
   }>;
+  logout?(token:string):Promise<void>;
   bootstrapAdmin(input: {
     email: string;
     password: string;
@@ -113,6 +114,7 @@ export function createAdminAuthService(input: {
       throw invalidAdminToken();
     }
 
+    if(input.repository.isTokenRevoked&&await input.repository.isTokenRevoked(payload.jti))throw invalidAdminToken();
     const admin = await input.repository.findById(
       new ObjectId(payload.sub),
     );
@@ -127,6 +129,8 @@ export function createAdminAuthService(input: {
       role: admin.role,
     };
   }
+
+  async function logout(token:string){const payload=verifyAdminJwt(token,input.authConfig.adminAccessTokenSecret,Math.floor(now().getTime()/1_000));if(!payload||!ObjectId.isValid(payload.sub))throw invalidAdminToken();if(!input.repository.revokeToken)throw new AppError({code:'ADMIN_LOGOUT_UNAVAILABLE',message:'Admin logout is unavailable',statusCode:503});await input.repository.revokeToken(payload.jti,new ObjectId(payload.sub),new Date(payload.exp*1000),now());}
 
   async function bootstrapAdmin(
     values: Parameters<AdminAuthService['bootstrapAdmin']>[0],
@@ -175,7 +179,7 @@ export function createAdminAuthService(input: {
     return { adminId: id.toHexString() };
   }
 
-  return { login, authenticate, bootstrapAdmin };
+  return { login, authenticate, logout, bootstrapAdmin };
 }
 
 function invalidAdminCredentials(): AppError {

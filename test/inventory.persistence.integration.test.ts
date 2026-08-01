@@ -145,6 +145,7 @@ test('Inventory and payout-account persistence enforce their independent boundar
     const payoutAccountService = createPayoutAccountService({
       repository: createPayoutAccountRepository(database),
       ownerAccessService,
+      mediaStorage: { async ping(){}, async uploadBuffer(){throw new Error('not used');}, async delete(){} },
       now: () => now,
     });
     const scope = {

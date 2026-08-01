@@ -43,6 +43,12 @@ export interface AdminEpic08Service {
     page?: number;
     limit?: number;
   }): Promise<Record<string, unknown>>;
+  listPartners(input:{status?:string;q?:string;page?:number;limit?:number}):Promise<Record<string,unknown>>;
+  partnerDetail(partnerId:string):Promise<Record<string,unknown>>;
+  partnerApiUsage(input:{partnerId?:string;environment?:Environment;from?:Date;to?:Date;page?:number;limit?:number}):Promise<Record<string,unknown>>;
+  listDisputes(input:{environment?:Environment;page?:number;limit?:number}):Promise<Record<string,unknown>>;
+  resolveDispute(input:{bookingId:string;environment:Environment;expectedVersion:number;resolution:'CONFIRMED'|'CANCELLED'|'REFUNDED';note:string;adminId:string;correlationId:string}):Promise<Record<string,unknown>>;
+  operationsHealth():Promise<Record<string,unknown>>;
 }
 
 export function createAdminEpic08Service(input: {
@@ -282,6 +288,12 @@ export function createAdminEpic08Service(input: {
       const filtered = values.health ? rows.filter(({ health }) => health === values.health) : rows;
       return { items: filtered.slice((page - 1) * limit, page * limit), page, limit, total: filtered.length, minimumCoverageDays: input.minimumCoverageDays };
     },
+    async listPartners(values){const{page,limit}=pagination(values.page,values.limit);const match:Document={...(values.status?{status:values.status}:{}),...(values.q?{$or:[{legal_name:{$regex:escapeRegex(values.q),$options:'i'}},{display_name:{$regex:escapeRegex(values.q),$options:'i'}},{email:{$regex:escapeRegex(values.q),$options:'i'}}]}:{})};const total=await db.collection('partners').countDocuments(match);const items=await db.collection('partners').find(match).project({password_hash:0,sessions:0,audit_history:0}).sort({created_at:-1}).skip((page-1)*limit).limit(limit).toArray();return{items,page,limit,total};},
+    async partnerDetail(partnerId){const id=oid(partnerId);const[partner,kyc,keys,webhooks,payoutAccounts]=await Promise.all([db.collection('partners').findOne({_id:id},{projection:{password_hash:0,sessions:0}}),db.collection('kyc_verifications').find({subject_type:'PARTNER',subject_id:id}).sort({created_at:-1}).toArray(),db.collection('partner_api_keys').find({partner_id:id}).project({key_hash:0,signing_secret_hash:0}).toArray(),db.collection('webhook_endpoints').find({partner_id:id}).project({signing_secret_hash:0}).toArray(),db.collection('partner_payout_accounts').find({partner_id:id}).project({account_vault_token:0,'documents.secure_url':0}).toArray()]);if(!partner)throw notFound('PARTNER_NOT_FOUND','Partner not found');return{partner,kyc,keys,webhooks,payoutAccounts};},
+    async partnerApiUsage(values){const{page,limit}=pagination(values.page,values.limit);const match:Document={...(values.partnerId?{partner_id:oid(values.partnerId)}:{}),...(values.environment?{environment:values.environment}:{}),...((values.from||values.to)?{usage_date:{...(values.from?{$gte:values.from}:{}),...(values.to?{$lt:values.to}:{})}}:{})};const total=await db.collection('api_usage_daily').countDocuments(match);const items=await db.collection('api_usage_daily').aggregate([{$match:match},{$lookup:{from:'partners',localField:'partner_id',foreignField:'_id',as:'partner'}},{$project:{partnerId:{$toString:'$partner_id'},partnerName:{$arrayElemAt:['$partner.display_name',0]},environment:1,usageDate:'$usage_date',requestCount:'$request_count',errorCount:'$error_count',rateLimitedCount:'$rate_limited_count',p95LatencyMs:'$p95_latency_ms'}},{$sort:{usageDate:-1}},{$skip:(page-1)*limit},{$limit:limit}]).toArray();return{items,page,limit,total};},
+    async listDisputes(values){const{page,limit}=pagination(values.page,values.limit);const match:Document={status:'DISPUTED',...(values.environment?{environment:values.environment}:{})};const total=await db.collection('bookings').countDocuments(match);const items=await db.collection('bookings').find(match).sort({updated_at:-1}).skip((page-1)*limit).limit(limit).toArray();return{items,page,limit,total};},
+    async resolveDispute(values){const note=values.note.trim();if(!note)throw bad('INVALID_DISPUTE_RESOLUTION','A resolution note is required');const result=await db.collection<BookingDocument>('bookings').findOneAndUpdate({_id:oid(values.bookingId),environment:values.environment,status:'DISPUTED',version:values.expectedVersion},{$set:{status:values.resolution,updated_at:now()},$inc:{version:1},$push:{audit_history:{$each:[{event_type:'DISPUTE_RESOLVED',actor_type:'ADMIN',actor_id:oid(values.adminId),correlation_id:values.correlationId,changes:{resolution:values.resolution,note},occurred_at:now()}],$slice:-100}}},{returnDocument:'after'});if(!result)throw new AppError({code:'DISPUTE_RESOLUTION_CONFLICT',message:'The disputed booking changed or was already resolved',statusCode:409});return{bookingId:result._id.toHexString(),status:result.status,version:result.version};},
+    async operationsHealth(){const timestamp=now();const[failedEvents,retryingEvents,expiredHolds,failedSettlements,failedPayouts,pendingKyc]=await Promise.all([db.collection('outbox_events').countDocuments({status:'FAILED'}),db.collection('outbox_events').countDocuments({status:'PENDING',attempts:{$gt:0}}),db.collection('slots').countDocuments({status:'HELD',hold_expires_at:{$lte:timestamp}}),db.collection('settlements').countDocuments({status:'FAILED'}),db.collection('payouts').countDocuments({status:'FAILED'}),db.collection('kyc_verifications').countDocuments({status:'PENDING'})]);return{status:failedEvents+failedSettlements+failedPayouts>0?'DEGRADED':'HEALTHY',checkedAt:timestamp.toISOString(),failedEvents,retryingEvents,expiredHolds,failedSettlements,failedPayouts,pendingKyc};},
   };
 }
 
@@ -303,6 +315,7 @@ function bad(code: string, message: string) { return new AppError({ code, messag
 function notFound(code: string, message: string) { return new AppError({ code, message, statusCode: 404 }); }
 function emptyTotals() { return { bookings: 0, grossAmountMinor: 0, commissionAmountMinor: 0, taxAmountMinor: 0, venueNetAmountMinor: 0 }; }
 function summary(value: Document | null) { if (!value) return null; return { id: value._id.toHexString(), displayName: value.display_name ?? value.name ?? null, status: value.status ?? null }; }
+function escapeRegex(value:string){return value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');}
 export function renderAdminCsv(rows: Document[]) {
   if (!rows.length) return '\uFEFF\r\n';
   const headers = [...new Set(rows.flatMap((row) => Object.keys(row).filter((key) => row[key] === null || ['string', 'number', 'boolean'].includes(typeof row[key]) || row[key] instanceof Date)))];

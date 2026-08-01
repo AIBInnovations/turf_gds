@@ -1,7 +1,7 @@
 import type { ObjectId } from 'mongodb';
 
 export type BookingEnvironment = 'SANDBOX' | 'PRODUCTION';
-export type BookingType = 'OPEN_TIME' | 'FIXED_SLOT';
+export type BookingType = 'OPEN_TIME' | 'FIXED_SLOT' | 'DIRECT';
 export type BookingStatus =
   | 'CONFIRMED'
   | 'CANCELLED'
@@ -20,9 +20,9 @@ export interface BookingAuditDocument {
 
 export interface BookingDocument {
   _id: ObjectId;
-  slot_id: ObjectId;
-  contract_id: ObjectId;
-  partner_id: ObjectId;
+  slot_id: ObjectId | null;
+  contract_id: ObjectId | null;
+  partner_id: ObjectId | null;
   venue_id: ObjectId;
   court_id: ObjectId;
   environment: BookingEnvironment;
@@ -51,7 +51,7 @@ export interface BookingDocument {
 export interface BookingCancellationDocument {
   _id: ObjectId;
   booking_id: ObjectId;
-  requested_by_type: 'PARTNER' | 'VENUE' | 'PLATFORM' | 'SYSTEM';
+  requested_by_type: 'PARTNER' | 'VENUE' | 'ADMIN' | 'SYSTEM';
   requested_by_id: ObjectId | null;
   reason_code: string;
   reason_text: string | null;
@@ -76,4 +76,24 @@ export interface ApiIdempotencyRecordDocument {
   resource_id: ObjectId | null;
   expires_at: Date;
   created_at: Date;
+}
+
+export interface BookingPaymentDocument {
+  _id: ObjectId;
+  booking_id: ObjectId;
+  venue_id: ObjectId;
+  amount_minor: number;
+  refunded_amount_minor: number;
+  currency: 'INR';
+  method: 'CASH' | 'CARD' | 'UPI' | 'BANK_TRANSFER' | 'OTHER';
+  status: 'PAID' | 'PARTIALLY_REFUNDED' | 'REFUNDED';
+  reference: string | null;
+  notes: string | null;
+  recorded_by: ObjectId;
+  paid_at: Date;
+  refunded_at: Date | null;
+  version: number;
+  audit_history: unknown[];
+  created_at: Date;
+  updated_at: Date;
 }
