@@ -128,6 +128,34 @@ export function createBookingLifecycleService(input: {
             );
           }
           const expiresAt = expiry(timestamp, slot.starts_at, holdTtlMs);
+          if (
+            !(await input.repository.lockCourt({
+              courtId: slot.court_id,
+              version: context.court.version,
+              now: timestamp,
+              session,
+            }))
+          ) {
+            throw conflict(
+              'INVENTORY_VERSION_CONFLICT',
+              'Court inventory changed concurrently',
+            );
+          }
+          const conflictSlot = await input.repository.findConflictingSlot({
+            courtId: slot.court_id,
+            environment: values.environment,
+            startsAt: slot.starts_at,
+            endsAt: slot.ends_at,
+            now: timestamp,
+            excludeSlotId: slot._id,
+            session,
+          });
+          if (conflictSlot) {
+            throw conflict(
+              'INVENTORY_OVERLAP',
+              'The fixed Slot overlaps unavailable inventory',
+            );
+          }
           held =
             (await input.repository.claimFixedHold({
               slotId: slot._id,
@@ -170,6 +198,19 @@ export function createBookingLifecycleService(input: {
         });
         assertBookable(context, 'OPEN_TIME');
         validateOpenInterval(context.venue, context.court, startsAt, endsAt);
+        if (
+          !(await input.repository.lockCourt({
+            courtId,
+            version: context.court.version,
+            now: timestamp,
+            session,
+          }))
+        ) {
+          throw conflict(
+            'INVENTORY_VERSION_CONFLICT',
+            'Court inventory changed concurrently',
+          );
+        }
         const conflictSlot = await input.repository.findConflictingSlot({
           courtId,
           environment: values.environment,
@@ -182,19 +223,6 @@ export function createBookingLifecycleService(input: {
           throw conflict(
             'INVENTORY_OVERLAP',
             'The requested interval overlaps unavailable inventory',
-          );
-        }
-        if (
-          !(await input.repository.lockCourt({
-            courtId,
-            version: context.court.version,
-            now: timestamp,
-            session,
-          }))
-        ) {
-          throw conflict(
-            'INVENTORY_VERSION_CONFLICT',
-            'Court inventory changed concurrently',
           );
         }
         const pricingRules = await input.repository.findPricingRules(

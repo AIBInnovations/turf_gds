@@ -1,6 +1,7 @@
 import type { Filter, ObjectId } from 'mongodb';
 
 import type { DatabaseConnection } from '../../shared/database/database-connection.js';
+import type { CourtDocument } from '../venue/courts/court.types.js';
 import type { SlotDocument } from '../venue/inventory/inventory.types.js';
 import type {
   BookingCancellationDocument,
@@ -31,6 +32,13 @@ export interface OwnerBookingRepository {
     bookingId: ObjectId,
   ): Promise<BookingCancellationDocument | null>;
   findPayment(venueId:ObjectId,bookingId:ObjectId):Promise<BookingPaymentDocument|null>;
+  lockCourtForBooking(input: {
+    courtId: ObjectId;
+    venueId: ObjectId;
+    expectedVersion: number;
+    now: Date;
+    session: import('mongodb').ClientSession;
+  }): Promise<boolean>;
   insertDirectBooking(
     booking: BookingDocument,
     session: import('mongodb').ClientSession,
@@ -109,6 +117,25 @@ export function createOwnerBookingRepository(
         .findOne({ booking_id: bookingId });
     },
     findPayment(venueId,bookingId){return database.db.collection<BookingPaymentDocument>('booking_payments').findOne({venue_id:venueId,booking_id:bookingId});},
+
+    async lockCourtForBooking(input) {
+      const result = await database.db
+        .collection<CourtDocument>('courts')
+        .updateOne(
+          {
+            _id: input.courtId,
+            venue_id: input.venueId,
+            version: input.expectedVersion,
+            status: 'AVAILABLE',
+          },
+          {
+            $inc: { version: 1 },
+            $set: { updated_at: input.now },
+          },
+          { session: input.session },
+        );
+      return result.modifiedCount === 1;
+    },
 
     async insertDirectBooking(booking, session) {
       await database.db
