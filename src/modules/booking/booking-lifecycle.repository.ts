@@ -54,6 +54,7 @@ export interface BookingLifecycleRepository {
     startsAt: Date;
     endsAt: Date;
     now: Date;
+    excludeSlotId?: ObjectId;
     session: ClientSession;
   }): Promise<SlotDocument | null>;
   lockCourt(input: {
@@ -239,6 +240,9 @@ export function createBookingLifecycleRepository(
         {
           court_id: input.courtId,
           environment: input.environment,
+          ...(input.excludeSlotId
+            ? { _id: { $ne: input.excludeSlotId } }
+            : {}),
           starts_at: { $lt: input.endsAt },
           ends_at: { $gt: input.startsAt },
           $or: [

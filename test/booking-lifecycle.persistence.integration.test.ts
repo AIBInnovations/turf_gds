@@ -246,6 +246,99 @@ test('Booking lifecycle atomically holds, confirms, snapshots, cancels, audits, 
   }
 });
 
+test('concurrent confirms on the same hold create a single booking', async (context) => {
+  const uri = process.env.MONGODB_URI;
+  if (!uri) {
+    context.skip('MONGODB_URI is not configured');
+    return;
+  }
+  const databaseName = `turf_gds_booking_race_it_${process.pid}_${Date.now()}`;
+  const database = new MongoDatabaseConnection({
+    uri,
+    database: databaseName,
+    serverSelectionTimeoutMs: 2_000,
+    maxPoolSize: 4,
+  });
+
+  try {
+    try {
+      await database.connect();
+    } catch {
+      context.skip('MongoDB integration server is unavailable');
+      return;
+    }
+    await initializeIdentityPersistence(database.db);
+    await initializeVenuePersistence(database.db);
+    await initializeInventoryPersistence(database.db);
+    await initializeContractPersistence(database.db);
+    await initializeBookingPersistence(database.db);
+    await initializeLedgerPersistence(database.db);
+    await initializeOutboxPersistence(database.db);
+
+    const ids = await seed(database, new Date('2026-08-03T02:30:00.000Z'));
+    const service = createBookingLifecycleService({
+      repository: createBookingLifecycleRepository(database),
+      ledgerService: createLedgerService(createLedgerRepository(database)),
+      outboxRepository: createOutboxRepository(database),
+      database,
+      now: () => new Date('2026-08-03T02:30:00.000Z'),
+      holdTtlMs: 10 * 60_000,
+    });
+
+    const hold = await service.hold({
+      partnerId: ids.partnerId.toHexString(),
+      environment: 'PRODUCTION',
+      bookingType: 'FIXED_SLOT',
+      slotId: ids.fixedSlotId.toHexString(),
+      correlationId: 'race-hold',
+    });
+
+    const results = await Promise.allSettled([
+      service.confirm({
+        partnerId: ids.partnerId.toHexString(),
+        environment: 'PRODUCTION',
+        holdId: hold.holdId,
+        idempotencyKey: 'race-confirm-a',
+        externalBookingReference: 'race-a',
+        correlationId: 'race-confirm-a',
+      }),
+      service.confirm({
+        partnerId: ids.partnerId.toHexString(),
+        environment: 'PRODUCTION',
+        holdId: hold.holdId,
+        idempotencyKey: 'race-confirm-b',
+        externalBookingReference: 'race-b',
+        correlationId: 'race-confirm-b',
+      }),
+    ]);
+
+    const fulfilled = results.filter(
+      (result): result is PromiseFulfilledResult<Record<string, unknown>> =>
+        result.status === 'fulfilled',
+    );
+    const rejected = results.filter(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
+
+    assert.equal(fulfilled.length, 1);
+    assert.equal(rejected.length, 1);
+    assert.equal(await database.db.collection('bookings').countDocuments({}), 1);
+    const booking = await database.db
+      .collection<BookingDocument>('bookings')
+      .findOne({});
+    assert.equal(booking?.status, 'CONFIRMED');
+    assert.ok(
+      booking?.external_booking_reference === 'race-a' ||
+        booking?.external_booking_reference === 'race-b',
+    );
+  } finally {
+    if (databaseName.startsWith('turf_gds_booking_race_it_')) {
+      await database.db.dropDatabase().catch(() => undefined);
+    }
+    await database.close().catch(() => undefined);
+  }
+});
+
 test('open-time holds enforce hours, duration, overlap, environment, and expiry recovery', async (context) => {
   const uri = process.env.MONGODB_URI;
   if (!uri) {
@@ -369,6 +462,39 @@ test('open-time holds enforce hours, duration, overlap, environment, and expiry 
     );
     assert.equal(
       openRace.filter(({ status }) => status === 'rejected').length,
+      1,
+    );
+
+    clock = new Date('2026-08-03T02:52:00.000Z');
+    await service.recoverExpiredHolds();
+    const crossModeRace = await Promise.allSettled([
+      service.hold({
+        ...base,
+        correlationId: 'cross-mode-open',
+      }),
+      service.hold({
+        partnerId: ids.partnerId.toHexString(),
+        environment: 'PRODUCTION',
+        bookingType: 'FIXED_SLOT',
+        slotId: ids.fixedSlotId.toHexString(),
+        correlationId: 'cross-mode-fixed',
+      }),
+    ]);
+    assert.equal(
+      crossModeRace.filter(({ status }) => status === 'fulfilled').length,
+      1,
+    );
+    assert.equal(
+      crossModeRace.filter(({ status }) => status === 'rejected').length,
+      1,
+    );
+    assert.equal(
+      await database.db.collection<SlotDocument>('slots').countDocuments({
+        court_id: ids.courtId,
+        status: 'HELD',
+        starts_at: { $lt: new Date('2026-08-03T05:30:00.000Z') },
+        ends_at: { $gt: new Date('2026-08-03T04:30:00.000Z') },
+      }),
       1,
     );
   } finally {

@@ -17,8 +17,11 @@ import { createIdentityService } from '../src/modules/identity/owner/owner-auth.
 import { createOwnerAccessRepository } from '../src/modules/identity/owner/owner-access.repository.js';
 import { createOwnerAccessService } from '../src/modules/identity/owner/owner-access.service.js';
 import { initializeVenuePersistence } from '../src/modules/venue/profile/venue.persistence.js';
+import { initializeInventoryPersistence } from '../src/modules/venue/inventory/inventory.persistence.js';
 import { createVenueRepository } from '../src/modules/venue/profile/venue.repository.js';
 import { createVenueService } from '../src/modules/venue/profile/venue.service.js';
+import type { CourtDocument } from '../src/modules/venue/courts/court.types.js';
+import type { SlotDocument } from '../src/modules/venue/inventory/inventory.types.js';
 import type { AppConfig } from '../src/config/env.js';
 import { MongoDatabaseConnection } from '../src/shared/database/database-connection.js';
 import { AppError } from '../src/shared/errors/app-error.js';
@@ -61,6 +64,7 @@ test('Owner Booking persistence enforces filters, detail scope, cancellation, an
 
     await initializeIdentityPersistence(database.db);
     await initializeVenuePersistence(database.db);
+    await initializeInventoryPersistence(database.db);
     await initializeBookingPersistence(database.db);
     const venueRepository = createVenueRepository(database);
     const identityService = createIdentityService({
@@ -241,6 +245,79 @@ test('Owner Booking persistence enforces filters, detail scope, cancellation, an
       (error: unknown) =>
         error instanceof AppError &&
         error.code === 'PERMISSION_DENIED',
+    );
+
+    const directCourtId = new ObjectId();
+    await database.db.collection('venues').updateOne(
+      { _id: sameVenueId },
+      { $set: { status: 'ACTIVE', updated_at: timestamp } },
+    );
+    await database.db.collection<CourtDocument>('courts').insertOne({
+      _id: directCourtId,
+      venue_id: sameVenueId,
+      name: 'Direct Booking Race Court',
+      sport_type: 'FOOTBALL',
+      surface_type: 'ARTIFICIAL_TURF',
+      capacity: 10,
+      status: 'AVAILABLE',
+      booking_mode: 'BOTH',
+      operating_hours: {
+        entries: [{ day_of_week: 2, opens_at: '08:00', closes_at: '20:00' }],
+      },
+      min_booking_minutes: 60,
+      booking_increment_minutes: 30,
+      fixed_slot_duration_minutes: 60,
+      fixed_slot_anchor_minutes: 0,
+      media: [],
+      audit_history: [],
+      version: 1,
+      created_at: timestamp,
+      updated_at: timestamp,
+    });
+    const directRace = await Promise.allSettled([
+      service.createDirectBooking({
+        actorOwnerId: firstOwner.ownerId,
+        venueId: firstOwner.venueId,
+        courtId: directCourtId.toHexString(),
+        startsAt: '2026-08-04T04:30:00.000Z',
+        endsAt: '2026-08-04T05:30:00.000Z',
+        correlationId: 'direct-race-a',
+      }),
+      service.createDirectBooking({
+        actorOwnerId: firstOwner.ownerId,
+        venueId: firstOwner.venueId,
+        courtId: directCourtId.toHexString(),
+        startsAt: '2026-08-04T05:00:00.000Z',
+        endsAt: '2026-08-04T06:00:00.000Z',
+        correlationId: 'direct-race-b',
+      }),
+    ]);
+    assert.equal(
+      directRace.filter(({ status }) => status === 'fulfilled').length,
+      1,
+      directRace.map((result) =>
+        result.status === 'rejected'
+          ? String((result.reason as { code?: unknown }).code ?? result.reason)
+          : 'fulfilled'
+      ).join(', '),
+    );
+    assert.equal(
+      directRace.filter(({ status }) => status === 'rejected').length,
+      1,
+    );
+    assert.equal(
+      await database.db.collection<SlotDocument>('slots').countDocuments({
+        court_id: directCourtId,
+        status: 'BOOKED',
+      }),
+      1,
+    );
+    assert.equal(
+      await database.db.collection<BookingDocument>('bookings').countDocuments({
+        court_id: directCourtId,
+        booking_type: 'DIRECT',
+      }),
+      1,
     );
 
     const indexNames = (

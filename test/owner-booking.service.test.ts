@@ -106,6 +106,7 @@ function createFixture(options: {
         : null;
     },
     async findPayment() { return null; },
+    async lockCourtForBooking() { return true; },
     async insertDirectBooking() {},
     async findForVenueWithSession(id, idBooking) {
       return documents.find(

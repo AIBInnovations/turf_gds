@@ -180,6 +180,20 @@ export function createOwnerBookingService(input: {
         if (!court || court.status !== 'AVAILABLE') {
           throw new AppError({ code: 'COURT_NOT_AVAILABLE', message: 'Court is not available', statusCode: 409 });
         }
+        const locked = await input.repository.lockCourtForBooking({
+          courtId,
+          venueId,
+          expectedVersion: court.version,
+          now: timestamp,
+          session,
+        });
+        if (!locked) {
+          throw new AppError({
+            code: 'INVENTORY_VERSION_CONFLICT',
+            message: 'Court inventory changed concurrently',
+            statusCode: 409,
+          });
+        }
         const overlap = await input.database.db
           .collection<SlotDocument>('slots')
           .findOne({
