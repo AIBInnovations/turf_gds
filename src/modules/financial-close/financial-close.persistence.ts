@@ -1,4 +1,4 @@
-import type { Db, Document } from 'mongodb';
+import type { AnyBulkWriteOperation, Db, Document, ObjectId } from 'mongodb';
 
 function schema(required: string[], properties: Document): Document {
   return {
@@ -17,10 +17,21 @@ const environment = { enum: ['SANDBOX', 'PRODUCTION'] };
 
 const settlement = schema(
   [
-    'partner_id', 'environment', 'period_start', 'period_end',
-    'cycle', 'due_at', 'status', 'gross_amount_minor',
-    'commission_amount_minor', 'tax_amount_minor', 'refund_amount_minor',
-    'net_amount_minor', 'currency', 'audit_history', 'created_at',
+    'partner_id',
+    'environment',
+    'period_start',
+    'period_end',
+    'cycle',
+    'due_at',
+    'status',
+    'gross_amount_minor',
+    'commission_amount_minor',
+    'tax_amount_minor',
+    'refund_amount_minor',
+    'net_amount_minor',
+    'currency',
+    'audit_history',
+    'created_at',
     'completed_at',
   ],
   {
@@ -32,8 +43,13 @@ const settlement = schema(
     due_at: { bsonType: 'date' },
     status: {
       enum: [
-        'DRAFT', 'PENDING_FUNDS', 'RECONCILING', 'RECONCILED',
-        'COMPLETED', 'FAILED', 'REVERSED',
+        'DRAFT',
+        'PENDING_FUNDS',
+        'RECONCILING',
+        'RECONCILED',
+        'COMPLETED',
+        'FAILED',
+        'REVERSED',
       ],
     },
     gross_amount_minor: money,
@@ -50,9 +66,18 @@ const settlement = schema(
 
 const reconciliation = schema(
   [
-    'settlement_id', 'environment', 'reconciled_by', 'reported_amount_minor',
-    'bank_reference', 'evidence_uri', 'status', 'reconciled_at', 'notes',
-    'attempt_history', 'audit_history', 'created_at',
+    'settlement_id',
+    'environment',
+    'reconciled_by',
+    'reported_amount_minor',
+    'bank_reference',
+    'evidence_uri',
+    'status',
+    'reconciled_at',
+    'notes',
+    'attempt_history',
+    'audit_history',
+    'created_at',
   ],
   {
     settlement_id: { bsonType: 'objectId' },
@@ -72,10 +97,21 @@ const reconciliation = schema(
 
 const payout = schema(
   [
-    'settlement_id', 'venue_id', 'payout_account_id', 'environment',
-    'amount_minor', 'currency', 'status', 'idempotency_key',
-    'bank_reference', 'failure_reason', 'initiated_at', 'paid_at',
-    'audit_history', 'created_at', 'updated_at',
+    'settlement_id',
+    'venue_id',
+    'payout_account_id',
+    'environment',
+    'amount_minor',
+    'currency',
+    'status',
+    'idempotency_key',
+    'bank_reference',
+    'failure_reason',
+    'initiated_at',
+    'paid_at',
+    'audit_history',
+    'created_at',
+    'updated_at',
   ],
   {
     settlement_id: { bsonType: 'objectId' },
@@ -98,12 +134,25 @@ const payout = schema(
 
 const invoice = schema(
   [
-    'settlement_id', 'environment', 'invoice_number', 'type',
-    'subtotal_minor', 'tax_amount_minor', 'total_minor',
-    'currency', 'status', 'document_uri', 'issued_at', 'created_at',
+    'settlement_id',
+    'partner_id',
+    'environment',
+    'invoice_number',
+    'type',
+    'subtotal_minor',
+    'tax_amount_minor',
+    'total_minor',
+    'currency',
+    'status',
+    'document_uri',
+    'issued_at',
+    'created_at',
   ],
   {
     settlement_id: { bsonType: 'objectId' },
+    // Nullable so an invoice whose settlement is missing stays writable rather
+    // than being bricked by the strict validator.
+    partner_id: { bsonType: ['objectId', 'null'] },
     environment,
     invoice_number: { bsonType: 'string' },
     type: { enum: ['TAX_INVOICE', 'CREDIT_NOTE', 'DEBIT_NOTE'] },
@@ -118,8 +167,14 @@ const invoice = schema(
   },
 );
 
-async function ensure(db: Db, name: string, validator: Document): Promise<void> {
-  const exists = await db.listCollections({ name }, { nameOnly: true }).hasNext();
+async function ensure(
+  db: Db,
+  name: string,
+  validator: Document,
+): Promise<void> {
+  const exists = await db
+    .listCollections({ name }, { nameOnly: true })
+    .hasNext();
   if (!exists) {
     await db.createCollection(name, {
       validator,
@@ -136,16 +191,20 @@ async function ensure(db: Db, name: string, validator: Document): Promise<void> 
   }
 }
 
-export async function initializeFinancialClosePersistence(db: Db): Promise<void> {
+export async function initializeFinancialClosePersistence(
+  db: Db,
+): Promise<void> {
   await migrateLegacyFinancialCloseFields(db);
   await ensure(db, 'settlements', settlement);
   await ensure(db, 'reconciliations', reconciliation);
   await ensure(db, 'payouts', payout);
   await ensure(db, 'invoices', invoice);
-  await db.collection('settlements').createIndex(
-    { partner_id: 1, environment: 1, period_start: 1, period_end: 1 },
-    { unique: true, name: 'uq_settlement_period' },
-  );
+  await db
+    .collection('settlements')
+    .createIndex(
+      { partner_id: 1, environment: 1, period_start: 1, period_end: 1 },
+      { unique: true, name: 'uq_settlement_period' },
+    );
   await dropIndexIfPresent(
     db,
     'reconciliations',
@@ -159,14 +218,18 @@ export async function initializeFinancialClosePersistence(db: Db): Promise<void>
       name: 'uq_reconciliation_bank_reference',
     },
   );
-  await db.collection('payouts').createIndex(
-    { idempotency_key: 1 },
-    { unique: true, name: 'uq_payout_idempotency' },
-  );
-  await db.collection('payouts').createIndex(
-    { settlement_id: 1, venue_id: 1 },
-    { unique: true, name: 'uq_payout_settlement_venue' },
-  );
+  await db
+    .collection('payouts')
+    .createIndex(
+      { idempotency_key: 1 },
+      { unique: true, name: 'uq_payout_idempotency' },
+    );
+  await db
+    .collection('payouts')
+    .createIndex(
+      { settlement_id: 1, venue_id: 1 },
+      { unique: true, name: 'uq_payout_settlement_venue' },
+    );
   await db.collection('payouts').createIndex(
     { environment: 1, bank_reference: 1 },
     {
@@ -175,14 +238,26 @@ export async function initializeFinancialClosePersistence(db: Db): Promise<void>
       name: 'uq_payout_environment_bank_reference',
     },
   );
-  await db.collection('invoices').createIndex(
-    { invoice_number: 1 },
-    { unique: true, name: 'uq_invoice_number' },
-  );
-  await db.collection('invoices').createIndex(
-    { settlement_id: 1, type: 1 },
-    { unique: true, name: 'uq_invoice_settlement_type' },
-  );
+  await db
+    .collection('invoices')
+    .createIndex(
+      { invoice_number: 1 },
+      { unique: true, name: 'uq_invoice_number' },
+    );
+  // Exactly the access pattern of listByCursor: equality on partner and
+  // environment, range and sort on _id.
+  await db
+    .collection('invoices')
+    .createIndex(
+      { partner_id: 1, environment: 1, _id: -1 },
+      { name: 'ix_invoice_partner_listing' },
+    );
+  await db
+    .collection('invoices')
+    .createIndex(
+      { settlement_id: 1, type: 1 },
+      { unique: true, name: 'uq_invoice_settlement_type' },
+    );
 }
 
 async function migrateLegacyFinancialCloseFields(db: Db): Promise<void> {
@@ -192,15 +267,15 @@ async function migrateLegacyFinancialCloseFields(db: Db): Promise<void> {
       .hasNext()
   ) {
     await db.command({ collMod: 'settlements', validationLevel: 'off' });
-    await db.collection('settlements').updateMany(
-      { settlement_cycle: { $exists: true }, cycle: { $exists: false } },
-      { $rename: { settlement_cycle: 'cycle' } },
-    );
+    await db
+      .collection('settlements')
+      .updateMany(
+        { settlement_cycle: { $exists: true }, cycle: { $exists: false } },
+        { $rename: { settlement_cycle: 'cycle' } },
+      );
   }
   if (
-    await db
-      .listCollections({ name: 'invoices' }, { nameOnly: true })
-      .hasNext()
+    await db.listCollections({ name: 'invoices' }, { nameOnly: true }).hasNext()
   ) {
     await db.command({ collMod: 'invoices', validationLevel: 'off' });
     await db.collection('invoices').updateMany(
@@ -217,7 +292,54 @@ async function migrateLegacyFinancialCloseFields(db: Db): Promise<void> {
         },
       },
     );
+    await backfillInvoicePartner(db);
   }
+}
+
+/**
+ * Denormalise partner_id from each invoice's settlement.
+ *
+ * Runs inside the validationLevel:'off' window above, before `ensure()`
+ * re-tightens the validator — the field is required, so legacy rows must have
+ * it before then or they become un-updatable. The countDocuments probe keeps
+ * every boot after the first cheap.
+ */
+async function backfillInvoicePartner(db: Db): Promise<void> {
+  const pending = await db
+    .collection('invoices')
+    .countDocuments({ partner_id: { $exists: false } }, { limit: 1 });
+  if (pending === 0) return;
+
+  const settlements = db
+    .collection<{ _id: ObjectId; partner_id: ObjectId }>('settlements')
+    .find({}, { projection: { partner_id: 1 } });
+  let batch: AnyBulkWriteOperation<Document>[] = [];
+  for await (const settlement of settlements) {
+    batch.push({
+      updateMany: {
+        filter: {
+          settlement_id: settlement._id,
+          partner_id: { $exists: false },
+        },
+        update: { $set: { partner_id: settlement.partner_id } },
+      },
+    });
+    if (batch.length === 500) {
+      await db.collection('invoices').bulkWrite(batch, { ordered: false });
+      batch = [];
+    }
+  }
+  if (batch.length > 0) {
+    await db.collection('invoices').bulkWrite(batch, { ordered: false });
+  }
+  // Orphans: no settlement to inherit from. Null keeps them valid and keeps
+  // them out of every Partner-scoped listing.
+  await db
+    .collection('invoices')
+    .updateMany(
+      { partner_id: { $exists: false } },
+      { $set: { partner_id: null } },
+    );
 }
 
 async function dropIndexIfPresent(

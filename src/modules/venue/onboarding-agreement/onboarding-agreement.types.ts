@@ -1,6 +1,9 @@
 import type { ObjectId } from 'mongodb';
 
-export interface OnboardingRefundRule { min_minutes_before_start: number; refund_bps: number }
+export interface OnboardingRefundRule {
+  min_minutes_before_start: number;
+  refund_bps: number;
+}
 export interface VenueOnboardingAgreementDocument {
   _id: ObjectId;
   venue_id: ObjectId;

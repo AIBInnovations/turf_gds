@@ -41,13 +41,7 @@ const registerSchema = {
           address: {
             type: 'object',
             additionalProperties: false,
-            required: [
-              'line1',
-              'city',
-              'state',
-              'postalCode',
-              'country',
-            ],
+            required: ['line1', 'city', 'state', 'postalCode', 'country'],
             properties: {
               line1: { type: 'string', minLength: 2, maxLength: 200 },
               line2: { type: 'string', maxLength: 200 },

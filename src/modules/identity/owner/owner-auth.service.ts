@@ -1,34 +1,34 @@
-import type { AppConfig } from "../../../config/env.js";
-import { ObjectId, type ClientSession } from "mongodb";
+import type { AppConfig } from '../../../config/env.js';
+import { ObjectId, type ClientSession } from 'mongodb';
 
-import type { DatabaseConnection } from "../../../shared/database/database-connection.js";
+import type { DatabaseConnection } from '../../../shared/database/database-connection.js';
 import {
   DUMMY_PASSWORD_HASH,
   hashPassword,
   verifyPassword,
-} from "../../../shared/auth/password.js";
+} from '../../../shared/auth/password.js';
 import {
   generateSessionToken,
   hashSessionToken,
-} from "../../../shared/auth/session-token.js";
-import { createHash } from "node:crypto";
-import { AppError } from "../../../shared/errors/app-error.js";
-import type { VenueService } from "../../venue/profile/venue.service.js";
-import type { IdentityRepository } from "./owner-auth.repository.js";
+} from '../../../shared/auth/session-token.js';
+import { createHash } from 'node:crypto';
+import { AppError } from '../../../shared/errors/app-error.js';
+import type { VenueService } from '../../venue/profile/venue.service.js';
+import type { IdentityRepository } from './owner-auth.repository.js';
 import type {
   LoginVenueOwnerInput,
   RegisterVenueOwnerInput,
   VenueMembershipRole,
   VenueOwnerStatus,
-} from "./owner.types.js";
+} from './owner.types.js';
 
 export interface IdentityService {
   registerVenueOwner(input: RegisterVenueOwnerInput): Promise<{
     ownerId: string;
     venueId: string;
     membershipId: string;
-    ownerStatus: "ACTIVE";
-    venueStatus: "PENDING";
+    ownerStatus: 'ACTIVE';
+    venueStatus: 'PENDING';
   }>;
   loginVenueOwner(input: LoginVenueOwnerInput): Promise<{
     sessionToken: string;
@@ -37,7 +37,7 @@ export interface IdentityService {
       id: string;
       legalName: string;
       email: string;
-      status: "ACTIVE";
+      status: 'ACTIVE';
     };
   }>;
   validateOwnerSession(input: {
@@ -52,24 +52,30 @@ export interface IdentityService {
       venueId: string;
     } | null;
   }>;
-  approveVenueOwner(input: {
-    ownerId: string;
-    venueId: string;
-    adminId: string;
-    correlationId: string;
-  }, session: ClientSession): Promise<void>;
-  attachOwnerVenue?(input: {
-    ownerId: string;
-    venueId: string;
-    createdAt: Date;
-  }, session: ClientSession): Promise<{ membershipId: string }>;
+  approveVenueOwner(
+    input: {
+      ownerId: string;
+      venueId: string;
+      adminId: string;
+      correlationId: string;
+    },
+    session: ClientSession,
+  ): Promise<void>;
+  attachOwnerVenue?(
+    input: {
+      ownerId: string;
+      venueId: string;
+      createdAt: Date;
+    },
+    session: ClientSession,
+  ): Promise<{ membershipId: string }>;
 }
 
 export interface IdentityServiceDependencies {
   repository: IdentityRepository;
   venueService: VenueService;
   database: DatabaseConnection;
-  authConfig: AppConfig["auth"];
+  authConfig: AppConfig['auth'];
   now?: () => Date;
 }
 
@@ -84,7 +90,7 @@ export function createIdentityService(
 
   async function registerVenueOwner(
     input: RegisterVenueOwnerInput,
-  ): ReturnType<IdentityService["registerVenueOwner"]> {
+  ): ReturnType<IdentityService['registerVenueOwner']> {
     const timestamp = now();
     const passwordHash = await hashPassword(input.password);
     const ownerId = new ObjectId();
@@ -111,8 +117,8 @@ export function createIdentityService(
             phone_e164: input.phoneE164.trim(),
             password_hash: passwordHash,
             email_verified_at: null,
-            kyc_status: "PENDING",
-            status: "ACTIVE",
+            kyc_status: 'PENDING',
+            status: 'ACTIVE',
             failed_login_count: 0,
             locked_until: null,
             last_login_at: null,
@@ -154,8 +160,8 @@ export function createIdentityService(
             _id: membershipId,
             owner_id: ownerId,
             venue_id: venueId,
-            role: "OWNER",
-            status: "ACTIVE",
+            role: 'OWNER',
+            status: 'ACTIVE',
             created_at: timestamp,
           },
           session,
@@ -173,14 +179,14 @@ export function createIdentityService(
       ownerId: ownerId.toHexString(),
       venueId: venueId.toHexString(),
       membershipId: membershipId.toHexString(),
-      ownerStatus: "ACTIVE",
-      venueStatus: "PENDING",
+      ownerStatus: 'ACTIVE',
+      venueStatus: 'PENDING',
     };
   }
 
   async function loginVenueOwner(
     input: LoginVenueOwnerInput,
-  ): ReturnType<IdentityService["loginVenueOwner"]> {
+  ): ReturnType<IdentityService['loginVenueOwner']> {
     const timestamp = now();
     const email = normalizeEmail(input.email);
     const owner = await dependencies.repository.findOwnerByEmail(email);
@@ -190,18 +196,18 @@ export function createIdentityService(
       throw invalidCredentials();
     }
 
-    if (owner.status === "SUSPENDED") {
+    if (owner.status === 'SUSPENDED') {
       throw new AppError({
-        code: "ACCOUNT_SUSPENDED",
-        message: "This account is suspended",
+        code: 'ACCOUNT_SUSPENDED',
+        message: 'This account is suspended',
         statusCode: 403,
       });
     }
 
     if (owner.locked_until && owner.locked_until > timestamp) {
       throw new AppError({
-        code: "ACCOUNT_LOCKED",
-        message: "Too many failed login attempts. Try again later",
+        code: 'ACCOUNT_LOCKED',
+        message: 'Too many failed login attempts. Try again later',
         statusCode: 423,
         details: { lockedUntil: owner.locked_until.toISOString() },
       });
@@ -238,9 +244,9 @@ export function createIdentityService(
       owner._id,
       {
         token_hash: hashSessionToken(sessionToken),
-        ip_hash: createHash("sha256")
+        ip_hash: createHash('sha256')
           .update(input.ipAddress.slice(0, 64))
-          .digest("hex"),
+          .digest('hex'),
         user_agent: input.userAgent.slice(0, 512),
         expires_at: expiresAt,
         last_seen_at: timestamp,
@@ -253,8 +259,8 @@ export function createIdentityService(
 
     if (!sessionCreated) {
       throw new AppError({
-        code: "ACCOUNT_UNAVAILABLE",
-        message: "This account cannot start a session",
+        code: 'ACCOUNT_UNAVAILABLE',
+        message: 'This account cannot start a session',
         statusCode: 403,
       });
     }
@@ -274,12 +280,11 @@ export function createIdentityService(
   async function validateOwnerSession(input: {
     sessionToken: string;
     venueId?: string;
-  }): ReturnType<IdentityService["validateOwnerSession"]> {
+  }): ReturnType<IdentityService['validateOwnerSession']> {
     const timestamp = now();
     const tokenHash = hashSessionToken(input.sessionToken);
-    const owner = await dependencies.repository.findOwnerBySessionTokenHash(
-      tokenHash,
-    );
+    const owner =
+      await dependencies.repository.findOwnerBySessionTokenHash(tokenHash);
 
     if (!owner) {
       throw invalidSession();
@@ -297,30 +302,27 @@ export function createIdentityService(
       throw invalidSession();
     }
 
-    if (owner.status === "SUSPENDED") {
+    if (owner.status === 'SUSPENDED') {
       throw new AppError({
-        code: "ACCOUNT_SUSPENDED",
-        message: "This account is suspended",
+        code: 'ACCOUNT_SUSPENDED',
+        message: 'This account is suspended',
         statusCode: 403,
       });
     }
 
-    await dependencies.repository.touchSession(
-      owner._id,
-      tokenHash,
-      timestamp,
-    );
+    await dependencies.repository.touchSession(owner._id, tokenHash, timestamp);
 
     if (input.venueId) {
-      const membership = await dependencies.repository.findMembershipByOwnerAndVenue(
-        owner._id,
-        new ObjectId(input.venueId),
-      );
+      const membership =
+        await dependencies.repository.findMembershipByOwnerAndVenue(
+          owner._id,
+          new ObjectId(input.venueId),
+        );
 
-      if (!membership || membership.status !== "ACTIVE") {
+      if (!membership || membership.status !== 'ACTIVE') {
         throw new AppError({
-          code: "FORBIDDEN",
-          message: "You are not authorized to access this venue",
+          code: 'FORBIDDEN',
+          message: 'You are not authorized to access this venue',
           statusCode: 403,
         });
       }
@@ -343,12 +345,15 @@ export function createIdentityService(
     };
   }
 
-  async function approveVenueOwner(input: {
-    ownerId: string;
-    venueId: string;
-    adminId: string;
-    correlationId: string;
-  }, session: ClientSession): Promise<void> {
+  async function approveVenueOwner(
+    input: {
+      ownerId: string;
+      venueId: string;
+      adminId: string;
+      correlationId: string;
+    },
+    session: ClientSession,
+  ): Promise<void> {
     const ownerId = toObjectId(input.ownerId);
     const membership =
       await dependencies.repository.findMembershipByOwnerAndVenue(
@@ -359,12 +364,12 @@ export function createIdentityService(
 
     if (
       !membership ||
-      membership.status !== "ACTIVE" ||
-      membership.role !== "OWNER"
+      membership.status !== 'ACTIVE' ||
+      membership.role !== 'OWNER'
     ) {
       throw new AppError({
-        code: "OWNER_VENUE_RELATION_REQUIRED",
-        message: "An active OWNER membership is required",
+        code: 'OWNER_VENUE_RELATION_REQUIRED',
+        message: 'An active OWNER membership is required',
         statusCode: 409,
       });
     }
@@ -379,8 +384,8 @@ export function createIdentityService(
 
     if (!approved) {
       throw new AppError({
-        code: "OWNER_APPROVAL_NOT_ALLOWED",
-        message: "The Venue Owner cannot be approved",
+        code: 'OWNER_APPROVAL_NOT_ALLOWED',
+        message: 'The Venue Owner cannot be approved',
         statusCode: 409,
       });
     }
@@ -396,11 +401,14 @@ export function createIdentityService(
   ): Promise<{ membershipId: string }> {
     const ownerId = toObjectId(input.ownerId);
     const venueId = toObjectId(input.venueId);
-    const owner = await dependencies.repository.findOwnerById?.(ownerId, session);
-    if (!owner || owner.status !== "ACTIVE") {
+    const owner = await dependencies.repository.findOwnerById?.(
+      ownerId,
+      session,
+    );
+    if (!owner || owner.status !== 'ACTIVE') {
       throw new AppError({
-        code: "ACTIVE_OWNER_REQUIRED",
-        message: "An active Venue Owner is required",
+        code: 'ACTIVE_OWNER_REQUIRED',
+        message: 'An active Venue Owner is required',
         statusCode: 409,
       });
     }
@@ -412,20 +420,23 @@ export function createIdentityService(
       )
     ) {
       throw new AppError({
-        code: "OWNER_MEMBERSHIP_EXISTS",
-        message: "The owner already belongs to this Venue",
+        code: 'OWNER_MEMBERSHIP_EXISTS',
+        message: 'The owner already belongs to this Venue',
         statusCode: 409,
       });
     }
     const membershipId = new ObjectId();
-    await dependencies.repository.insertOwnerMembership({
-      _id: membershipId,
-      owner_id: ownerId,
-      venue_id: venueId,
-      role: "OWNER",
-      status: "ACTIVE",
-      created_at: input.createdAt,
-    }, session);
+    await dependencies.repository.insertOwnerMembership(
+      {
+        _id: membershipId,
+        owner_id: ownerId,
+        venue_id: venueId,
+        role: 'OWNER',
+        status: 'ACTIVE',
+        created_at: input.createdAt,
+      },
+      session,
+    );
     return { membershipId: membershipId.toHexString() };
   }
 
@@ -441,8 +452,8 @@ export function createIdentityService(
 function toObjectId(value: string): ObjectId {
   if (!ObjectId.isValid(value)) {
     throw new AppError({
-      code: "INVALID_ID",
-      message: "A supplied identifier is invalid",
+      code: 'INVALID_ID',
+      message: 'A supplied identifier is invalid',
       statusCode: 400,
     });
   }
@@ -452,33 +463,33 @@ function toObjectId(value: string): ObjectId {
 
 function isDuplicateKeyError(error: unknown): boolean {
   return (
-    typeof error === "object" &&
+    typeof error === 'object' &&
     error !== null &&
-    "code" in error &&
+    'code' in error &&
     error.code === 11_000
   );
 }
 
 function emailAlreadyRegistered(): AppError {
   return new AppError({
-    code: "EMAIL_ALREADY_REGISTERED",
-    message: "An account with this email already exists",
+    code: 'EMAIL_ALREADY_REGISTERED',
+    message: 'An account with this email already exists',
     statusCode: 409,
   });
 }
 
 function invalidCredentials(): AppError {
   return new AppError({
-    code: "INVALID_CREDENTIALS",
-    message: "Email or password is incorrect",
+    code: 'INVALID_CREDENTIALS',
+    message: 'Email or password is incorrect',
     statusCode: 401,
   });
 }
 
 function invalidSession(): AppError {
   return new AppError({
-    code: "INVALID_SESSION",
-    message: "The provided session is invalid or has expired",
+    code: 'INVALID_SESSION',
+    message: 'The provided session is invalid or has expired',
     statusCode: 401,
   });
 }

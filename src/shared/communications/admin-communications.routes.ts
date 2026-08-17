@@ -18,9 +18,7 @@ const objectId = { type: 'string', pattern: '^[a-fA-F0-9]{24}$' } as const;
 const adminCommunicationsRoutes: FastifyPluginAsync<
   AdminCommunicationsRoutesOptions
 > = async (fastify, options) => {
-  const authenticate = createAdminAuthenticationHook(
-    options.adminAuthService,
-  );
+  const authenticate = createAdminAuthenticationHook(options.adminAuthService);
 
   fastify.get<{
     Querystring: Parameters<CommunicationsService['listDeliveries']>[0];

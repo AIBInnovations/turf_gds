@@ -268,6 +268,53 @@ test('payout gates, allocation, manual result, and owner isolation are enforced'
     JSON.stringify(ownerView).includes('vault_account_token'),
     false,
   );
+  const ownerSettlement = ownerView.settlement as Record<string, unknown>;
+  for (const leakedField of [
+    'grossAmountMinor',
+    'commissionAmountMinor',
+    'taxAmountMinor',
+    'refundAmountMinor',
+    'netAmountMinor',
+  ]) {
+    assert.equal(
+      Object.hasOwn(ownerSettlement, leakedField),
+      false,
+      `owner payout settlement summary must not expose partner-wide ${leakedField}`,
+    );
+  }
+  assert.deepEqual(ownerSettlement.venueTotals, {
+    grossAmountMinor: 10_000,
+    commissionAmountMinor: 1_000,
+    taxAmountMinor: 180,
+    refundAmountMinor: 0,
+    netAmountMinor: 8_820,
+  });
+
+  const ownerSettlementView = await service.getOwnerSettlement({
+    actorOwnerId: ownerId.toHexString(),
+    venueId: venueId.toHexString(),
+    settlementId: settlementId.toHexString(),
+  });
+  for (const leakedField of [
+    'grossAmountMinor',
+    'commissionAmountMinor',
+    'taxAmountMinor',
+    'refundAmountMinor',
+    'netAmountMinor',
+  ]) {
+    assert.equal(
+      Object.hasOwn(ownerSettlementView, leakedField),
+      false,
+      `owner settlement view must not expose partner-wide ${leakedField}`,
+    );
+  }
+  assert.deepEqual(ownerSettlementView.venueTotals, {
+    grossAmountMinor: 10_000,
+    commissionAmountMinor: 1_000,
+    taxAmountMinor: 180,
+    refundAmountMinor: 0,
+    netAmountMinor: 8_820,
+  });
   await assert.rejects(
     service.listOwnerPayouts({
       actorOwnerId: ownerId.toHexString(),

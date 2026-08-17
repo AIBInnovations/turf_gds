@@ -1,6 +1,10 @@
 import type { Db, Document } from 'mongodb';
 
-function validator(required: string[], properties: Document, expr?: Document): Document {
+function validator(
+  required: string[],
+  properties: Document,
+  expr?: Document,
+): Document {
   return {
     $jsonSchema: {
       bsonType: 'object',
@@ -14,14 +18,32 @@ function validator(required: string[], properties: Document, expr?: Document): D
 
 const bookingValidator = validator(
   [
-    'slot_id', 'contract_id', 'partner_id', 'venue_id', 'court_id',
-    'environment', 'booking_type', 'starts_at', 'ends_at',
-    'external_booking_reference', 'confirm_idempotency_key',
-    'customer_reference', 'partner_payment_reference', 'status',
-    'gross_amount_minor', 'commission_amount_minor', 'tax_amount_minor',
-    'venue_net_amount_minor', 'currency', 'cancellation_terms_snapshot',
-    'confirmed_at', 'cancelled_at', 'audit_history', 'version',
-    'created_at', 'updated_at',
+    'slot_id',
+    'contract_id',
+    'partner_id',
+    'venue_id',
+    'court_id',
+    'environment',
+    'booking_type',
+    'starts_at',
+    'ends_at',
+    'external_booking_reference',
+    'confirm_idempotency_key',
+    'customer_reference',
+    'partner_payment_reference',
+    'status',
+    'gross_amount_minor',
+    'commission_amount_minor',
+    'tax_amount_minor',
+    'venue_net_amount_minor',
+    'currency',
+    'cancellation_terms_snapshot',
+    'confirmed_at',
+    'cancelled_at',
+    'audit_history',
+    'version',
+    'created_at',
+    'updated_at',
   ],
   {
     slot_id: { bsonType: ['objectId', 'null'] },
@@ -38,7 +60,13 @@ const bookingValidator = validator(
     customer_reference: { bsonType: ['string', 'null'] },
     partner_payment_reference: { bsonType: ['string', 'null'] },
     status: {
-      enum: ['CONFIRMED', 'CANCELLED', 'REFUND_PENDING', 'REFUNDED', 'DISPUTED'],
+      enum: [
+        'CONFIRMED',
+        'CANCELLED',
+        'REFUND_PENDING',
+        'REFUNDED',
+        'DISPUTED',
+      ],
     },
     gross_amount_minor: { bsonType: ['int', 'long'], minimum: 0 },
     commission_amount_minor: { bsonType: ['int', 'long'], minimum: 0 },
@@ -58,9 +86,17 @@ const bookingValidator = validator(
 
 const cancellationValidator = validator(
   [
-    'booking_id', 'requested_by_type', 'requested_by_id', 'reason_code',
-    'reason_text', 'refund_percent', 'refund_amount_minor',
-    'slot_disposition', 'idempotency_key', 'cancelled_at', 'created_at',
+    'booking_id',
+    'requested_by_type',
+    'requested_by_id',
+    'reason_code',
+    'reason_text',
+    'refund_percent',
+    'refund_amount_minor',
+    'slot_disposition',
+    'idempotency_key',
+    'cancelled_at',
+    'created_at',
   ],
   {
     booking_id: { bsonType: 'objectId' },
@@ -81,9 +117,17 @@ const cancellationValidator = validator(
 
 const idempotencyValidator = validator(
   [
-    'partner_id', 'environment', 'idempotency_key', 'operation',
-    'request_hash', 'response_status', 'response_body', 'resource_type',
-    'resource_id', 'expires_at', 'created_at',
+    'partner_id',
+    'environment',
+    'idempotency_key',
+    'operation',
+    'request_hash',
+    'response_status',
+    'response_body',
+    'resource_type',
+    'resource_id',
+    'expires_at',
+    'created_at',
   ],
   {
     partner_id: { bsonType: 'objectId' },
@@ -101,13 +145,49 @@ const idempotencyValidator = validator(
 );
 
 const paymentValidator = validator(
-  ['booking_id','venue_id','amount_minor','refunded_amount_minor','currency','method','status','reference','notes','recorded_by','paid_at','refunded_at','version','audit_history','created_at','updated_at'],
-  { booking_id:{bsonType:'objectId'},venue_id:{bsonType:'objectId'},amount_minor:{bsonType:['int','long'],minimum:0},refunded_amount_minor:{bsonType:['int','long'],minimum:0},currency:{enum:['INR']},method:{enum:['CASH','CARD','UPI','BANK_TRANSFER','OTHER']},status:{enum:['PAID','PARTIALLY_REFUNDED','REFUNDED']},reference:{bsonType:['string','null']},notes:{bsonType:['string','null']},recorded_by:{bsonType:'objectId'},paid_at:{bsonType:'date'},refunded_at:{bsonType:['date','null']},version:{bsonType:'int',minimum:1},audit_history:{bsonType:'array',maxItems:100},created_at:{bsonType:'date'},updated_at:{bsonType:'date'} },
+  [
+    'booking_id',
+    'venue_id',
+    'amount_minor',
+    'refunded_amount_minor',
+    'currency',
+    'method',
+    'status',
+    'reference',
+    'notes',
+    'recorded_by',
+    'paid_at',
+    'refunded_at',
+    'version',
+    'audit_history',
+    'created_at',
+    'updated_at',
+  ],
+  {
+    booking_id: { bsonType: 'objectId' },
+    venue_id: { bsonType: 'objectId' },
+    amount_minor: { bsonType: ['int', 'long'], minimum: 0 },
+    refunded_amount_minor: { bsonType: ['int', 'long'], minimum: 0 },
+    currency: { enum: ['INR'] },
+    method: { enum: ['CASH', 'CARD', 'UPI', 'BANK_TRANSFER', 'OTHER'] },
+    status: { enum: ['PAID', 'PARTIALLY_REFUNDED', 'REFUNDED'] },
+    reference: { bsonType: ['string', 'null'] },
+    notes: { bsonType: ['string', 'null'] },
+    recorded_by: { bsonType: 'objectId' },
+    paid_at: { bsonType: 'date' },
+    refunded_at: { bsonType: ['date', 'null'] },
+    version: { bsonType: 'int', minimum: 1 },
+    audit_history: { bsonType: 'array', maxItems: 100 },
+    created_at: { bsonType: 'date' },
+    updated_at: { bsonType: 'date' },
+  },
   { $lte: ['$refunded_amount_minor', '$amount_minor'] },
 );
 
 async function ensure(db: Db, name: string, value: Document): Promise<void> {
-  const exists = await db.listCollections({ name }, { nameOnly: true }).hasNext();
+  const exists = await db
+    .listCollections({ name }, { nameOnly: true })
+    .hasNext();
   if (!exists) {
     await db.createCollection(name, {
       validator: value,
@@ -129,10 +209,13 @@ export async function initializeBookingPersistence(db: Db): Promise<void> {
   await ensure(db, 'booking_cancellations', cancellationValidator);
   await ensure(db, 'api_idempotency_records', idempotencyValidator);
   await ensure(db, 'booking_payments', paymentValidator);
-  const confirmationIndex = (await db.collection('bookings').indexes())
-    .find(({ name }) => name === 'uq_booking_confirmation_idempotency');
+  const confirmationIndex = (await db.collection('bookings').indexes()).find(
+    ({ name }) => name === 'uq_booking_confirmation_idempotency',
+  );
   if (confirmationIndex && !confirmationIndex.partialFilterExpression) {
-    await db.collection('bookings').dropIndex('uq_booking_confirmation_idempotency');
+    await db
+      .collection('bookings')
+      .dropIndex('uq_booking_confirmation_idempotency');
   }
   await db.collection('bookings').createIndex(
     { partner_id: 1, environment: 1, confirm_idempotency_key: 1 },
@@ -142,30 +225,52 @@ export async function initializeBookingPersistence(db: Db): Promise<void> {
       partialFilterExpression: { partner_id: { $type: 'objectId' } },
     },
   );
-  await db.collection('bookings').createIndex(
-    { venue_id: 1, starts_at: -1, _id: -1 },
-    { name: 'ix_booking_owner_list' },
-  );
-  await db.collection('bookings').createIndex(
-    { partner_id: 1, environment: 1, status: 1, starts_at: -1, _id: -1 },
-    { name: 'ix_booking_admin_partner_report' },
-  );
-  await db.collection('bookings').createIndex(
-    { venue_id: 1, environment: 1, status: 1, starts_at: -1, _id: -1 },
-    { name: 'ix_booking_admin_venue_report' },
-  );
-  await db.collection('booking_cancellations').createIndex(
-    { booking_id: 1 },
-    { unique: true, name: 'uq_booking_cancellation_booking' },
-  );
-  await db.collection('api_idempotency_records').createIndex(
-    { partner_id: 1, environment: 1, idempotency_key: 1, operation: 1 },
-    { unique: true, name: 'uq_api_idempotency_operation' },
-  );
-  await db.collection('booking_payments').createIndex({booking_id:1},{unique:true,name:'uq_booking_payment_booking'});
-  await db.collection('booking_payments').createIndex({venue_id:1,paid_at:-1},{name:'ix_booking_payment_venue'});
-  await db.collection('api_idempotency_records').createIndex(
-    { expires_at: 1 },
-    { expireAfterSeconds: 0, name: 'ttl_api_idempotency' },
-  );
+  await db
+    .collection('bookings')
+    .createIndex(
+      { venue_id: 1, starts_at: -1, _id: -1 },
+      { name: 'ix_booking_owner_list' },
+    );
+  await db
+    .collection('bookings')
+    .createIndex(
+      { partner_id: 1, environment: 1, status: 1, starts_at: -1, _id: -1 },
+      { name: 'ix_booking_admin_partner_report' },
+    );
+  await db
+    .collection('bookings')
+    .createIndex(
+      { venue_id: 1, environment: 1, status: 1, starts_at: -1, _id: -1 },
+      { name: 'ix_booking_admin_venue_report' },
+    );
+  await db
+    .collection('booking_cancellations')
+    .createIndex(
+      { booking_id: 1 },
+      { unique: true, name: 'uq_booking_cancellation_booking' },
+    );
+  await db
+    .collection('api_idempotency_records')
+    .createIndex(
+      { partner_id: 1, environment: 1, idempotency_key: 1, operation: 1 },
+      { unique: true, name: 'uq_api_idempotency_operation' },
+    );
+  await db
+    .collection('booking_payments')
+    .createIndex(
+      { booking_id: 1 },
+      { unique: true, name: 'uq_booking_payment_booking' },
+    );
+  await db
+    .collection('booking_payments')
+    .createIndex(
+      { venue_id: 1, paid_at: -1 },
+      { name: 'ix_booking_payment_venue' },
+    );
+  await db
+    .collection('api_idempotency_records')
+    .createIndex(
+      { expires_at: 1 },
+      { expireAfterSeconds: 0, name: 'ttl_api_idempotency' },
+    );
 }

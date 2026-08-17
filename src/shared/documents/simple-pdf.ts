@@ -1,5 +1,7 @@
 export function createSimplePdf(title: string, lines: string[]): Buffer {
-  const safeLines = [title, '', ...lines].slice(0, 60).map((line) => ascii(line).slice(0, 110));
+  const safeLines = [title, '', ...lines]
+    .slice(0, 60)
+    .map((line) => ascii(line).slice(0, 110));
   const commands = ['BT', '/F1 12 Tf', '50 790 Td'];
   safeLines.forEach((line, index) => {
     if (index > 0) commands.push('0 -14 Td');
@@ -22,9 +24,19 @@ export function createSimplePdf(title: string, lines: string[]): Buffer {
   });
   const xref = Buffer.byteLength(pdf);
   pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
-  for (const offset of offsets.slice(1)) pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
+  for (const offset of offsets.slice(1))
+    pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
   pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
   return Buffer.from(pdf, 'ascii');
 }
-function escapePdf(value: string) { return value.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)'); }
-function ascii(value: unknown) { return String(value ?? '').normalize('NFKD').replace(/[^\x20-\x7E]/g, '?'); }
+function escapePdf(value: string) {
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/\(/g, '\\(')
+    .replace(/\)/g, '\\)');
+}
+function ascii(value: unknown) {
+  return String(value ?? '')
+    .normalize('NFKD')
+    .replace(/[^\x20-\x7E]/g, '?');
+}

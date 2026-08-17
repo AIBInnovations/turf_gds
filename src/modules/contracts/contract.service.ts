@@ -96,7 +96,15 @@ export interface ContractService {
 export function createContractService(input: {
   repository: ContractRepository;
   database: DatabaseConnection;
-  venueCancellationPolicy?: (venueId:ObjectId)=>Promise<{cancellationAllowed:boolean;defaultRefundBps:number;ownerCancellationNoticeMinutes:number;refundRules:Array<{minMinutesBeforeStart:number;refundBps:number}>;agreementVersion:number}|null>;
+  venueCancellationPolicy?: (
+    venueId: ObjectId,
+  ) => Promise<{
+    cancellationAllowed: boolean;
+    defaultRefundBps: number;
+    ownerCancellationNoticeMinutes: number;
+    refundRules: Array<{ minMinutesBeforeStart: number; refundBps: number }>;
+    agreementVersion: number;
+  } | null>;
   now?: () => Date;
 }): ContractService {
   const now = input.now ?? (() => new Date());
@@ -126,14 +134,37 @@ export function createContractService(input: {
       const partnerId = toObjectId(values.partnerId);
       const venueId = toObjectId(values.venueId);
       const adminId = toObjectId(values.adminId);
-      const venuePolicy = input.venueCancellationPolicy ? await input.venueCancellationPolicy(venueId) : null;
-      if (input.venueCancellationPolicy && !venuePolicy) throw new AppError({code:'VENUE_CANCELLATION_POLICY_REQUIRED',message:'The Venue Owner must accept a cancellation policy before a Partner contract can be created',statusCode:409});
+      const venuePolicy = input.venueCancellationPolicy
+        ? await input.venueCancellationPolicy(venueId)
+        : null;
+      if (input.venueCancellationPolicy && !venuePolicy)
+        throw new AppError({
+          code: 'VENUE_CANCELLATION_POLICY_REQUIRED',
+          message:
+            'The Venue Owner must accept a cancellation policy before a Partner contract can be created',
+          statusCode: 409,
+        });
       const terms = normalizeTerms(values);
-      if (venuePolicy && values.cancellationTerms && (
-        values.cancellationTerms.cancellationAllowed !== venuePolicy.cancellationAllowed ||
-        values.cancellationTerms.defaultRefundBps !== venuePolicy.defaultRefundBps ||
-        (values.refundRules ?? []).some((rule,index)=>rule.minMinutesBeforeStart!==venuePolicy.refundRules[index]?.minMinutesBeforeStart||rule.refundBps!==venuePolicy.refundRules[index]?.refundBps)
-      )) throw new AppError({code:'CONTRACT_CANCELLATION_POLICY_CONFLICT',message:'Partner-Venue cancellation terms must match the Venue Owner accepted policy',statusCode:409});
+      if (
+        venuePolicy &&
+        values.cancellationTerms &&
+        (values.cancellationTerms.cancellationAllowed !==
+          venuePolicy.cancellationAllowed ||
+          values.cancellationTerms.defaultRefundBps !==
+            venuePolicy.defaultRefundBps ||
+          (values.refundRules ?? []).some(
+            (rule, index) =>
+              rule.minMinutesBeforeStart !==
+                venuePolicy.refundRules[index]?.minMinutesBeforeStart ||
+              rule.refundBps !== venuePolicy.refundRules[index]?.refundBps,
+          ))
+      )
+        throw new AppError({
+          code: 'CONTRACT_CANCELLATION_POLICY_CONFLICT',
+          message:
+            'Partner-Venue cancellation terms must match the Venue Owner accepted policy',
+          statusCode: 409,
+        });
       const [partner, venue] = await Promise.all([
         input.repository.findPartner(partnerId),
         input.repository.findVenue(venueId),
@@ -163,7 +194,8 @@ export function createContractService(input: {
         if (latest && terms.effectiveFrom <= latest.effective_from) {
           throw new AppError({
             code: 'CONTRACT_EFFECTIVE_DATE_CONFLICT',
-            message: 'A new contract version must start after the latest version',
+            message:
+              'A new contract version must start after the latest version',
             statusCode: 409,
           });
         }
@@ -193,20 +225,45 @@ export function createContractService(input: {
           commission_rate_bps: values.commissionRateBps,
           tax_rate_bps: values.taxRateBps,
           allowed_booking_modes: values.allowedBookingModes,
-          cancellation_terms: venuePolicy ? { cancellation_allowed:venuePolicy.cancellationAllowed,default_refund_bps:venuePolicy.defaultRefundBps,release_inventory:true } : terms.cancellationTerms,
-          resale_cutoff_minutes: venuePolicy?.ownerCancellationNoticeMinutes ?? values.resaleCutoffMinutes ?? 0,
-          refund_rules: { rules: venuePolicy ? venuePolicy.refundRules.map(rule=>({min_minutes_before_start:rule.minMinutesBeforeStart,refund_bps:rule.refundBps,release_inventory:true})) : terms.refundRules },
+          cancellation_terms: venuePolicy
+            ? {
+                cancellation_allowed: venuePolicy.cancellationAllowed,
+                default_refund_bps: venuePolicy.defaultRefundBps,
+                release_inventory: true,
+              }
+            : terms.cancellationTerms,
+          resale_cutoff_minutes:
+            venuePolicy?.ownerCancellationNoticeMinutes ??
+            values.resaleCutoffMinutes ??
+            0,
+          refund_rules: {
+            rules: venuePolicy
+              ? venuePolicy.refundRules.map((rule) => ({
+                  min_minutes_before_start: rule.minMinutesBeforeStart,
+                  refund_bps: rule.refundBps,
+                  release_inventory: true,
+                }))
+              : terms.refundRules,
+          },
           terms_version: (latest?.terms_version ?? 0) + 1,
           effective_from: terms.effectiveFrom,
           effective_to: null,
-          audit_history: [{
-            event_type: 'CONTRACT_VERSION_CREATED',
-            actor_type: 'ADMIN',
-            actor_id: adminId,
-            correlation_id: new ObjectId().toHexString(),
-            changes: { terms_version: (latest?.terms_version ?? 0) + 1, cancellation_policy_source: venuePolicy ? 'VENUE_OWNER_AGREEMENT' : 'LEGACY_INPUT', venue_agreement_version: venuePolicy?.agreementVersion ?? null },
-            occurred_at: timestamp,
-          }],
+          audit_history: [
+            {
+              event_type: 'CONTRACT_VERSION_CREATED',
+              actor_type: 'ADMIN',
+              actor_id: adminId,
+              correlation_id: new ObjectId().toHexString(),
+              changes: {
+                terms_version: (latest?.terms_version ?? 0) + 1,
+                cancellation_policy_source: venuePolicy
+                  ? 'VENUE_OWNER_AGREEMENT'
+                  : 'LEGACY_INPUT',
+                venue_agreement_version: venuePolicy?.agreementVersion ?? null,
+              },
+              occurred_at: timestamp,
+            },
+          ],
           created_at: timestamp,
           updated_at: timestamp,
         };
@@ -224,10 +281,14 @@ export function createContractService(input: {
       return toView(contract);
     },
     async list(values) {
-      return (await input.repository.list({
-        ...(values.partnerId ? { partnerId: toObjectId(values.partnerId) } : {}),
-        ...(values.venueId ? { venueId: toObjectId(values.venueId) } : {}),
-      })).map(toView);
+      return (
+        await input.repository.list({
+          ...(values.partnerId
+            ? { partnerId: toObjectId(values.partnerId) }
+            : {}),
+          ...(values.venueId ? { venueId: toObjectId(values.venueId) } : {}),
+        })
+      ).map(toView);
     },
     async getActiveContract(values) {
       return toView(await active(values));
@@ -262,20 +323,29 @@ function normalizeTerms(values: SaveContractInput): {
   if (!['T_PLUS_N', 'WEEKLY', 'MONTHLY'].includes(values.settlementCycle)) {
     throw invalidTerms('Settlement cycle is invalid');
   }
-  if (!Number.isInteger(values.settlementLagDays) || values.settlementLagDays < 0) {
+  if (
+    !Number.isInteger(values.settlementLagDays) ||
+    values.settlementLagDays < 0
+  ) {
     throw invalidTerms('Settlement lag must be a non-negative integer');
   }
-  if (!['OPEN_TIME', 'FIXED_SLOT', 'BOTH'].includes(values.allowedBookingModes)) {
+  if (
+    !['OPEN_TIME', 'FIXED_SLOT', 'BOTH'].includes(values.allowedBookingModes)
+  ) {
     throw invalidTerms('Allowed booking mode is invalid');
   }
-  if (values.resaleCutoffMinutes !== undefined && (!Number.isInteger(values.resaleCutoffMinutes) || values.resaleCutoffMinutes < 0)) {
+  if (
+    values.resaleCutoffMinutes !== undefined &&
+    (!Number.isInteger(values.resaleCutoffMinutes) ||
+      values.resaleCutoffMinutes < 0)
+  ) {
     throw invalidTerms('Resale cutoff must be a non-negative integer');
   }
   const effectiveFrom = new Date(values.effectiveFrom);
   if (Number.isNaN(effectiveFrom.getTime())) {
     throw invalidTerms('Effective date must be a valid ISO-8601 timestamp');
   }
-  const legacyTerms=values.cancellationTerms;
+  const legacyTerms = values.cancellationTerms;
   const cancellationTerms: CancellationTermsDocument = {
     cancellation_allowed: legacyTerms?.cancellationAllowed ?? false,
     default_refund_bps: validateBps(
@@ -288,28 +358,34 @@ function normalizeTerms(values: SaveContractInput): {
   if ((values.refundRules?.length ?? 0) > 50) {
     throw invalidTerms('A contract can contain at most 50 refund rules');
   }
-  const refundRules = (values.refundRules ?? []).map((rule) => {
-    if (
-      !Number.isInteger(rule.minMinutesBeforeStart) ||
-      rule.minMinutesBeforeStart < 0 ||
-      thresholds.has(rule.minMinutesBeforeStart)
-    ) {
-      throw invalidTerms('Refund-rule thresholds must be unique non-negative integers');
-    }
-    thresholds.add(rule.minMinutesBeforeStart);
-    return {
-      min_minutes_before_start: rule.minMinutesBeforeStart,
-      refund_bps: validateBps(rule.refundBps, 'Refund rule'),
-      release_inventory: rule.releaseInventory,
-    };
-  }).sort((a, b) => b.min_minutes_before_start - a.min_minutes_before_start);
+  const refundRules = (values.refundRules ?? [])
+    .map((rule) => {
+      if (
+        !Number.isInteger(rule.minMinutesBeforeStart) ||
+        rule.minMinutesBeforeStart < 0 ||
+        thresholds.has(rule.minMinutesBeforeStart)
+      ) {
+        throw invalidTerms(
+          'Refund-rule thresholds must be unique non-negative integers',
+        );
+      }
+      thresholds.add(rule.minMinutesBeforeStart);
+      return {
+        min_minutes_before_start: rule.minMinutesBeforeStart,
+        refund_bps: validateBps(rule.refundBps, 'Refund rule'),
+        release_inventory: rule.releaseInventory,
+      };
+    })
+    .sort((a, b) => b.min_minutes_before_start - a.min_minutes_before_start);
   if (
     !cancellationTerms.cancellation_allowed &&
     (cancellationTerms.default_refund_bps !== 0 ||
       cancellationTerms.release_inventory ||
       refundRules.length > 0)
   ) {
-    throw invalidTerms('Disabled cancellation cannot define refunds or inventory release');
+    throw invalidTerms(
+      'Disabled cancellation cannot define refunds or inventory release',
+    );
   }
   return { effectiveFrom, cancellationTerms, refundRules };
 }

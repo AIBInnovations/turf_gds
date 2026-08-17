@@ -1,10 +1,7 @@
 import type { ClientSession, ObjectId } from 'mongodb';
 
 import type { DatabaseConnection } from '../../shared/database/database-connection.js';
-import type {
-  LedgerEntryDocument,
-  LedgerEnvironment,
-} from './ledger.types.js';
+import type { LedgerEntryDocument, LedgerEnvironment } from './ledger.types.js';
 
 export type { LedgerEntryDocument } from './ledger.types.js';
 
@@ -98,10 +95,7 @@ export function createLedgerRepository(
     findByIds(ids, session) {
       if (ids.length === 0) return Promise.resolve([]);
       return collection()
-        .find(
-          { _id: { $in: ids } },
-          { ...(session ? { session } : {}) },
-        )
+        .find({ _id: { $in: ids } }, { ...(session ? { session } : {}) })
         .toArray();
     },
     listForSettlementVenue(input) {

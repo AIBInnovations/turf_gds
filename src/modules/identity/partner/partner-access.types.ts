@@ -5,6 +5,8 @@ export type PartnerEnvironment = 'SANDBOX' | 'PRODUCTION';
 
 export interface PartnerSessionDocument {
   token_hash: string;
+  ip_hash: string;
+  user_agent: string;
   expires_at: Date;
   created_at: Date;
 }

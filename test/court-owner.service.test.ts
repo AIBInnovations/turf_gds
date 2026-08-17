@@ -11,6 +11,11 @@ import type { VenueRepository } from '../src/modules/venue/profile/venue.reposit
 import type { VenueDocument } from '../src/modules/venue/profile/venue.types.js';
 import { AppError } from '../src/shared/errors/app-error.js';
 import type { MediaStorage } from '../src/shared/media/cloudinary-media-storage.js';
+import {
+  mismatchedMagicBytesBuffer,
+  validJpegBuffer,
+  validMp4Buffer,
+} from './fixtures/magic-bytes.js';
 
 const fixedNow = new Date('2026-07-28T11:00:00.000Z');
 const ownerId = new ObjectId('687f00000000000000000080');
@@ -350,13 +355,48 @@ test('Court media cleanup runs when persistence conflicts', async () => {
       expectedVersion: 2,
       filename: 'hero.jpg',
       mimeType: 'image/jpeg',
-      buffer: Buffer.from('document'),
+      buffer: validJpegBuffer(),
     }),
     (error: unknown) =>
       error instanceof AppError &&
       error.code === 'COURT_VERSION_CONFLICT',
   );
   assert.equal(fixture.getDeletedMedia(), 'courts/court-one/hero');
+});
+
+test('Court media upload accepts a valid MP4 buffer', async () => {
+  const fixture = createFixture();
+  const result = await fixture.service.addMedia({
+    actorOwnerId: ownerId.toHexString(),
+    venueId: venueId.toHexString(),
+    courtId: courtId.toHexString(),
+    correlationId: 'court-media-mp4',
+    expectedVersion: 2,
+    filename: 'hero.mp4',
+    mimeType: 'video/mp4',
+    buffer: validMp4Buffer(),
+  });
+
+  assert.equal(result.media.length, 1);
+});
+
+test('Court media upload rejects content whose magic bytes do not match the declared MIME type', async () => {
+  const fixture = createFixture();
+
+  await assert.rejects(
+    fixture.service.addMedia({
+      actorOwnerId: ownerId.toHexString(),
+      venueId: venueId.toHexString(),
+      courtId: courtId.toHexString(),
+      correlationId: 'court-media-mismatch',
+      expectedVersion: 2,
+      filename: 'hero.jpg',
+      mimeType: 'image/jpeg',
+      buffer: mismatchedMagicBytesBuffer(),
+    }),
+    (error: unknown) =>
+      error instanceof AppError && error.code === 'FILE_CONTENT_MISMATCH',
+  );
 });
 
 test('cross-owner Court access is rejected before persistence mutation', async () => {

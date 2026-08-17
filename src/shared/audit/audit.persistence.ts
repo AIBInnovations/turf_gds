@@ -1,9 +1,4 @@
-import {
-  ObjectId,
-  type ClientSession,
-  type Db,
-  type Document,
-} from 'mongodb';
+import { ObjectId, type ClientSession, type Db, type Document } from 'mongodb';
 
 export interface AuditEventDocument {
   _id: ObjectId;
@@ -25,9 +20,18 @@ const validator = {
     bsonType: 'object',
     additionalProperties: false,
     required: [
-      '_id', 'aggregate_type', 'aggregate_id', 'environment', 'event_type',
-      'actor_type', 'actor_id', 'correlation_id', 'changes', 'occurred_at',
-      'retain_until', 'created_at',
+      '_id',
+      'aggregate_type',
+      'aggregate_id',
+      'environment',
+      'event_type',
+      'actor_type',
+      'actor_id',
+      'correlation_id',
+      'changes',
+      'occurred_at',
+      'retain_until',
+      'created_at',
     ],
     properties: {
       _id: { bsonType: 'objectId' },
@@ -64,10 +68,12 @@ export async function initializeAuditPersistence(db: Db): Promise<void> {
       validationAction: 'error',
     });
   }
-  await db.collection('audit_events').createIndex(
-    { aggregate_type: 1, aggregate_id: 1, occurred_at: -1 },
-    { name: 'ix_audit_aggregate_history' },
-  );
+  await db
+    .collection('audit_events')
+    .createIndex(
+      { aggregate_type: 1, aggregate_id: 1, occurred_at: -1 },
+      { name: 'ix_audit_aggregate_history' },
+    );
   await db.collection('audit_events').createIndex(
     {
       aggregate_type: 1,
@@ -78,10 +84,12 @@ export async function initializeAuditPersistence(db: Db): Promise<void> {
     },
     { unique: true, name: 'uq_audit_event_identity' },
   );
-  await db.collection('audit_events').createIndex(
-    { retain_until: 1 },
-    { expireAfterSeconds: 0, name: 'ttl_audit_retention' },
-  );
+  await db
+    .collection('audit_events')
+    .createIndex(
+      { retain_until: 1 },
+      { expireAfterSeconds: 0, name: 'ttl_audit_retention' },
+    );
   await backfillEmbeddedAudit(db, 'bookings', 'BOOKING');
   await backfillEmbeddedAudit(db, 'slots', 'SLOT');
 }
@@ -143,10 +151,12 @@ async function backfillEmbeddedAudit(
     .listCollections({ name: collectionName }, { nameOnly: true })
     .hasNext();
   if (!exists) return;
-  const cursor = db.collection(collectionName).find(
-    { 'audit_history.0': { $exists: true } },
-    { projection: { _id: 1, environment: 1, audit_history: 1 } },
-  );
+  const cursor = db
+    .collection(collectionName)
+    .find(
+      { 'audit_history.0': { $exists: true } },
+      { projection: { _id: 1, environment: 1, audit_history: 1 } },
+    );
   for await (const value of cursor) {
     if (
       !(value._id instanceof ObjectId) ||

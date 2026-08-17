@@ -19,6 +19,7 @@ import type { VenueDocument } from '../src/modules/venue/profile/venue.types.js'
 import { MongoDatabaseConnection } from '../src/shared/database/database-connection.js';
 import { AppError } from '../src/shared/errors/app-error.js';
 import type { MediaStorage } from '../src/shared/media/cloudinary-media-storage.js';
+import { validJpegBuffer } from './fixtures/magic-bytes.js';
 
 const authConfig: AppConfig['auth'] = {
   sessionTtlHours: 168,
@@ -149,7 +150,7 @@ test('Venue Owner profile persistence enforces isolation, versioning, audit, and
       expectedVersion: 2,
       filename: 'hero.jpg',
       mimeType: 'image/jpeg',
-      buffer: Buffer.from('document'),
+      buffer: validJpegBuffer(),
     });
     assert.equal(withMedia.media.length, 1);
     assert.equal(withMedia.version, 3);

@@ -2,10 +2,12 @@ import { type ClientSession, type ObjectId } from 'mongodb';
 
 import type { DatabaseConnection } from '../../../shared/database/database-connection.js';
 import { archiveAuditEvent } from '../../../shared/audit/audit.persistence.js';
-import type {
-  PricingRuleDocument,
-  SlotDocument,
-} from './inventory.types.js';
+import type { PricingRuleDocument, SlotDocument } from './inventory.types.js';
+import {
+  consumeFixedSlots,
+  restoreConsumedFixedSlots,
+} from './slot-consumption.js';
+import { queryOverlappingSlots } from './slot-overlap.js';
 import type { CourtDocument } from '../courts/court.types.js';
 
 export interface InventoryRepository {
@@ -23,6 +25,7 @@ export interface InventoryRepository {
   bulkUpsertSlots(slots: SlotDocument[]): Promise<number>;
   listSlots(
     courtId: ObjectId,
+    environment: 'SANDBOX' | 'PRODUCTION',
     from: Date,
     to: Date,
   ): Promise<SlotDocument[]>;
@@ -37,13 +40,17 @@ export interface InventoryRepository {
     correlationId: string;
     now: Date;
   }): Promise<SlotDocument | null>;
-  findOverlap(
-    courtId: ObjectId,
-    environment: 'SANDBOX' | 'PRODUCTION',
-    startsAt: Date,
-    endsAt: Date,
-    session?: ClientSession,
-  ): Promise<SlotDocument | null>;
+  /**
+   * Every slot overlapping the interval, whatever its booking type or status.
+   * Callers classify with `classifyOverlap`; see `slot-overlap.ts`.
+   */
+  findOverlappingSlots(input: {
+    courtId: ObjectId;
+    environment: 'SANDBOX' | 'PRODUCTION';
+    startsAt: Date;
+    endsAt: Date;
+    session?: ClientSession;
+  }): Promise<SlotDocument[]>;
   lockCourtForInventory(input: {
     courtId: ObjectId;
     venueId: ObjectId;
@@ -54,10 +61,24 @@ export interface InventoryRepository {
     session: ClientSession;
   }): Promise<boolean>;
   insertOpenBlock(slot: SlotDocument, session: ClientSession): Promise<void>;
+  /** Mark overlapping FIXED_SLOTs as consumed by a new OPEN_TIME slot. */
+  consumeFixedSlots(input: {
+    courtId: ObjectId;
+    environment: 'SANDBOX' | 'PRODUCTION';
+    consumerSlotId: ObjectId;
+    fixedSlotIds: readonly ObjectId[];
+    staleConsumerIds: readonly ObjectId[];
+    actorOwnerId: ObjectId;
+    correlationId: string;
+    now: Date;
+    session: ClientSession;
+  }): Promise<number>;
   deleteOpenBlock(input: {
     slotId: ObjectId;
     courtId: ObjectId;
     expectedVersion: number;
+    actorOwnerId: ObjectId;
+    correlationId: string;
   }): Promise<boolean>;
   findSlot(id: ObjectId, courtId: ObjectId): Promise<SlotDocument | null>;
 }
@@ -111,10 +132,11 @@ export function createInventoryRepository(
       );
       return result.upsertedCount;
     },
-    listSlots(courtId, from, to) {
+    listSlots(courtId, environment, from, to) {
       return slots()
         .find({
           court_id: courtId,
+          environment,
           starts_at: { $lt: to },
           ends_at: { $gt: from },
         })
@@ -137,19 +159,21 @@ export function createInventoryRepository(
             $inc: { version: 1 },
             $push: {
               audit_history: {
-                $each: [{
-                  event_type:
-                    input.toStatus === 'BLOCKED'
-                      ? 'SLOT_BLOCKED'
-                      : 'SLOT_RELEASED',
-                  actor_type: 'VENUE_OWNER',
-                  actor_id: input.actorOwnerId,
-                  previous_status: input.fromStatus,
-                  new_status: input.toStatus,
-                  reason: input.reason,
-                  correlation_id: input.correlationId,
-                  occurred_at: input.now,
-                }],
+                $each: [
+                  {
+                    event_type:
+                      input.toStatus === 'BLOCKED'
+                        ? 'SLOT_BLOCKED'
+                        : 'SLOT_RELEASED',
+                    actor_type: 'VENUE_OWNER',
+                    actor_id: input.actorOwnerId,
+                    previous_status: input.fromStatus,
+                    new_status: input.toStatus,
+                    reason: input.reason,
+                    correlation_id: input.correlationId,
+                    occurred_at: input.now,
+                  },
+                ],
                 $slice: -100,
               },
             },
@@ -162,61 +186,84 @@ export function createInventoryRepository(
       });
       return updated;
     },
-    findOverlap(courtId, environment, startsAt, endsAt, session) {
-      return slots().findOne(
+    findOverlappingSlots(input) {
+      return queryOverlappingSlots(
+        database.db,
         {
-          court_id: courtId,
-          environment,
-          status: { $in: ['HELD', 'BOOKED', 'BLOCKED', 'UNAVAILABLE'] },
-          starts_at: { $lt: endsAt },
-          ends_at: { $gt: startsAt },
+          courtId: input.courtId,
+          environment: input.environment,
+          startsAt: input.startsAt,
+          endsAt: input.endsAt,
         },
-        ...(session ? [{ session }] : []),
+        input.session,
       );
     },
     async lockCourtForInventory(input) {
-      const result = await database.db.collection<CourtDocument>('courts').updateOne(
-        {
-          _id: input.courtId,
-          venue_id: input.venueId,
-          version: input.expectedVersion,
-          status: 'AVAILABLE',
-        },
-        {
-          $inc: { version: 1 },
-          $set: { updated_at: input.now },
-          $push: {
-            audit_history: {
-              $each: [{
-                event_type: 'COURT_INVENTORY_CHANGED',
-                actor_type: 'VENUE_OWNER',
-                actor_id: input.actorOwnerId,
-                correlation_id: input.correlationId,
-                changed_fields: ['inventory'],
-                occurred_at: input.now,
-              }],
-              $slice: -100,
+      const result = await database.db
+        .collection<CourtDocument>('courts')
+        .updateOne(
+          {
+            _id: input.courtId,
+            venue_id: input.venueId,
+            version: input.expectedVersion,
+            status: 'AVAILABLE',
+          },
+          {
+            $inc: { version: 1 },
+            $set: { updated_at: input.now },
+            $push: {
+              audit_history: {
+                $each: [
+                  {
+                    event_type: 'COURT_INVENTORY_CHANGED',
+                    actor_type: 'VENUE_OWNER',
+                    actor_id: input.actorOwnerId,
+                    correlation_id: input.correlationId,
+                    changed_fields: ['inventory'],
+                    occurred_at: input.now,
+                  },
+                ],
+                $slice: -100,
+              },
             },
           },
-        },
-        { session: input.session },
-      );
+          { session: input.session },
+        );
       return result.modifiedCount > 0;
     },
     async insertOpenBlock(slot, session) {
       await slots().insertOne(slot, { session });
       await archiveSlot(database, slot, session);
     },
+    consumeFixedSlots(input) {
+      return consumeFixedSlots({
+        db: database.db,
+        courtId: input.courtId,
+        environment: input.environment,
+        consumerSlotId: input.consumerSlotId,
+        fixedSlotIds: input.fixedSlotIds,
+        staleConsumerIds: input.staleConsumerIds,
+        actorType: 'VENUE_OWNER',
+        actorId: input.actorOwnerId,
+        reason: 'Consumed by Venue Owner open-time block',
+        correlationId: input.correlationId,
+        now: input.now,
+        session: input.session,
+      });
+    },
     async deleteOpenBlock(input) {
       let deleted = false;
       await database.withTransaction(async ({ session }) => {
-        const slot = await slots().findOne({
-          _id: input.slotId,
-          court_id: input.courtId,
-          booking_type: 'OPEN_TIME',
-          status: 'BLOCKED',
-          version: input.expectedVersion,
-        }, { session });
+        const slot = await slots().findOne(
+          {
+            _id: input.slotId,
+            court_id: input.courtId,
+            booking_type: 'OPEN_TIME',
+            status: 'BLOCKED',
+            version: input.expectedVersion,
+          },
+          { session },
+        );
         if (!slot) return;
         const event = {
           event_type: 'SLOT_RELEASED',
@@ -228,6 +275,17 @@ export function createInventoryRepository(
           correlation_id: `release:${slot._id.toHexString()}:${slot.version}`,
           occurred_at: new Date(),
         };
+        await restoreConsumedFixedSlots({
+          db: database.db,
+          courtId: input.courtId,
+          consumerSlotId: slot._id,
+          actorType: 'VENUE_OWNER',
+          actorId: input.actorOwnerId,
+          reason: 'Open-time block released',
+          correlationId: input.correlationId,
+          now: event.occurred_at,
+          session,
+        });
         await archiveAuditEvent({
           db: database.db,
           aggregateType: 'SLOT',
@@ -236,10 +294,13 @@ export function createInventoryRepository(
           event,
           session,
         });
-        const result = await slots().deleteOne({
-          _id: slot._id,
-          version: slot.version,
-        }, { session });
+        const result = await slots().deleteOne(
+          {
+            _id: slot._id,
+            version: slot.version,
+          },
+          { session },
+        );
         deleted = result.deletedCount > 0;
       });
       return deleted;

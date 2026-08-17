@@ -2,12 +2,7 @@ import type { ObjectId } from 'mongodb';
 
 export type LedgerEnvironment = 'SANDBOX' | 'PRODUCTION';
 export type LedgerEntryType =
-  | 'BOOKING'
-  | 'COMMISSION'
-  | 'TAX'
-  | 'REFUND'
-  | 'REVERSAL'
-  | 'ADJUSTMENT';
+  'BOOKING' | 'COMMISSION' | 'TAX' | 'REVERSAL' | 'ADJUSTMENT';
 export type LedgerDirection = 'DEBIT' | 'CREDIT';
 
 export interface LedgerEntryDocument {

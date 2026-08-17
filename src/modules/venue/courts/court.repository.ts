@@ -53,8 +53,7 @@ export interface CourtRepository {
 export function createCourtRepository(
   database: DatabaseConnection,
 ): CourtRepository {
-  const courts = () =>
-    database.db.collection<CourtDocument>('courts');
+  const courts = () => database.db.collection<CourtDocument>('courts');
 
   return {
     async insert(court) {
@@ -85,14 +84,16 @@ export function createCourtRepository(
           $inc: { version: 1 },
           $push: {
             audit_history: {
-              $each: [{
-                event_type: 'COURT_UPDATED',
-                actor_type: 'VENUE_OWNER',
-                actor_id: input.actorOwnerId,
-                correlation_id: input.correlationId,
-                changed_fields: input.changedFields,
-                occurred_at: input.now,
-              }],
+              $each: [
+                {
+                  event_type: 'COURT_UPDATED',
+                  actor_type: 'VENUE_OWNER',
+                  actor_id: input.actorOwnerId,
+                  correlation_id: input.correlationId,
+                  changed_fields: input.changedFields,
+                  occurred_at: input.now,
+                },
+              ],
               $slice: -100,
             },
           },
@@ -117,14 +118,16 @@ export function createCourtRepository(
           $push: {
             media: { $each: [input.media] },
             audit_history: {
-              $each: [{
-                event_type: 'COURT_MEDIA_ADDED',
-                actor_type: 'VENUE_OWNER',
-                actor_id: input.actorOwnerId,
-                correlation_id: input.correlationId,
-                changed_fields: ['media'],
-                occurred_at: input.now,
-              }],
+              $each: [
+                {
+                  event_type: 'COURT_MEDIA_ADDED',
+                  actor_type: 'VENUE_OWNER',
+                  actor_id: input.actorOwnerId,
+                  correlation_id: input.correlationId,
+                  changed_fields: ['media'],
+                  occurred_at: input.now,
+                },
+              ],
               $slice: -100,
             },
           },

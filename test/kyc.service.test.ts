@@ -11,6 +11,7 @@ import type {
 } from '../src/modules/identity/kyc/kyc.types.js';
 import type { MediaStorage } from '../src/shared/media/cloudinary-media-storage.js';
 import { AppError } from '../src/shared/errors/app-error.js';
+import { validJpegBuffer, validPdfBuffer } from './fixtures/magic-bytes.js';
 
 const fixedNow = new Date('2026-07-28T08:00:00.000Z');
 
@@ -113,7 +114,7 @@ test('KYC upload stores protected Cloudinary metadata', async () => {
     documentType: 'GST_CERTIFICATE',
     filename: 'gst.jpg',
     mimeType: 'image/jpeg',
-    buffer: Buffer.from('document'),
+    buffer: validJpegBuffer(),
   });
 
   assert.equal(result.status, 'PENDING');
@@ -145,11 +146,28 @@ test('KYC upload deletes Cloudinary bytes when MongoDB insert fails', async () =
       documentType: 'GST_CERTIFICATE',
       filename: 'gst.jpg',
       mimeType: 'image/jpeg',
-      buffer: Buffer.from('document'),
+      buffer: validJpegBuffer(),
     }),
     /database failed/,
   );
   assert.equal(fixture.getDeletedPublicId(), 'kyc/document-1');
+});
+
+test('KYC upload rejects content whose magic bytes do not match the declared MIME type', async () => {
+  const fixture = createFixture();
+
+  await assert.rejects(
+    fixture.service.uploadDocument({
+      verificationId: fixture.verification._id.toHexString(),
+      subjectId: fixture.subjectId.toHexString(),
+      documentType: 'GST_CERTIFICATE',
+      filename: 'gst.jpg',
+      mimeType: 'image/jpeg',
+      buffer: validPdfBuffer(),
+    }),
+    (error: unknown) =>
+      error instanceof AppError && error.code === 'FILE_CONTENT_MISMATCH',
+  );
 });
 
 test('KYC rejection requires a reason', async () => {
@@ -209,7 +227,7 @@ test('KYC document access is isolated to the authenticated subject', async () =>
       documentType: 'GST_CERTIFICATE',
       filename: 'gst.jpg',
       mimeType: 'image/jpeg',
-      buffer: Buffer.from('document'),
+      buffer: validJpegBuffer(),
     }),
     (error: unknown) =>
       error instanceof AppError && error.code === 'KYC_NOT_EDITABLE',

@@ -80,7 +80,10 @@ export interface FinancialCloseRepository {
     now: Date;
     session: ClientSession;
   }): Promise<ReconciliationDocument | null>;
-  findVenue(id: ObjectId, session: ClientSession): Promise<VenueDocument | null>;
+  findVenue(
+    id: ObjectId,
+    session: ClientSession,
+  ): Promise<VenueDocument | null>;
   findCanonicalOwner(
     venueId: ObjectId,
     session: ClientSession,
@@ -208,17 +211,19 @@ export function createFinancialCloseRepository(
           },
           $push: {
             audit_history: {
-              $each: [{
-                event_type: `SETTLEMENT_${input.to}`,
-                actor_type: 'ADMIN' as const,
-                actor_id: input.adminId,
-                correlation_id: input.correlationId,
-                changes: {
-                  previous_status: input.from,
-                  new_status: input.to,
+              $each: [
+                {
+                  event_type: `SETTLEMENT_${input.to}`,
+                  actor_type: 'ADMIN' as const,
+                  actor_id: input.adminId,
+                  correlation_id: input.correlationId,
+                  changes: {
+                    previous_status: input.from,
+                    new_status: input.to,
+                  },
+                  occurred_at: input.now,
                 },
-                occurred_at: input.now,
-              }],
+              ],
               $slice: -100,
             },
           },
@@ -252,17 +257,19 @@ export function createFinancialCloseRepository(
           $push: {
             attempt_history: { $each: [input.attempt], $slice: -100 },
             audit_history: {
-              $each: [{
-                event_type: 'RECONCILIATION_RESOLVED',
-                actor_type: 'ADMIN' as const,
-                actor_id: input.adminId,
-                correlation_id: input.correlationId,
-                changes: {
-                  previous_status: 'MISMATCH',
-                  new_status: 'RESOLVED',
+              $each: [
+                {
+                  event_type: 'RECONCILIATION_RESOLVED',
+                  actor_type: 'ADMIN' as const,
+                  actor_id: input.adminId,
+                  correlation_id: input.correlationId,
+                  changes: {
+                    previous_status: 'MISMATCH',
+                    new_status: 'RESOLVED',
+                  },
+                  occurred_at: input.now,
                 },
-                occurred_at: input.now,
-              }],
+              ],
               $slice: -100,
             },
           },
@@ -360,19 +367,21 @@ export function createFinancialCloseRepository(
           },
           $push: {
             audit_history: {
-              $each: [{
-                event_type: `PAYOUT_${input.status}`,
-                actor_type: 'ADMIN' as const,
-                actor_id: input.adminId,
-                correlation_id: input.correlationId,
-                changes: {
-                  previous_status: 'PENDING',
-                  new_status: input.status,
-                  bank_reference: input.bankReference,
-                  failure_reason: input.failureReason,
+              $each: [
+                {
+                  event_type: `PAYOUT_${input.status}`,
+                  actor_type: 'ADMIN' as const,
+                  actor_id: input.adminId,
+                  correlation_id: input.correlationId,
+                  changes: {
+                    previous_status: 'PENDING',
+                    new_status: input.status,
+                    bank_reference: input.bankReference,
+                    failure_reason: input.failureReason,
+                  },
+                  occurred_at: input.now,
                 },
-                occurred_at: input.now,
-              }],
+              ],
               $slice: -100,
             },
           },
@@ -384,10 +393,7 @@ export function createFinancialCloseRepository(
       if (ids.length === 0) return Promise.resolve([]);
       return database.db
         .collection<BookingDocument>('bookings')
-        .find(
-          { _id: { $in: ids } },
-          { ...(session ? { session } : {}) },
-        )
+        .find({ _id: { $in: ids } }, { ...(session ? { session } : {}) })
         .toArray();
     },
   };

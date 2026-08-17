@@ -44,11 +44,16 @@ export function createAdminOnboardingService(input: {
       }
       if (
         input.agreementService &&
-        !(await input.agreementService.isAccepted(values.ownerId, values.venueId, session))
+        !(await input.agreementService.isAccepted(
+          values.ownerId,
+          values.venueId,
+          session,
+        ))
       ) {
         throw new AppError({
           code: 'ONBOARDING_AGREEMENT_REQUIRED',
-          message: 'The Venue Owner must accept the proposed contract and cancellation policy',
+          message:
+            'The Venue Owner must accept the proposed contract and cancellation policy',
           statusCode: 409,
         });
       }

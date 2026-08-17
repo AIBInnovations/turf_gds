@@ -47,8 +47,15 @@ export type OwnerNotificationType =
   | 'AVAILABILITY_CHANGED';
 
 export type OwnerNotificationAggregateType =
-  | 'BOOKING' | 'PAYMENT' | 'SETTLEMENT' | 'PAYOUT' | 'CONTRACT'
-  | 'KYC' | 'VENUE' | 'COURT' | 'INVENTORY';
+  | 'BOOKING'
+  | 'PAYMENT'
+  | 'SETTLEMENT'
+  | 'PAYOUT'
+  | 'CONTRACT'
+  | 'KYC'
+  | 'VENUE'
+  | 'COURT'
+  | 'INVENTORY';
 
 export interface FcmTokenDocument {
   token: string;

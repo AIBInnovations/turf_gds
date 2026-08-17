@@ -30,10 +30,7 @@ function signature(value: string, secret: string): Buffer {
   return createHmac('sha256', secret).update(value).digest();
 }
 
-export function createAdminJwt(
-  claims: AdminJwtClaims,
-  secret: string,
-): string {
+export function createAdminJwt(claims: AdminJwtClaims, secret: string): string {
   const header = encode({ alg: 'HS256', typ: 'JWT' });
   const payload = encode({
     iss: ISSUER,
@@ -59,10 +56,7 @@ export function verifyAdminJwt(
   const signingInput = `${encodedHeader}.${encodedPayload}`;
   const expected = signature(signingInput, secret);
   const actual = Buffer.from(encodedSignature, 'base64url');
-  if (
-    actual.length !== expected.length ||
-    !timingSafeEqual(actual, expected)
-  ) {
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
     return undefined;
   }
 

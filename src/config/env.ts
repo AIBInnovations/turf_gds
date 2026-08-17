@@ -21,6 +21,29 @@ export interface AppConfig {
   logLevel: LogLevel;
   readinessCacheTtlMs: number;
   runMigrationsOnStartup?: boolean;
+  /**
+   * Passed straight to Fastify. `false` means `request.ip` is the socket peer.
+   * MUST be set before deploying behind a load balancer, or every client
+   * appears as the balancer and the IP rate limiter becomes one global bucket.
+   */
+  trustProxy: boolean | string;
+  ipRateLimit: {
+    enabled: boolean;
+    /** Deny when both Redis and MongoDB are unavailable. */
+    failClosed: boolean;
+    authBurstLimit: number;
+    authSustainedLimit: number;
+    signedLimit: number;
+    globalLimit: number;
+    hashSecret?: string;
+  };
+  metrics: {
+    enabled: boolean;
+    path: string;
+    authToken?: string;
+    /** Exact addresses allowed to scrape without a token. */
+    allowedIps: string[];
+  };
   mongodb: {
     uri: string;
     database: string;
@@ -122,11 +145,7 @@ function readInteger(
 ): number {
   const parsed = Number(value ?? fallback);
 
-  if (
-    !Number.isInteger(parsed) ||
-    parsed < minimum ||
-    parsed > maximum
-  ) {
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
     throw new Error(
       `${name} must be an integer between ${minimum} and ${maximum}`,
     );
@@ -146,6 +165,19 @@ function readBoolean(
   throw new Error(`${name} must be true or false`);
 }
 
+/**
+ * `true` trusts any `X-Forwarded-For`, which lets a client forge — or poison —
+ * its own rate-limit bucket. Prefer a CIDR/hop list, which Fastify passes to
+ * proxy-addr.
+ */
+function readTrustProxy(value: string | undefined): boolean | string {
+  const normalized = value?.trim();
+  if (!normalized) return false;
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
+  return normalized;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const fcmEnabled = readBoolean('FCM_ENABLED', env.FCM_ENABLED, false);
   const fcm = fcmEnabled
@@ -153,26 +185,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
         enabled: true,
         projectId: readRequired('FCM_PROJECT_ID', env.FCM_PROJECT_ID),
         clientEmail: readRequired('FCM_CLIENT_EMAIL', env.FCM_CLIENT_EMAIL),
-        privateKey: readRequired('FCM_PRIVATE_KEY', env.FCM_PRIVATE_KEY)
-          .replace(/\\n/g, '\n'),
+        privateKey: readRequired(
+          'FCM_PRIVATE_KEY',
+          env.FCM_PRIVATE_KEY,
+        ).replace(/\\n/g, '\n'),
       }
     : { enabled: false };
-  const razorpayEnabled = readBoolean('RAZORPAY_ENABLED', env.RAZORPAY_ENABLED, false);
-  return {
-    nodeEnv: readEnum(
-      'NODE_ENV',
-      env.NODE_ENV,
-      NODE_ENV_VALUES,
-      'development',
-    ),
+  const razorpayEnabled = readBoolean(
+    'RAZORPAY_ENABLED',
+    env.RAZORPAY_ENABLED,
+    false,
+  );
+  const config: AppConfig = {
+    nodeEnv: readEnum('NODE_ENV', env.NODE_ENV, NODE_ENV_VALUES, 'development'),
     host: env.HOST?.trim() || '0.0.0.0',
     port: readInteger('PORT', env.PORT, 3000, 1, 65_535),
-    logLevel: readEnum(
-      'LOG_LEVEL',
-      env.LOG_LEVEL,
-      LOG_LEVEL_VALUES,
-      'info',
-    ),
+    logLevel: readEnum('LOG_LEVEL', env.LOG_LEVEL, LOG_LEVEL_VALUES, 'info'),
     readinessCacheTtlMs: readInteger(
       'READINESS_CACHE_TTL_MS',
       env.READINESS_CACHE_TTL_MS,
@@ -180,7 +208,72 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       0,
       300_000,
     ),
-    runMigrationsOnStartup: readBoolean('DB_RUN_MIGRATIONS_ON_STARTUP',env.DB_RUN_MIGRATIONS_ON_STARTUP,env.NODE_ENV!=='production'),
+    runMigrationsOnStartup: readBoolean(
+      'DB_RUN_MIGRATIONS_ON_STARTUP',
+      env.DB_RUN_MIGRATIONS_ON_STARTUP,
+      env.NODE_ENV !== 'production',
+    ),
+    trustProxy: readTrustProxy(env.TRUST_PROXY),
+    ipRateLimit: {
+      enabled: readBoolean(
+        'IP_RATE_LIMIT_ENABLED',
+        env.IP_RATE_LIMIT_ENABLED,
+        true,
+      ),
+      failClosed: readBoolean(
+        'IP_RATE_LIMIT_FAIL_CLOSED',
+        env.IP_RATE_LIMIT_FAIL_CLOSED,
+        false,
+      ),
+      authBurstLimit: readInteger(
+        'IP_RATE_LIMIT_AUTH_BURST',
+        env.IP_RATE_LIMIT_AUTH_BURST,
+        10,
+        1,
+        10_000,
+      ),
+      authSustainedLimit: readInteger(
+        'IP_RATE_LIMIT_AUTH_SUSTAINED',
+        env.IP_RATE_LIMIT_AUTH_SUSTAINED,
+        60,
+        1,
+        100_000,
+      ),
+      // Must stay above the highest Partner tier (ENTERPRISE = 1000/min) or
+      // this, rather than the contractual per-Partner limit, becomes the
+      // binding constraint — with trustProxy off, all of a Partner's traffic
+      // arrives from one egress address.
+      signedLimit: readInteger(
+        'IP_RATE_LIMIT_SIGNED',
+        env.IP_RATE_LIMIT_SIGNED,
+        2_000,
+        1,
+        1_000_000,
+      ),
+      globalLimit: readInteger(
+        'IP_RATE_LIMIT_GLOBAL',
+        env.IP_RATE_LIMIT_GLOBAL,
+        600,
+        1,
+        1_000_000,
+      ),
+      ...(env.IP_HASH_SECRET?.trim()
+        ? { hashSecret: env.IP_HASH_SECRET.trim() }
+        : {}),
+    },
+    metrics: {
+      enabled: readBoolean('METRICS_ENABLED', env.METRICS_ENABLED, true),
+      path: env.METRICS_PATH?.trim() || '/metrics',
+      ...(env.METRICS_AUTH_TOKEN?.trim()
+        ? {
+            authToken: readSecret('METRICS_AUTH_TOKEN', env.METRICS_AUTH_TOKEN),
+          }
+        : {}),
+      allowedIps: (env.METRICS_ALLOWED_IPS ?? '127.0.0.1,::1')
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean),
+    },
     mongodb: {
       uri: readRequired('MONGODB_URI', env.MONGODB_URI),
       database: readRequired('MONGODB_DATABASE', env.MONGODB_DATABASE),
@@ -271,8 +364,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
         50 * 1024 * 1024,
       ),
       allowedMimeTypes: (
-        env.KYC_ALLOWED_MIME_TYPES ??
-        'image/jpeg,image/png,application/pdf'
+        env.KYC_ALLOWED_MIME_TYPES ?? 'image/jpeg,image/png,application/pdf'
       )
         .split(',')
         .map((value) => value.trim().toLowerCase())
@@ -351,16 +443,36 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
         31,
       ),
     },
-    razorpay: razorpayEnabled ? {
-      enabled: true,
-      keyId: readRequired('RAZORPAY_KEY_ID', env.RAZORPAY_KEY_ID),
-      keySecret: readRequired('RAZORPAY_KEY_SECRET', env.RAZORPAY_KEY_SECRET),
-      webhookSecret: readRequired('RAZORPAY_WEBHOOK_SECRET', env.RAZORPAY_WEBHOOK_SECRET),
-      accountNumber: readRequired('RAZORPAY_ACCOUNT_NUMBER', env.RAZORPAY_ACCOUNT_NUMBER),
-      baseUrl: env.RAZORPAY_BASE_URL?.trim() || 'https://api.razorpay.com',
-    } : {
-      enabled: false,
-      baseUrl: env.RAZORPAY_BASE_URL?.trim() || 'https://api.razorpay.com',
-    },
+    razorpay: razorpayEnabled
+      ? {
+          enabled: true,
+          keyId: readRequired('RAZORPAY_KEY_ID', env.RAZORPAY_KEY_ID),
+          keySecret: readRequired(
+            'RAZORPAY_KEY_SECRET',
+            env.RAZORPAY_KEY_SECRET,
+          ),
+          webhookSecret: readRequired(
+            'RAZORPAY_WEBHOOK_SECRET',
+            env.RAZORPAY_WEBHOOK_SECRET,
+          ),
+          accountNumber: readRequired(
+            'RAZORPAY_ACCOUNT_NUMBER',
+            env.RAZORPAY_ACCOUNT_NUMBER,
+          ),
+          baseUrl: env.RAZORPAY_BASE_URL?.trim() || 'https://api.razorpay.com',
+        }
+      : {
+          enabled: false,
+          baseUrl: env.RAZORPAY_BASE_URL?.trim() || 'https://api.razorpay.com',
+        },
   };
+  if (
+    config.auth.adminAccessTokenSecret ===
+    config.auth.partnerCredentialMasterSecret
+  ) {
+    throw new Error(
+      'ADMIN_ACCESS_TOKEN_SECRET and PARTNER_CREDENTIAL_MASTER_SECRET must not be equal',
+    );
+  }
+  return config;
 }

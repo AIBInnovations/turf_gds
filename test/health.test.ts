@@ -19,6 +19,20 @@ const testConfig: AppConfig = {
   port: 3000,
   logLevel: 'silent',
   readinessCacheTtlMs: 0,
+  trustProxy: false,
+  metrics: {
+    enabled: true,
+    path: '/metrics',
+    allowedIps: ['127.0.0.1', '::1'],
+  },
+  ipRateLimit: {
+    enabled: false,
+    failClosed: false,
+    authBurstLimit: 10,
+    authSustainedLimit: 60,
+    signedLimit: 2_000,
+    globalLimit: 600,
+  },
   mongodb: {
     uri: 'mongodb://127.0.0.1:27017',
     database: 'turf_gds_test',
@@ -155,6 +169,9 @@ test('GET /ready reports ready dependencies', async () => {
   assert.deepEqual(response.json().dependencies, {
     mongodb: 'up',
     cloudinary: 'up',
+    // The fake database exposes no collections, so job health cannot be read.
+    // It is reported but does not gate readiness.
+    backgroundJobs: 'down',
   });
 
   await app.close();
@@ -176,6 +193,7 @@ test('GET /ready returns 503 when a dependency is unavailable', async () => {
   assert.deepEqual(response.json().dependencies, {
     mongodb: 'down',
     cloudinary: 'up',
+    backgroundJobs: 'down',
   });
 
   await app.close();

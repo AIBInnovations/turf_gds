@@ -1,11 +1,7 @@
 import type { ObjectId } from 'mongodb';
 
 export type ContractBookingMode = 'OPEN_TIME' | 'FIXED_SLOT' | 'BOTH';
-export type ContractStatus =
-  | 'PENDING'
-  | 'ACTIVE'
-  | 'SUSPENDED'
-  | 'TERMINATED';
+export type ContractStatus = 'PENDING' | 'ACTIVE' | 'SUSPENDED' | 'TERMINATED';
 export type SettlementCycle = 'T_PLUS_N' | 'WEEKLY' | 'MONTHLY';
 
 export interface CancellationTermsDocument {

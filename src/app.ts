@@ -3,13 +3,10 @@ import multipart from '@fastify/multipart';
 import rawBody from 'fastify-raw-body';
 
 import { loadConfig, type AppConfig } from './config/env.js';
-import { initializeBookingPersistence } from './modules/booking/booking.persistence.js';
 import { createOwnerBookingRepository } from './modules/booking/owner-booking.repository.js';
 import { createOwnerBookingService } from './modules/booking/owner-booking.service.js';
 import { createBookingLifecycleRepository } from './modules/booking/booking-lifecycle.repository.js';
 import { createBookingLifecycleService } from './modules/booking/booking-lifecycle.service.js';
-import { initializeContractPersistence } from './modules/contracts/contract.persistence.js';
-import { initializeOutboxPersistence } from './shared/communications/outbox.persistence.js';
 import { createOutboxRepository } from './shared/communications/outbox.repository.js';
 import { createCommunicationsRepository } from './shared/communications/communications.repository.js';
 import { createCommunicationsService } from './shared/communications/communications.service.js';
@@ -23,10 +20,8 @@ import {
   createSecureWebhookTransport,
   type WebhookTransport,
 } from './shared/communications/webhook-transport.js';
-import { initializeFinancialClosePersistence } from './modules/financial-close/financial-close.persistence.js';
 import { createFinancialCloseRepository } from './modules/financial-close/financial-close.repository.js';
 import { createFinancialCloseService } from './modules/financial-close/financial-close.service.js';
-import { initializeLedgerPersistence } from './modules/ledger/ledger.persistence.js';
 import { createLedgerRepository } from './modules/ledger/ledger.repository.js';
 import { createLedgerService } from './modules/ledger/ledger.service.js';
 import { createContractRepository } from './modules/contracts/contract.repository.js';
@@ -52,8 +47,6 @@ import { createPartnerAccessRepository } from './modules/identity/partner/partne
 import { createPartnerAccessService } from './modules/identity/partner/partner-access.service.js';
 import { createPartnerPayoutAccountService } from './modules/identity/partner/partner-payout-account.service.js';
 import { createPartnerPortalService } from './modules/identity/partner/partner-portal.service.js';
-import { initializeIdentityPersistence } from './modules/identity/persistence.js';
-import { initializeVenuePersistence } from './modules/venue/profile/venue.persistence.js';
 import { createCourtOwnerService } from './modules/venue/courts/court-owner.service.js';
 import { createCourtRepository } from './modules/venue/courts/court.repository.js';
 import { createVenueRepository } from './modules/venue/profile/venue.repository.js';
@@ -67,6 +60,15 @@ import { createVenueContentRepository } from './modules/venue/content/venue-cont
 import { createVenueContentService } from './modules/venue/content/venue-content.service.js';
 import { createOwnerDashboardService } from './modules/venue/dashboard/owner-dashboard.service.js';
 import { createOnboardingAgreementService } from './modules/venue/onboarding-agreement/onboarding-agreement.service.js';
+import { initializePersistence } from './composition/persistence.js';
+import ipRateLimitPlugin from './plugins/ip-rate-limit.js';
+import openapiCollectorPlugin from './plugins/openapi.js';
+import { createIpRateLimitFallback } from './shared/rate-limit/ip-rate-limit.repository.js';
+import {
+  createIpHasher,
+  createIpRateLimiter,
+  type IpRateLimiter,
+} from './shared/rate-limit/ip-rate-limiter.js';
 import cloudinaryPlugin from './plugins/cloudinary.js';
 import errorHandlerPlugin from './plugins/error-handler.js';
 import mongodbPlugin from './plugins/mongodb.js';
@@ -76,9 +78,7 @@ import healthRoutes from './routes/health.js';
 import type { DatabaseConnection } from './shared/database/database-connection.js';
 import type { MediaStorage } from './shared/media/cloudinary-media-storage.js';
 import { createPartnerRateLimiter } from './shared/rate-limit/partner-rate-limiter.js';
-import { initializeAuditPersistence } from './shared/audit/audit.persistence.js';
 import { createInventorySyncService } from './modules/inventory-sync/inventory-sync.service.js';
-import { initializeTreasuryPersistence } from './modules/treasury/treasury.persistence.js';
 import { createRazorpayProvider } from './modules/treasury/razorpay.provider.js';
 import { createTreasuryService } from './modules/treasury/treasury.service.js';
 import openapiRoutes from './routes/openapi.js';
@@ -94,6 +94,7 @@ export interface BuildAppOptions {
   webhookTransport?: WebhookTransport;
   communicationsService?: CommunicationsService;
   adminEpic08Service?: AdminEpic08Service;
+  ipRateLimiter?: IpRateLimiter;
 }
 
 export async function buildApp(
@@ -105,6 +106,10 @@ export async function buildApp(
     keyPrefix: 'turf-gds',
   };
   const app = Fastify({
+    // Off by default: request.ip is then the socket peer and X-Forwarded-For
+    // cannot be spoofed. Enable it (ideally as a CIDR list) before deploying
+    // behind a load balancer, or the IP limiter sees only the balancer.
+    trustProxy: config.trustProxy,
     logger:
       options.logger === false
         ? false
@@ -142,7 +147,10 @@ export async function buildApp(
   });
 
   await app.register(errorHandlerPlugin);
-  await app.register(observabilityPlugin);
+  // Before every route plugin: its onRoute hook only sees routes registered
+  // after it.
+  await app.register(openapiCollectorPlugin);
+  await app.register(observabilityPlugin, { config: config.metrics });
   await app.register(multipart, {
     limits: {
       fileSize: config.kyc.maxFileBytes,
@@ -158,30 +166,54 @@ export async function buildApp(
   });
   await app.register(cloudinaryPlugin, {
     config: config.cloudinary,
-    ...(options.mediaStorage
-      ? { storage: options.mediaStorage }
-      : {}),
+    ...(options.mediaStorage ? { storage: options.mediaStorage } : {}),
   });
   await app.register(mongodbPlugin, {
     config: config.mongodb,
     ...(options.database ? { connection: options.database } : {}),
   });
   await app.register(redisPlugin, { config: redisConfig });
+  // Registered after Redis and MongoDB so the limiter has both backends, and
+  // before the routes so its onRequest hook covers every one of them —
+  // including unmatched paths.
+  await app.register(ipRateLimitPlugin, {
+    config: config.ipRateLimit,
+    limiter:
+      options.ipRateLimiter ??
+      createIpRateLimiter({
+        redis: app.redis,
+        fallback: createIpRateLimitFallback(app.database.db),
+        keyPrefix: redisConfig.keyPrefix,
+        failOpen: !config.ipRateLimit.failClosed,
+        hashIp: createIpHasher(config.ipRateLimit.hashSecret),
+        log: (message, values) => {
+          app.log.warn(values, message);
+        },
+      }),
+  });
+  if (
+    config.nodeEnv === 'production' &&
+    config.ipRateLimit.enabled &&
+    !config.ipRateLimit.hashSecret
+  ) {
+    app.log.warn(
+      'IP_HASH_SECRET is unset; stored address hashes are brute-forceable',
+    );
+  }
   await app.register(healthRoutes, {
     cacheTtlMs: config.readinessCacheTtlMs,
   });
-  app.addHook('onSend',async(_request,reply,payload)=>{reply.header('x-content-type-options','nosniff').header('x-frame-options','DENY').header('referrer-policy','no-referrer').header('cache-control',reply.getHeader('cache-control')??'no-store');return payload;});
+  app.addHook('onSend', async (_request, reply, payload) => {
+    reply
+      .header('x-content-type-options', 'nosniff')
+      .header('x-frame-options', 'DENY')
+      .header('referrer-policy', 'no-referrer')
+      .header('cache-control', reply.getHeader('cache-control') ?? 'no-store');
+    return payload;
+  });
 
   if (!options.database && config.runMigrationsOnStartup !== false) {
-    await initializeIdentityPersistence(app.database.db);
-    await initializeVenuePersistence(app.database.db);
-    await initializeContractPersistence(app.database.db);
-    await initializeBookingPersistence(app.database.db);
-    await initializeLedgerPersistence(app.database.db);
-    await initializeFinancialClosePersistence(app.database.db);
-    await initializeOutboxPersistence(app.database.db);
-    await initializeAuditPersistence(app.database.db);
-    await initializeTreasuryPersistence(app.database.db);
+    await initializePersistence(app.database.db);
   }
 
   const venueService = createVenueService({
@@ -199,7 +231,10 @@ export async function buildApp(
     identityService,
     repository: createOwnerAccessRepository(app.database),
   });
-  const ownerEvents = createOwnerEventPublisher(app.database, createOutboxRepository(app.database));
+  const ownerEvents = createOwnerEventPublisher(
+    app.database,
+    createOutboxRepository(app.database),
+  );
   const venueOwnerService = createVenueOwnerService({
     repository: createVenueRepository(app.database),
     ownerAccessService,
@@ -231,8 +266,15 @@ export async function buildApp(
     ownerAccessService,
     events: ownerEvents,
   });
-  const ownerDashboardService = createOwnerDashboardService({ database: app.database, ownerAccessService });
-  const onboardingAgreementService = createOnboardingAgreementService({ database: app.database, ownerAccessService, outboxRepository: createOutboxRepository(app.database) });
+  const ownerDashboardService = createOwnerDashboardService({
+    database: app.database,
+    ownerAccessService,
+  });
+  const onboardingAgreementService = createOnboardingAgreementService({
+    database: app.database,
+    ownerAccessService,
+    outboxRepository: createOutboxRepository(app.database),
+  });
   const adminAuthService = createAdminAuthService({
     repository: createAdminAuthRepository(app.database),
     authConfig: config.auth,
@@ -259,12 +301,8 @@ export async function buildApp(
     rateLimiter: createPartnerRateLimiter({
       redis: app.redis,
       fallback: {
-        async consumeRateLimitWindow(values) {
-          if (!partnerAccessRepository.consumeRateLimitWindow) {
-            return { count: 1 };
-          }
-          return partnerAccessRepository.consumeRateLimitWindow(values);
-        },
+        consumeRateLimitWindow: (values) =>
+          partnerAccessRepository.consumeRateLimitWindow(values),
       },
       keyPrefix: redisConfig.keyPrefix,
     }),
@@ -284,21 +322,44 @@ export async function buildApp(
     outboxRepository: createOutboxRepository(app.database),
     database: app.database,
   });
-  const holdRecoveryTimer = setInterval(() => {
-    void bookingLifecycleService.recoverExpiredHolds().catch((error: unknown) => {
-      app.log.error({ err: error }, 'Failed to recover expired Booking holds');
-    });
-  }, 60_000);
-  holdRecoveryTimer.unref();
-  app.addHook('onClose', async () => {
-    clearInterval(holdRecoveryTimer);
-  });
+  // Hold recovery and payout reconciliation run in the worker process
+  // (`npm run worker:start`), not here: an in-process timer runs once per API
+  // replica, which is neither wanted nor safe for provider calls.
   const contractService = createContractService({
     repository: createContractRepository(app.database),
     database: app.database,
     venueCancellationPolicy: async (venueId) => {
-      const value=await app.database.db.collection<{version:number;status:string;cancellation_policy:{cancellation_allowed:boolean;default_refund_bps:number;owner_cancellation_notice_minutes:number;refund_rules:Array<{min_minutes_before_start:number;refund_bps:number}>}}>('\u0076enue_onboarding_agreements').find({venue_id:venueId,status:'ACCEPTED'}).sort({version:-1}).limit(1).next();
-      return value?{cancellationAllowed:value.cancellation_policy.cancellation_allowed,defaultRefundBps:value.cancellation_policy.default_refund_bps,ownerCancellationNoticeMinutes:value.cancellation_policy.owner_cancellation_notice_minutes,refundRules:value.cancellation_policy.refund_rules.map(r=>({minMinutesBeforeStart:r.min_minutes_before_start,refundBps:r.refund_bps})),agreementVersion:value.version}:null;
+      const value = await app.database.db
+        .collection<{
+          version: number;
+          status: string;
+          cancellation_policy: {
+            cancellation_allowed: boolean;
+            default_refund_bps: number;
+            owner_cancellation_notice_minutes: number;
+            refund_rules: Array<{
+              min_minutes_before_start: number;
+              refund_bps: number;
+            }>;
+          };
+        }>('venue_onboarding_agreements')
+        .find({ venue_id: venueId, status: 'ACCEPTED' })
+        .sort({ version: -1 })
+        .limit(1)
+        .next();
+      return value
+        ? {
+            cancellationAllowed: value.cancellation_policy.cancellation_allowed,
+            defaultRefundBps: value.cancellation_policy.default_refund_bps,
+            ownerCancellationNoticeMinutes:
+              value.cancellation_policy.owner_cancellation_notice_minutes,
+            refundRules: value.cancellation_policy.refund_rules.map((r) => ({
+              minMinutesBeforeStart: r.min_minutes_before_start,
+              refundBps: r.refund_bps,
+            })),
+            agreementVersion: value.version,
+          }
+        : null;
     },
   });
   const financialCloseService = createFinancialCloseService({
@@ -310,7 +371,12 @@ export async function buildApp(
   });
   const treasuryService = createTreasuryService({
     database: app.database,
-    provider: createRazorpayProvider(config.razorpay ?? { enabled: false, baseUrl: 'https://api.razorpay.com' }),
+    provider: createRazorpayProvider(
+      config.razorpay ?? {
+        enabled: false,
+        baseUrl: 'https://api.razorpay.com',
+      },
+    ),
     financialClose: financialCloseService,
   });
   const communicationsService =
@@ -345,7 +411,10 @@ export async function buildApp(
     adminOnboardingService,
     kycService,
     partnerAccessService,
-    partnerPayoutAccountService: createPartnerPayoutAccountService(app.database.db, app.mediaStorage),
+    partnerPayoutAccountService: createPartnerPayoutAccountService(
+      app.database.db,
+      app.mediaStorage,
+    ),
     partnerPortalService: createPartnerPortalService(app.database.db),
     venueOwnerService,
     courtOwnerService,
@@ -360,10 +429,13 @@ export async function buildApp(
     financialCloseService,
     communicationsService,
     adminEpic08Service,
-    inventorySyncService: createInventorySyncService(app.database, config.auth.partnerCredentialMasterSecret),
+    inventorySyncService: createInventorySyncService(
+      app.database,
+      config.auth.partnerCredentialMasterSecret,
+    ),
     treasuryService,
   });
-  await app.register(openapiRoutes,{prefix:'/api/v1'});
+  await app.register(openapiRoutes, { prefix: '/api/v1' });
 
   return app;
 }

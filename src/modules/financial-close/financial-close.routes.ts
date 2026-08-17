@@ -28,9 +28,7 @@ const settlementParams = {
 const financialCloseRoutes: FastifyPluginAsync<
   FinancialCloseRoutesOptions
 > = async (fastify, options) => {
-  const authenticate = createAdminAuthenticationHook(
-    options.adminAuthService,
-  );
+  const authenticate = createAdminAuthenticationHook(options.adminAuthService);
 
   fastify.post<{
     Body: Omit<GenerateSettlementInput, 'adminId' | 'correlationId'>;
@@ -54,11 +52,13 @@ const financialCloseRoutes: FastifyPluginAsync<
     },
     async (request, reply) => {
       const admin = requireFinancialAdmin(request);
-      return reply.status(201).send(await options.service.generate({
-        adminId: admin.adminId,
-        correlationId: request.id,
-        ...request.body,
-      }));
+      return reply.status(201).send(
+        await options.service.generate({
+          adminId: admin.adminId,
+          correlationId: request.id,
+          ...request.body,
+        }),
+      );
     },
   );
 
@@ -77,8 +77,13 @@ const financialCloseRoutes: FastifyPluginAsync<
             environment: { enum: ['SANDBOX', 'PRODUCTION'] },
             status: {
               enum: [
-                'DRAFT', 'PENDING_FUNDS', 'RECONCILING', 'RECONCILED',
-                'COMPLETED', 'FAILED', 'REVERSED',
+                'DRAFT',
+                'PENDING_FUNDS',
+                'RECONCILING',
+                'RECONCILED',
+                'COMPLETED',
+                'FAILED',
+                'REVERSED',
               ],
             },
             from: { type: 'string', format: 'date-time' },
@@ -144,12 +149,14 @@ const financialCloseRoutes: FastifyPluginAsync<
     },
     async (request, reply) => {
       const admin = requireFinancialAdmin(request);
-      return reply.status(201).send(await options.service.reconcile({
-        adminId: admin.adminId,
-        settlementId: request.params.settlementId,
-        correlationId: request.id,
-        ...request.body,
-      }));
+      return reply.status(201).send(
+        await options.service.reconcile({
+          adminId: admin.adminId,
+          settlementId: request.params.settlementId,
+          correlationId: request.id,
+          ...request.body,
+        }),
+      );
     },
   );
 
@@ -228,13 +235,15 @@ const financialCloseRoutes: FastifyPluginAsync<
     },
     async (request, reply) => {
       const admin = requireFinancialAdmin(request);
-      return reply.status(201).send(await options.service.initiatePayout({
-        adminId: admin.adminId,
-        settlementId: request.params.settlementId,
-        venueId: request.params.venueId,
-        correlationId: request.id,
-        ...request.body,
-      }));
+      return reply.status(201).send(
+        await options.service.initiatePayout({
+          adminId: admin.adminId,
+          settlementId: request.params.settlementId,
+          venueId: request.params.venueId,
+          correlationId: request.id,
+          ...request.body,
+        }),
+      );
     },
   );
 
@@ -347,12 +356,14 @@ const financialCloseRoutes: FastifyPluginAsync<
     },
     async (request, reply) => {
       const admin = requireFinancialAdmin(request);
-      return reply.status(201).send(await options.service.recordAdjustment!({
-        adminId: admin.adminId,
-        settlementId: request.params.settlementId,
-        correlationId: request.id,
-        ...request.body,
-      }));
+      return reply.status(201).send(
+        await options.service.recordAdjustment!({
+          adminId: admin.adminId,
+          settlementId: request.params.settlementId,
+          correlationId: request.id,
+          ...request.body,
+        }),
+      );
     },
   );
 
@@ -364,11 +375,13 @@ const financialCloseRoutes: FastifyPluginAsync<
     },
     async (request, reply) => {
       const admin = requireFinancialAdmin(request);
-      return reply.status(201).send(await options.service.createInvoice!({
-        adminId: admin.adminId,
-        settlementId: request.params.settlementId,
-        correlationId: request.id,
-      }));
+      return reply.status(201).send(
+        await options.service.createInvoice!({
+          adminId: admin.adminId,
+          settlementId: request.params.settlementId,
+          correlationId: request.id,
+        }),
+      );
     },
   );
 

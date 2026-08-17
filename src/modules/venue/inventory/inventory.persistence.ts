@@ -41,12 +41,10 @@ async function ensureIndex(
   );
   const differs =
     existing !== undefined &&
-    (
-      JSON.stringify(existing.key) !== JSON.stringify(keys) ||
+    (JSON.stringify(existing.key) !== JSON.stringify(keys) ||
       Boolean(existing.unique) !== Boolean(options.unique) ||
       JSON.stringify(existing.partialFilterExpression ?? null) !==
-        JSON.stringify(options.partialFilterExpression ?? null)
-    );
+        JSON.stringify(options.partialFilterExpression ?? null));
   if (differs) {
     await collection.dropIndex(options.name);
   }
@@ -58,9 +56,20 @@ const pricingRuleValidator: Document = {
     bsonType: 'object',
     additionalProperties: false,
     required: [
-      '_id', 'court_id', 'name', 'day_of_week', 'start_time',
-      'end_time', 'price_minor', 'currency', 'effective_from',
-      'effective_to', 'priority', 'active', 'created_at', 'updated_at',
+      '_id',
+      'court_id',
+      'name',
+      'day_of_week',
+      'start_time',
+      'end_time',
+      'price_minor',
+      'currency',
+      'effective_from',
+      'effective_to',
+      'priority',
+      'active',
+      'created_at',
+      'updated_at',
     ],
     properties: {
       _id: { bsonType: 'objectId' },
@@ -86,10 +95,26 @@ const slotValidator: Document = {
     bsonType: 'object',
     additionalProperties: false,
     required: [
-      '_id', 'court_id', 'venue_id', 'environment', 'booking_type', 'starts_at',
-      'ends_at', 'price_minor', 'currency', 'status', 'hold_id',
-      'hold_partner_id', 'hold_expires_at', 'hold_created_at',
-      'booking_id', 'source', 'audit_history', 'version', 'created_at',
+      '_id',
+      'court_id',
+      'venue_id',
+      'environment',
+      'booking_type',
+      'starts_at',
+      'ends_at',
+      'price_minor',
+      'currency',
+      'status',
+      'hold_id',
+      'hold_partner_id',
+      'hold_expires_at',
+      'hold_created_at',
+      'booking_id',
+      'consumed_by_slot_id',
+      'source',
+      'audit_history',
+      'version',
+      'created_at',
       'updated_at',
     ],
     properties: {
@@ -110,8 +135,15 @@ const slotValidator: Document = {
       hold_expires_at: { bsonType: ['date', 'null'] },
       hold_created_at: { bsonType: ['date', 'null'] },
       booking_id: { bsonType: ['objectId', 'null'] },
+      consumed_by_slot_id: { bsonType: ['objectId', 'null'] },
       source: {
-        enum: ['SYSTEM_GENERATED', 'OWNER_DASHBOARD', 'ADMIN', 'BOOKING', 'EXTERNAL_CONNECTOR'],
+        enum: [
+          'SYSTEM_GENERATED',
+          'OWNER_DASHBOARD',
+          'ADMIN',
+          'BOOKING',
+          'EXTERNAL_CONNECTOR',
+        ],
       },
       audit_history: { bsonType: 'array', maxItems: 100 },
       version: { bsonType: 'int', minimum: 1 },
@@ -121,31 +153,80 @@ const slotValidator: Document = {
   },
 };
 
+/**
+ * `slots` cannot use {@link ensure} because `consumed_by_slot_id` was added
+ * after the collection shipped. The field must be backfilled *before* the
+ * validator is tightened: `validationLevel: 'strict'` applies to updates of
+ * existing documents, so a legacy document missing a required field becomes
+ * un-updatable. The backfill itself needs `bypassDocumentValidation` because
+ * the old validator sets `additionalProperties: false`.
+ */
+async function ensureSlotCollection(db: Db): Promise<void> {
+  const exists = await db
+    .listCollections({ name: 'slots' }, { nameOnly: true })
+    .hasNext();
+
+  if (!exists) {
+    await db.createCollection('slots', {
+      validator: slotValidator,
+      validationLevel: 'strict',
+      validationAction: 'error',
+    });
+    return;
+  }
+
+  await db
+    .collection('slots')
+    .updateMany(
+      { consumed_by_slot_id: { $exists: false } },
+      { $set: { consumed_by_slot_id: null } },
+      { bypassDocumentValidation: true },
+    );
+  await db.command({
+    collMod: 'slots',
+    validator: slotValidator,
+    validationLevel: 'strict',
+    validationAction: 'error',
+  });
+}
+
 export async function initializeInventoryPersistence(db: Db): Promise<void> {
   await ensure(db, 'pricing_rules', pricingRuleValidator);
-  await ensure(db, 'slots', slotValidator);
+  await ensureSlotCollection(db);
 
-  await ensureIndex(db, 'pricing_rules',
+  await ensureIndex(
+    db,
+    'pricing_rules',
     { court_id: 1, active: 1, priority: -1 },
     { name: 'ix_pricing_court_status_priority' },
   );
-  await ensureIndex(db, 'slots',
+  await ensureIndex(
+    db,
+    'slots',
     { court_id: 1, environment: 1, starts_at: 1, ends_at: 1 },
     { name: 'ix_slots_overlap' },
   );
-  await ensureIndex(db, 'slots',
+  await ensureIndex(
+    db,
+    'slots',
     { court_id: 1, environment: 1, booking_type: 1, starts_at: 1, ends_at: 1 },
     { unique: true, name: 'uq_slots_court_mode_interval' },
   );
-  await ensureIndex(db, 'slots',
+  await ensureIndex(
+    db,
+    'slots',
     { status: 1, hold_expires_at: 1 },
     { name: 'ix_slots_expired_holds' },
   );
-  await ensureIndex(db, 'slots',
+  await ensureIndex(
+    db,
+    'slots',
     { venue_id: 1, environment: 1, status: 1, starts_at: 1, ends_at: 1 },
     { name: 'ix_slots_admin_inventory_health' },
   );
-  await ensureIndex(db, 'slots',
+  await ensureIndex(
+    db,
+    'slots',
     { hold_id: 1 },
     {
       unique: true,
@@ -153,12 +234,23 @@ export async function initializeInventoryPersistence(db: Db): Promise<void> {
       name: 'uq_slots_hold_id',
     },
   );
-  await ensureIndex(db, 'slots',
+  await ensureIndex(
+    db,
+    'slots',
     { booking_id: 1 },
     {
       unique: true,
       partialFilterExpression: { booking_id: { $type: 'objectId' } },
       name: 'uq_slots_booking_id',
     },
+  );
+  // Serves restoreConsumedFixedSlots. Compound with court_id rather than a
+  // partial index on consumed_by_slot_id alone so the planner can always use
+  // it: every restore call site has the court in hand.
+  await ensureIndex(
+    db,
+    'slots',
+    { court_id: 1, consumed_by_slot_id: 1 },
+    { name: 'ix_slots_consumed_by' },
   );
 }

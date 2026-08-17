@@ -140,9 +140,7 @@ export function createLedgerService(
         );
       }
       assertScope(input.booking, originals);
-      if (
-        originals.some(({ _id }) => alreadyReversed.has(_id.toHexString()))
-      ) {
+      if (originals.some(({ _id }) => alreadyReversed.has(_id.toHexString()))) {
         throw conflict(
           'LEDGER_ENTRY_ALREADY_REVERSED',
           'A booking Ledger entry has already been reversed',
@@ -164,8 +162,7 @@ export function createLedgerService(
             reverses_entry_id: original._id,
             environment: original.environment,
             entry_type: 'REVERSAL',
-            direction:
-              original.direction === 'DEBIT' ? 'CREDIT' : 'DEBIT',
+            direction: original.direction === 'DEBIT' ? 'CREDIT' : 'DEBIT',
             amount_minor: amount,
             currency: original.currency,
             effective_at: input.effectiveAt,
@@ -200,32 +197,30 @@ export function createLedgerService(
           'Adjustment components must be GROSS, COMMISSION, TAX, or VENUE_NET',
         );
       }
-      const entries = input.lines.map(
-        (line): LedgerEntryDocument => ({
-          _id: new ObjectId(),
-          booking_id: input.booking.bookingId,
-          partner_id: financialId(input.booking.partnerId, 'partnerId'),
-          venue_id: input.booking.venueId,
-          contract_id: financialId(input.booking.contractId, 'contractId'),
-          settlement_id: null,
-          payout_id: null,
-          reverses_entry_id: null,
-          environment: input.booking.environment,
-          entry_type: 'ADJUSTMENT',
-          direction: line.direction,
-          amount_minor: line.amountMinor,
-          currency: 'INR',
-          effective_at: input.effectiveAt,
-          correlation_id: required(input.correlationId, 'correlationId'),
-          metadata: {
-            component: required(line.component, 'component'),
-            reason,
-            evidence_uri: evidenceUri,
-            actor_id: input.actorId.toHexString(),
-          },
-          created_at: input.effectiveAt,
-        }),
-      );
+      const entries = input.lines.map((line): LedgerEntryDocument => ({
+        _id: new ObjectId(),
+        booking_id: input.booking.bookingId,
+        partner_id: financialId(input.booking.partnerId, 'partnerId'),
+        venue_id: input.booking.venueId,
+        contract_id: financialId(input.booking.contractId, 'contractId'),
+        settlement_id: null,
+        payout_id: null,
+        reverses_entry_id: null,
+        environment: input.booking.environment,
+        entry_type: 'ADJUSTMENT',
+        direction: line.direction,
+        amount_minor: line.amountMinor,
+        currency: 'INR',
+        effective_at: input.effectiveAt,
+        correlation_id: required(input.correlationId, 'correlationId'),
+        metadata: {
+          component: required(line.component, 'component'),
+          reason,
+          evidence_uri: evidenceUri,
+          actor_id: input.actorId.toHexString(),
+        },
+        created_at: input.effectiveAt,
+      }));
       validateLedgerJournal(entries);
       await repository.post(entries, input.session);
       return entries;
@@ -236,8 +231,7 @@ export function createLedgerService(
     listUnsettled: (input) => repository.listUnsettled(input),
     allocateToSettlement: (input) => repository.allocateToSettlement(input),
     findByIds: (ids, session) => repository.findByIds(ids, session),
-    listForSettlementVenue: (input) =>
-      repository.listForSettlementVenue(input),
+    listForSettlementVenue: (input) => repository.listForSettlementVenue(input),
     allocateToPayout: (input) => repository.allocateToPayout(input),
     listSettlementIdsForVenue: (input) =>
       repository.listSettlementIdsForVenue(input),
@@ -255,10 +249,7 @@ export function validateLedgerJournal(entries: LedgerEntryDocument[]): void {
   let debit = 0;
   let credit = 0;
   for (const value of entries) {
-    if (
-      !Number.isSafeInteger(value.amount_minor) ||
-      value.amount_minor < 0
-    ) {
+    if (!Number.isSafeInteger(value.amount_minor) || value.amount_minor < 0) {
       throw invalid(
         'INVALID_LEDGER_AMOUNT',
         'Ledger amounts must be non-negative safe integers',

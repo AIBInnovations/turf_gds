@@ -12,8 +12,12 @@ import type {
   PricingRuleDocument,
   SlotDocument,
 } from '../venue/inventory/inventory.types.js';
+import { classifyOverlap } from '../venue/inventory/slot-overlap.js';
 import type { VenueDocument } from '../venue/profile/venue.types.js';
-import type { BookingLifecycleRepository } from './booking-lifecycle.repository.js';
+import type {
+  BookingLifecycleRepository,
+  RecoverExpiredHoldsResult,
+} from './booking-lifecycle.repository.js';
 import type {
   ApiIdempotencyRecordDocument,
   BookingCancellationDocument,
@@ -71,13 +75,8 @@ export interface BookingLifecycleService {
   }>;
   confirm(input: ConfirmBookingInput): Promise<Record<string, unknown>>;
   cancel(input: CancelBookingInput): Promise<Record<string, unknown>>;
-  recoverExpiredHolds(): Promise<{
-    fixedReleased: number;
-    openReleased: number;
-  }>;
-  getAudit(input: {
-    bookingId: string;
-  }): Promise<Record<string, unknown>>;
+  recoverExpiredHolds(): Promise<RecoverExpiredHoldsResult>;
+  getAudit(input: { bookingId: string }): Promise<Record<string, unknown>>;
 }
 
 export function createBookingLifecycleService(input: {
@@ -88,10 +87,16 @@ export function createBookingLifecycleService(input: {
   now?: () => Date;
   holdTtlMs?: number;
   idempotencyTtlMs?: number;
+  holdRecoveryBatchSize?: number;
+  holdRecoveryMaxBatches?: number;
 }): BookingLifecycleService {
   const now = input.now ?? (() => new Date());
   const holdTtlMs = input.holdTtlMs ?? 10 * 60 * 1_000;
   const idempotencyTtlMs = input.idempotencyTtlMs ?? 24 * 60 * 60 * 1_000;
+  // 50 x 20 keeps the historical 1000-slot ceiling per pass, but as twenty
+  // small transactions rather than one that risks the 16MB / 60s limits.
+  const holdRecoveryBatchSize = input.holdRecoveryBatchSize ?? 50;
+  const holdRecoveryMaxBatches = input.holdRecoveryMaxBatches ?? 20;
 
   return {
     async hold(values) {
@@ -127,6 +132,40 @@ export function createBookingLifecycleService(input: {
               'Slot is not available for a future priced booking',
             );
           }
+          // Take the Court mutex before reading inventory so this claim
+          // serialises against open-time writers, which would otherwise
+          // consume this very slot concurrently.
+          if (
+            !(await input.repository.lockCourt({
+              courtId: slot.court_id,
+              version: context.court.version,
+              now: timestamp,
+              session,
+            }))
+          ) {
+            throw conflict(
+              'INVENTORY_VERSION_CONFLICT',
+              'Court inventory changed concurrently',
+            );
+          }
+          const fixedOverlap = classifyOverlap({
+            slots: await input.repository.findOverlappingSlots({
+              courtId: slot.court_id,
+              environment: values.environment,
+              startsAt: slot.starts_at,
+              endsAt: slot.ends_at,
+              session,
+            }),
+            now: timestamp,
+            perspective: 'FIXED_SLOT',
+            excludeSlotId: slot._id,
+          });
+          if (fixedOverlap.blocking.length > 0) {
+            throw conflict(
+              'INVENTORY_OVERLAP',
+              'An open-time booking already covers this interval',
+            );
+          }
           const expiresAt = expiry(timestamp, slot.starts_at, holdTtlMs);
           held =
             (await input.repository.claimFixedHold({
@@ -136,8 +175,10 @@ export function createBookingLifecycleService(input: {
               holdId,
               expiresAt,
               now: timestamp,
-              previousStatus:
-                slot.status === 'HELD' ? 'HELD' : 'AVAILABLE',
+              previousStatus: slot.status === 'HELD' ? 'HELD' : 'AVAILABLE',
+              allowConsumedBySlotIds: fixedOverlap.stale.map(
+                (value) => value._id,
+              ),
               correlationId: values.correlationId,
               session,
             })) ?? undefined;
@@ -150,6 +191,7 @@ export function createBookingLifecycleService(input: {
           return;
         }
 
+        const openSlotId = new ObjectId();
         const venueId = oid(required(values.venueId, 'venueId'));
         const courtId = oid(required(values.courtId, 'courtId'));
         const startsAt = instant(values.startsAt, 'startsAt');
@@ -170,20 +212,8 @@ export function createBookingLifecycleService(input: {
         });
         assertBookable(context, 'OPEN_TIME');
         validateOpenInterval(context.venue, context.court, startsAt, endsAt);
-        const conflictSlot = await input.repository.findConflictingSlot({
-          courtId,
-          environment: values.environment,
-          startsAt,
-          endsAt,
-          now: timestamp,
-          session,
-        });
-        if (conflictSlot) {
-          throw conflict(
-            'INVENTORY_OVERLAP',
-            'The requested interval overlaps unavailable inventory',
-          );
-        }
+        // Lock, then scan. The consumption write below has to happen under the
+        // Court mutex, so the read it is derived from must too.
         if (
           !(await input.repository.lockCourt({
             courtId,
@@ -195,6 +225,23 @@ export function createBookingLifecycleService(input: {
           throw conflict(
             'INVENTORY_VERSION_CONFLICT',
             'Court inventory changed concurrently',
+          );
+        }
+        const openOverlap = classifyOverlap({
+          slots: await input.repository.findOverlappingSlots({
+            courtId,
+            environment: values.environment,
+            startsAt,
+            endsAt,
+            session,
+          }),
+          now: timestamp,
+          perspective: 'OPEN_TIME',
+        });
+        if (openOverlap.blocking.length > 0) {
+          throw conflict(
+            'INVENTORY_OVERLAP',
+            'The requested interval overlaps unavailable inventory',
           );
         }
         const pricingRules = await input.repository.findPricingRules(
@@ -210,7 +257,7 @@ export function createBookingLifecycleService(input: {
         );
         const expiresAt = expiry(timestamp, startsAt, holdTtlMs);
         held = {
-          _id: new ObjectId(),
+          _id: openSlotId,
           court_id: courtId,
           venue_id: venueId,
           environment: values.environment,
@@ -226,24 +273,44 @@ export function createBookingLifecycleService(input: {
           hold_created_at: timestamp,
           source: 'BOOKING',
           booking_id: null,
-          audit_history: [{
-            event_type: 'SLOT_HELD',
-            actor_type: 'PARTNER',
-            actor_id: partnerId,
-            previous_status: null,
-            new_status: 'HELD',
-            reason: 'Partner open-time booking hold',
-            correlation_id: values.correlationId,
-            occurred_at: timestamp,
-          }],
+          consumed_by_slot_id: null,
+          audit_history: [
+            {
+              event_type: 'SLOT_HELD',
+              actor_type: 'PARTNER',
+              actor_id: partnerId,
+              previous_status: null,
+              new_status: 'HELD',
+              reason: 'Partner open-time booking hold',
+              correlation_id: values.correlationId,
+              occurred_at: timestamp,
+            },
+          ],
           version: 1,
           created_at: timestamp,
           updated_at: timestamp,
         };
         await input.repository.insertSlot(held, session);
+        // Same transaction: the grid underneath this interval stops being
+        // sellable the instant the open-time slot exists.
+        await input.repository.consumeFixedSlots({
+          courtId,
+          environment: values.environment,
+          consumerSlotId: openSlotId,
+          fixedSlotIds: openOverlap.consumable.map((value) => value._id),
+          staleConsumerIds: openOverlap.stale.map((value) => value._id),
+          partnerId,
+          correlationId: values.correlationId,
+          now: timestamp,
+          session,
+        });
       });
 
-      if (!held?.hold_id || !held.hold_expires_at || held.price_minor === null) {
+      if (
+        !held?.hold_id ||
+        !held.hold_expires_at ||
+        held.price_minor === null
+      ) {
         throw new Error('Hold transaction completed without a result');
       }
       return {
@@ -303,7 +370,11 @@ export function createBookingLifecycleService(input: {
             values.environment,
             session,
           );
-          if (!slot || !slot.hold_expires_at || slot.hold_expires_at <= timestamp) {
+          if (
+            !slot ||
+            !slot.hold_expires_at ||
+            slot.hold_expires_at <= timestamp
+          ) {
             throw conflict(
               'HOLD_NOT_ACTIVE',
               'Hold was not found, does not belong to the Partner, or expired',
@@ -320,17 +391,32 @@ export function createBookingLifecycleService(input: {
             at: timestamp,
             session,
           });
-          const ownerAgreement = await input.database.db.collection<{
-            version:number; status:'ACCEPTED'; cancellation_policy:{cancellation_allowed:boolean;default_refund_bps:number;owner_cancellation_notice_minutes:number;refund_rules:Array<{min_minutes_before_start:number;refund_bps:number}>};
-          }>('venue_onboarding_agreements').find({ venue_id: slot.venue_id, status: 'ACCEPTED' }, { session }).sort({ version: -1 }).limit(1).next();
+          const ownerAgreement = await input.database.db
+            .collection<{
+              version: number;
+              status: 'ACCEPTED';
+              cancellation_policy: {
+                cancellation_allowed: boolean;
+                default_refund_bps: number;
+                owner_cancellation_notice_minutes: number;
+                refund_rules: Array<{
+                  min_minutes_before_start: number;
+                  refund_bps: number;
+                }>;
+              };
+            }>('venue_onboarding_agreements')
+            .find({ venue_id: slot.venue_id, status: 'ACCEPTED' }, { session })
+            .sort({ version: -1 })
+            .limit(1)
+            .next();
           if (!ownerAgreement) {
-            throw conflict('VENUE_CANCELLATION_POLICY_REQUIRED','The Venue Owner must accept a cancellation policy before Partner bookings can be confirmed');
+            throw conflict(
+              'VENUE_CANCELLATION_POLICY_REQUIRED',
+              'The Venue Owner must accept a cancellation policy before Partner bookings can be confirmed',
+            );
           }
           assertBookable(context, slot.booking_type);
-          const amounts = calculateAmounts(
-            slot.price_minor,
-            context.contract,
-          );
+          const amounts = calculateAmounts(slot.price_minor, context.contract);
           const bookingId = new ObjectId();
           const booking: BookingDocument = {
             _id: bookingId,
@@ -346,9 +432,7 @@ export function createBookingLifecycleService(input: {
             external_booking_reference: values.externalBookingReference.trim(),
             confirm_idempotency_key: key,
             customer_reference: optional(values.customerReference),
-            partner_payment_reference: optional(
-              values.partnerPaymentReference,
-            ),
+            partner_payment_reference: optional(values.partnerPaymentReference),
             status: 'CONFIRMED',
             ...amounts,
             currency: 'INR',
@@ -356,32 +440,42 @@ export function createBookingLifecycleService(input: {
               source: 'VENUE_OWNER_ONBOARDING_AGREEMENT',
               venue_agreement_version: ownerAgreement.version,
               cancellation_terms: {
-                cancellation_allowed: ownerAgreement.cancellation_policy.cancellation_allowed,
-                default_refund_bps: ownerAgreement.cancellation_policy.default_refund_bps,
+                cancellation_allowed:
+                  ownerAgreement.cancellation_policy.cancellation_allowed,
+                default_refund_bps:
+                  ownerAgreement.cancellation_policy.default_refund_bps,
                 release_inventory: true,
               },
-              refund_rules: { rules: ownerAgreement.cancellation_policy.refund_rules.map(rule=>({ ...rule, release_inventory:true })) },
-              resale_cutoff_minutes: ownerAgreement.cancellation_policy.owner_cancellation_notice_minutes,
+              refund_rules: {
+                rules: ownerAgreement.cancellation_policy.refund_rules.map(
+                  (rule) => ({ ...rule, release_inventory: true }),
+                ),
+              },
+              resale_cutoff_minutes:
+                ownerAgreement.cancellation_policy
+                  .owner_cancellation_notice_minutes,
               commission_rate_bps: context.contract.commission_rate_bps,
               tax_rate_bps: context.contract.tax_rate_bps,
               terms_version: context.contract.terms_version,
             },
             confirmed_at: timestamp,
             cancelled_at: null,
-            audit_history: [{
-              event_type: 'BOOKING_CONFIRMED',
-              actor_type: 'PARTNER',
-              actor_id: partnerId,
-              correlation_id: values.correlationId,
-              changes: {
-                previous_status: null,
-                new_status: 'CONFIRMED',
-                reason: 'Partner confirmed an active hold',
-                contract_id: context.contract._id.toHexString(),
-                terms_version: context.contract.terms_version,
+            audit_history: [
+              {
+                event_type: 'BOOKING_CONFIRMED',
+                actor_type: 'PARTNER',
+                actor_id: partnerId,
+                correlation_id: values.correlationId,
+                changes: {
+                  previous_status: null,
+                  new_status: 'CONFIRMED',
+                  reason: 'Partner confirmed an active hold',
+                  contract_id: context.contract._id.toHexString(),
+                  terms_version: context.contract.terms_version,
+                },
+                occurred_at: timestamp,
               },
-              occurred_at: timestamp,
-            }],
+            ],
             version: 1,
             created_at: timestamp,
             updated_at: timestamp,
@@ -434,7 +528,9 @@ export function createBookingLifecycleService(input: {
           );
         });
         if (!response) {
-          throw new Error('Confirmation transaction completed without a result');
+          throw new Error(
+            'Confirmation transaction completed without a result',
+          );
         }
         return response;
       } catch (error) {
@@ -457,9 +553,16 @@ export function createBookingLifecycleService(input: {
       const bookingId = oid(values.bookingId);
       const key = idempotencyKey(values.idempotencyKey);
       const operation = `BOOKING_CANCEL:${bookingId.toHexString()}`;
-      const reasonCode = required(values.reasonCode, 'reasonCode').toUpperCase();
+      const reasonCode = required(
+        values.reasonCode,
+        'reasonCode',
+      ).toUpperCase();
       const reasonText = optional(values.reasonText);
-      const requestHash = hash({ bookingId: values.bookingId, reasonCode, reasonText });
+      const requestHash = hash({
+        bookingId: values.bookingId,
+        reasonCode,
+        reasonText,
+      });
       const replay = await replayIfPresent({
         partnerId,
         environment: values.environment,
@@ -597,7 +700,9 @@ export function createBookingLifecycleService(input: {
           );
         });
         if (!response) {
-          throw new Error('Cancellation transaction completed without a result');
+          throw new Error(
+            'Cancellation transaction completed without a result',
+          );
         }
         return response;
       } catch (error) {
@@ -616,7 +721,11 @@ export function createBookingLifecycleService(input: {
     },
 
     recoverExpiredHolds() {
-      return input.repository.recoverExpiredHolds(now());
+      return input.repository.recoverExpiredHolds({
+        now: now(),
+        batchSize: holdRecoveryBatchSize,
+        maxBatches: holdRecoveryMaxBatches,
+      });
     },
 
     async getAudit(values) {
@@ -827,7 +936,9 @@ function calculateAmounts(
   gross: number,
   contract: PartnerVenueContractDocument,
 ) {
-  const commission = Math.round((gross * contract.commission_rate_bps) / 10_000);
+  const commission = Math.round(
+    (gross * contract.commission_rate_bps) / 10_000,
+  );
   const tax = Math.round((gross * contract.tax_rate_bps) / 10_000);
   return {
     gross_amount_minor: gross,
@@ -885,8 +996,7 @@ function cancellationPolicy(
   const rule = [...(snapshot.refund_rules?.rules ?? [])]
     .sort(
       (a, b) =>
-        (b.min_minutes_before_start ?? 0) -
-        (a.min_minutes_before_start ?? 0),
+        (b.min_minutes_before_start ?? 0) - (a.min_minutes_before_start ?? 0),
     )
     .find(
       ({ min_minutes_before_start }) =>
@@ -1009,7 +1119,10 @@ function bookingView(booking: BookingDocument): Record<string, unknown> {
   };
 }
 
-function localParts(value: Date, timezone: string): {
+function localParts(
+  value: Date,
+  timezone: string,
+): {
   date: string;
   day: number;
   minutes: number;

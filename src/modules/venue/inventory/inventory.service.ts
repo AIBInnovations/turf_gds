@@ -5,11 +5,9 @@ import type { DatabaseConnection } from '../../../shared/database/database-conne
 import { AppError } from '../../../shared/errors/app-error.js';
 import type { CourtRepository } from '../courts/court.repository.js';
 import type { CourtDocument } from '../courts/court.types.js';
-import type {
-  PricingRuleDocument,
-  SlotDocument,
-} from './inventory.types.js';
+import type { PricingRuleDocument, SlotDocument } from './inventory.types.js';
 import type { InventoryRepository } from './inventory.repository.js';
+import { classifyOverlap } from './slot-overlap.js';
 import type { VenueRepository } from '../profile/venue.repository.js';
 import type { OwnerEventPublisher } from '../../../shared/communications/owner-event-publisher.js';
 
@@ -17,17 +15,21 @@ export interface InventoryService {
   createPricingRule(input: PricingInput): Promise<object>;
   listPricingRules(input: ScopedCourt): Promise<object[]>;
   updatePricingRule(input: PricingUpdateInput): Promise<object>;
-  generateFixedSlots(input: ScopedCourt & {
-    actorOwnerId: string;
-    dateFrom: string;
-    dateTo: string;
-    correlationId: string;
-  }): Promise<{ created: number }>;
-  listInventory(input: ScopedCourt & {
-    actorOwnerId: string;
-    from: string;
-    to: string;
-  }): Promise<object[]>;
+  generateFixedSlots(
+    input: ScopedCourt & {
+      actorOwnerId: string;
+      dateFrom: string;
+      dateTo: string;
+      correlationId: string;
+    },
+  ): Promise<{ created: number }>;
+  listInventory(
+    input: ScopedCourt & {
+      actorOwnerId: string;
+      from: string;
+      to: string;
+    },
+  ): Promise<object[]>;
   blockAvailability(input: {
     actorOwnerId: string;
     venueId: string;
@@ -51,6 +53,7 @@ export interface InventoryService {
   }): Promise<void | object>;
   searchAvailability(input: {
     courtId: string;
+    environment: 'SANDBOX' | 'PRODUCTION';
     from: Date;
     to: Date;
   }): Promise<object[]>;
@@ -101,9 +104,7 @@ export function createInventoryService(input: {
 
   async function scopedCourt(
     values: ScopedCourt,
-    permission:
-      | 'MANAGE_PRICING'
-      | 'MANAGE_AVAILABILITY',
+    permission: 'MANAGE_PRICING' | 'MANAGE_AVAILABILITY',
   ): Promise<CourtDocument> {
     await input.ownerAccessService.requirePermission(
       values.actorOwnerId,
@@ -125,15 +126,29 @@ export function createInventoryService(input: {
     const timestamp = now();
     const rule = pricingDocument(values, timestamp);
     await input.repository.insertPricingRule(rule);
-    await input.events?.publish({aggregateType:'INVENTORY',aggregateId:rule._id,venueId:oid(values.venueId),eventType:'AVAILABILITY_CHANGED',eventVersion:1,correlationId:`pricing-create:${rule._id.toHexString()}`,payload:{venueId:values.venueId,courtId:values.courtId,pricingRuleId:rule._id.toHexString(),action:'PRICING_CREATED'},now:timestamp});
+    await input.events?.publish({
+      aggregateType: 'INVENTORY',
+      aggregateId: rule._id,
+      venueId: oid(values.venueId),
+      eventType: 'AVAILABILITY_CHANGED',
+      eventVersion: 1,
+      correlationId: `pricing-create:${rule._id.toHexString()}`,
+      payload: {
+        venueId: values.venueId,
+        courtId: values.courtId,
+        pricingRuleId: rule._id.toHexString(),
+        action: 'PRICING_CREATED',
+      },
+      now: timestamp,
+    });
     return presentPricing(rule);
   }
 
   async function listPricingRules(values: ScopedCourt) {
     await scopedCourt(values, 'MANAGE_PRICING');
-    return (
-      await input.repository.listPricingRules(oid(values.courtId))
-    ).map(presentPricing);
+    return (await input.repository.listPricingRules(oid(values.courtId))).map(
+      presentPricing,
+    );
   }
 
   async function updatePricingRule(values: PricingUpdateInput) {
@@ -147,7 +162,7 @@ export function createInventoryService(input: {
     const effectiveTo =
       values.effectiveTo === null
         ? undefined
-        : values.effectiveTo ?? existing.effective_to?.toISOString();
+        : (values.effectiveTo ?? existing.effective_to?.toISOString());
     const merged: PricingInput = {
       actorOwnerId: values.actorOwnerId,
       venueId: values.venueId,
@@ -168,27 +183,37 @@ export function createInventoryService(input: {
       existing.created_at,
       existing._id,
     );
-    const updated = await input.repository.updatePricingRule(
-      id,
-      courtId,
-      {
-        name: validated.name,
-        day_of_week: validated.day_of_week,
-        start_time: validated.start_time,
-        end_time: validated.end_time,
-        price_minor: validated.price_minor,
-        currency: validated.currency,
-        effective_from: validated.effective_from,
-        effective_to: validated.effective_to,
-        priority: validated.priority,
-        active: values.active ?? existing.active,
-        updated_at: now(),
-      },
-    );
+    const updated = await input.repository.updatePricingRule(id, courtId, {
+      name: validated.name,
+      day_of_week: validated.day_of_week,
+      start_time: validated.start_time,
+      end_time: validated.end_time,
+      price_minor: validated.price_minor,
+      currency: validated.currency,
+      effective_from: validated.effective_from,
+      effective_to: validated.effective_to,
+      priority: validated.priority,
+      active: values.active ?? existing.active,
+      updated_at: now(),
+    });
     if (!updated) {
       throw notFound('PRICING_RULE_NOT_FOUND', 'Pricing rule was not found');
     }
-    await input.events?.publish({aggregateType:'INVENTORY',aggregateId:updated._id,venueId:oid(values.venueId),eventType:'AVAILABILITY_CHANGED',eventVersion:1,correlationId:`pricing-update:${updated._id.toHexString()}:${updated.updated_at.getTime()}`,payload:{venueId:values.venueId,courtId:values.courtId,pricingRuleId:updated._id.toHexString(),action:'PRICING_UPDATED'},now:updated.updated_at});
+    await input.events?.publish({
+      aggregateType: 'INVENTORY',
+      aggregateId: updated._id,
+      venueId: oid(values.venueId),
+      eventType: 'AVAILABILITY_CHANGED',
+      eventVersion: 1,
+      correlationId: `pricing-update:${updated._id.toHexString()}:${updated.updated_at.getTime()}`,
+      payload: {
+        venueId: values.venueId,
+        courtId: values.courtId,
+        pricingRuleId: updated._id.toHexString(),
+        action: 'PRICING_UPDATED',
+      },
+      now: updated.updated_at,
+    });
     return presentPricing(updated);
   }
 
@@ -227,12 +252,10 @@ export function createInventoryService(input: {
         const localTime = formatTime(cursor, venue.timezone);
         const rule = rules.find(
           (candidate) =>
-            (candidate.day_of_week === null ||
-              candidate.day_of_week === day) &&
+            (candidate.day_of_week === null || candidate.day_of_week === day) &&
             (candidate.start_time === null ||
               localTime >= candidate.start_time) &&
-            (candidate.end_time === null ||
-              localTime < candidate.end_time) &&
+            (candidate.end_time === null || localTime < candidate.end_time) &&
             cursor >= candidate.effective_from &&
             (!candidate.effective_to || cursor < candidate.effective_to),
         );
@@ -257,16 +280,19 @@ export function createInventoryService(input: {
             hold_created_at: null,
             source: 'SYSTEM_GENERATED',
             booking_id: null,
-            audit_history: [{
-              event_type: 'SLOT_GENERATED',
-              actor_type: 'VENUE_OWNER',
-              actor_id: oid(values.actorOwnerId),
-              previous_status: null,
-              new_status: 'AVAILABLE',
-              reason: 'Rolling inventory generation',
-              correlation_id: values.correlationId,
-              occurred_at: timestamp,
-            }],
+            consumed_by_slot_id: null,
+            audit_history: [
+              {
+                event_type: 'SLOT_GENERATED',
+                actor_type: 'VENUE_OWNER',
+                actor_id: oid(values.actorOwnerId),
+                previous_status: null,
+                new_status: 'AVAILABLE',
+                reason: 'Rolling inventory generation',
+                correlation_id: values.correlationId,
+                occurred_at: timestamp,
+              },
+            ],
             version: 1,
             created_at: timestamp,
             updated_at: timestamp,
@@ -284,22 +310,40 @@ export function createInventoryService(input: {
     }
     const existingInventory = await input.repository.listSlots(
       court._id,
+      venue.environment,
       slots[0]!.starts_at,
       slots[slots.length - 1]!.ends_at,
     );
+    // Any overlap disqualifies a candidate, including an AVAILABLE one.
+    // `uq_slots_court_mode_interval` only rejects *identical* intervals, so
+    // regenerating after a min_booking_minutes change would otherwise produce
+    // overlapping AVAILABLE fixed slots that two partners could book
+    // independently.
     const generatable = slots.filter(
       (slot) =>
         !existingInventory.some(
           (candidate) =>
-            ['HELD', 'BOOKED', 'BLOCKED', 'UNAVAILABLE'].includes(
-              candidate.status,
-            ) &&
             candidate.starts_at < slot.ends_at &&
             candidate.ends_at > slot.starts_at,
         ),
     );
     const created = await input.repository.bulkUpsertSlots(generatable);
-    if(created>0) await input.events?.publish({aggregateType:'INVENTORY',aggregateId:court._id,venueId:venue._id,eventType:'AVAILABILITY_CHANGED',eventVersion:court.version,correlationId:values.correlationId,payload:{venueId:values.venueId,courtId:values.courtId,action:'SLOTS_GENERATED',created},now:timestamp});
+    if (created > 0)
+      await input.events?.publish({
+        aggregateType: 'INVENTORY',
+        aggregateId: court._id,
+        venueId: venue._id,
+        eventType: 'AVAILABILITY_CHANGED',
+        eventVersion: court.version,
+        correlationId: values.correlationId,
+        payload: {
+          venueId: values.venueId,
+          courtId: values.courtId,
+          action: 'SLOTS_GENERATED',
+          created,
+        },
+        now: timestamp,
+      });
     return { created };
   }
 
@@ -307,9 +351,12 @@ export function createInventoryService(input: {
     values: Parameters<InventoryService['listInventory']>[0],
   ) {
     await scopedCourt(values, 'MANAGE_AVAILABILITY');
+    const venue = await input.venueRepository.findById(oid(values.venueId));
+    if (!venue) throw notFound('VENUE_NOT_FOUND', 'Venue was not found');
     return (
       await input.repository.listSlots(
         oid(values.courtId),
+        venue.environment,
         date(values.from, 'from'),
         date(values.to, 'to'),
       )
@@ -342,7 +389,21 @@ export function createInventoryService(input: {
           'Slot is held, booked, blocked, or stale',
         );
       }
-      await input.events?.publish({aggregateType:'INVENTORY',aggregateId:updated._id,venueId:oid(values.venueId),eventType:'AVAILABILITY_CHANGED',eventVersion:updated.version,correlationId:values.correlationId,payload:{venueId:values.venueId,courtId:values.courtId,slotId:updated._id.toHexString(),action:'BLOCKED'},now:updated.updated_at});
+      await input.events?.publish({
+        aggregateType: 'INVENTORY',
+        aggregateId: updated._id,
+        venueId: oid(values.venueId),
+        eventType: 'AVAILABILITY_CHANGED',
+        eventVersion: updated.version,
+        correlationId: values.correlationId,
+        payload: {
+          venueId: values.venueId,
+          courtId: values.courtId,
+          slotId: updated._id.toHexString(),
+          action: 'BLOCKED',
+        },
+        now: updated.updated_at,
+      });
       return presentSlot(updated);
     }
     if (
@@ -384,16 +445,19 @@ export function createInventoryService(input: {
       hold_created_at: null,
       source: 'OWNER_DASHBOARD',
       booking_id: null,
-      audit_history: [{
-        event_type: 'SLOT_BLOCKED',
-        actor_type: 'VENUE_OWNER',
-        actor_id: oid(values.actorOwnerId),
-        previous_status: null,
-        new_status: 'BLOCKED',
-        reason,
-        correlation_id: values.correlationId,
-        occurred_at: timestamp,
-      }],
+      consumed_by_slot_id: null,
+      audit_history: [
+        {
+          event_type: 'SLOT_BLOCKED',
+          actor_type: 'VENUE_OWNER',
+          actor_id: oid(values.actorOwnerId),
+          previous_status: null,
+          new_status: 'BLOCKED',
+          reason,
+          correlation_id: values.correlationId,
+          occurred_at: timestamp,
+        },
+      ],
       version: 1,
       created_at: timestamp,
       updated_at: timestamp,
@@ -414,22 +478,53 @@ export function createInventoryService(input: {
           'Court inventory changed concurrently',
         );
       }
-      const overlap = await input.repository.findOverlap(
-        court._id,
-        venue.environment,
-        startsAt,
-        endsAt,
-        session,
-      );
-      if (overlap) {
+      const overlap = classifyOverlap({
+        slots: await input.repository.findOverlappingSlots({
+          courtId: court._id,
+          environment: venue.environment,
+          startsAt,
+          endsAt,
+          session,
+        }),
+        now: timestamp,
+        perspective: 'OPEN_TIME',
+      });
+      if (overlap.blocking.length > 0) {
         throw conflict(
           'INVENTORY_OVERLAP',
           'The interval overlaps unavailable inventory',
         );
       }
       await input.repository.insertOpenBlock(slot, session);
+      // Same transaction: the grid underneath this block stops being sellable
+      // the instant the open-time slot exists.
+      await input.repository.consumeFixedSlots({
+        courtId: court._id,
+        environment: venue.environment,
+        consumerSlotId: slot._id,
+        fixedSlotIds: overlap.consumable.map((value) => value._id),
+        staleConsumerIds: overlap.stale.map((value) => value._id),
+        actorOwnerId: oid(values.actorOwnerId),
+        correlationId: values.correlationId,
+        now: timestamp,
+        session,
+      });
     });
-    await input.events?.publish({aggregateType:'INVENTORY',aggregateId:slot._id,venueId:venue._id,eventType:'AVAILABILITY_CHANGED',eventVersion:slot.version,correlationId:values.correlationId,payload:{venueId:values.venueId,courtId:values.courtId,slotId:slot._id.toHexString(),action:'BLOCKED'},now:timestamp});
+    await input.events?.publish({
+      aggregateType: 'INVENTORY',
+      aggregateId: slot._id,
+      venueId: venue._id,
+      eventType: 'AVAILABILITY_CHANGED',
+      eventVersion: slot.version,
+      correlationId: values.correlationId,
+      payload: {
+        venueId: values.venueId,
+        courtId: values.courtId,
+        slotId: slot._id.toHexString(),
+        action: 'BLOCKED',
+      },
+      now: timestamp,
+    });
     return presentSlot(slot);
   }
 
@@ -452,11 +547,27 @@ export function createInventoryService(input: {
         slotId: slot._id,
         courtId: slot.court_id,
         expectedVersion: values.expectedVersion,
+        actorOwnerId: oid(values.actorOwnerId),
+        correlationId: values.correlationId,
       });
       if (!deleted) {
         throw conflict('SLOT_VERSION_CONFLICT', 'Slot changed concurrently');
       }
-      await input.events?.publish({aggregateType:'INVENTORY',aggregateId:slot._id,venueId:oid(values.venueId),eventType:'AVAILABILITY_CHANGED',eventVersion:slot.version+1,correlationId:values.correlationId,payload:{venueId:values.venueId,courtId:values.courtId,slotId:slot._id.toHexString(),action:'RELEASED'},now:now()});
+      await input.events?.publish({
+        aggregateType: 'INVENTORY',
+        aggregateId: slot._id,
+        venueId: oid(values.venueId),
+        eventType: 'AVAILABILITY_CHANGED',
+        eventVersion: slot.version + 1,
+        correlationId: values.correlationId,
+        payload: {
+          venueId: values.venueId,
+          courtId: values.courtId,
+          slotId: slot._id.toHexString(),
+          action: 'RELEASED',
+        },
+        now: now(),
+      });
       return;
     }
     const updated = await input.repository.updateFixedSlot({
@@ -473,32 +584,52 @@ export function createInventoryService(input: {
     if (!updated) {
       throw conflict('SLOT_VERSION_CONFLICT', 'Slot changed concurrently');
     }
-    await input.events?.publish({aggregateType:'INVENTORY',aggregateId:updated._id,venueId:oid(values.venueId),eventType:'AVAILABILITY_CHANGED',eventVersion:updated.version,correlationId:values.correlationId,payload:{venueId:values.venueId,courtId:values.courtId,slotId:updated._id.toHexString(),action:'RELEASED'},now:updated.updated_at});
+    await input.events?.publish({
+      aggregateType: 'INVENTORY',
+      aggregateId: updated._id,
+      venueId: oid(values.venueId),
+      eventType: 'AVAILABILITY_CHANGED',
+      eventVersion: updated.version,
+      correlationId: values.correlationId,
+      payload: {
+        venueId: values.venueId,
+        courtId: values.courtId,
+        slotId: updated._id.toHexString(),
+        action: 'RELEASED',
+      },
+      now: updated.updated_at,
+    });
     return presentSlot(updated);
   }
 
   async function searchAvailability(
     values: Parameters<InventoryService['searchAvailability']>[0],
   ) {
+    const timestamp = now();
     const inventory = await input.repository.listSlots(
       oid(values.courtId),
+      values.environment,
       values.from,
       values.to,
     );
     return inventory
-      .filter(
-        (slot) =>
-          slot.status === 'AVAILABLE' &&
-          !inventory.some(
-            (candidate) =>
-              !candidate._id.equals(slot._id) &&
-              ['HELD', 'BOOKED', 'BLOCKED', 'UNAVAILABLE'].includes(
-                candidate.status,
-              ) &&
-              candidate.starts_at < slot.ends_at &&
-              candidate.ends_at > slot.starts_at,
-          ),
-      )
+      .filter((slot) => {
+        if (slot.status !== 'AVAILABLE') return false;
+        const overlapping = inventory.filter(
+          (candidate) =>
+            !candidate._id.equals(slot._id) &&
+            candidate.starts_at < slot.ends_at &&
+            candidate.ends_at > slot.starts_at,
+        );
+        return (
+          classifyOverlap({
+            slots: overlapping,
+            now: timestamp,
+            perspective:
+              slot.booking_type === 'FIXED_SLOT' ? 'FIXED_SLOT' : 'OPEN_TIME',
+          }).blocking.length === 0
+        );
+      })
       .map(presentSlot);
   }
 
@@ -527,7 +658,7 @@ function pricingDocument(
         input.dayOfWeek > 7)) ||
     (input.startTime != null && !time(input.startTime)) ||
     (input.endTime != null && !time(input.endTime)) ||
-    ((input.startTime === null) !== (input.endTime === null)) ||
+    (input.startTime === null) !== (input.endTime === null) ||
     (input.startTime != null &&
       input.endTime != null &&
       input.startTime >= input.endTime) ||
@@ -539,9 +670,7 @@ function pricingDocument(
     throw invalid('INVALID_PRICING_RULE', 'Pricing rule is invalid');
   }
   const from = date(input.effectiveFrom, 'effectiveFrom');
-  const to = input.effectiveTo
-    ? date(input.effectiveTo, 'effectiveTo')
-    : null;
+  const to = input.effectiveTo ? date(input.effectiveTo, 'effectiveTo') : null;
   if (to && to <= from) {
     throw invalid(
       'INVALID_PRICING_EFFECTIVE_RANGE',
@@ -601,9 +730,7 @@ function dateRange(from: string, to: string, maxDays: number): string[] {
     throw invalid('INVALID_DATE_RANGE', `Date range must be 1-${maxDays} days`);
   }
   return Array.from({ length: count }, (_, index) =>
-    new Date(start.getTime() + index * 86_400_000)
-      .toISOString()
-      .slice(0, 10),
+    new Date(start.getTime() + index * 86_400_000).toISOString().slice(0, 10),
   );
 }
 
@@ -612,7 +739,10 @@ function parseDateOnly(value: string): Date {
     throw invalid('INVALID_DATE', 'Date must use YYYY-MM-DD');
   }
   const result = new Date(`${value}T00:00:00.000Z`);
-  if (Number.isNaN(result.getTime()) || result.toISOString().slice(0, 10) !== value) {
+  if (
+    Number.isNaN(result.getTime()) ||
+    result.toISOString().slice(0, 10) !== value
+  ) {
     throw invalid('INVALID_DATE', 'Date is invalid');
   }
   return result;
@@ -706,12 +836,14 @@ function presentSlot(value: SlotDocument) {
 }
 
 function oid(value: string): ObjectId {
-  if (!ObjectId.isValid(value)) throw invalid('INVALID_ID', 'Identifier is invalid');
+  if (!ObjectId.isValid(value))
+    throw invalid('INVALID_ID', 'Identifier is invalid');
   return new ObjectId(value);
 }
 function date(value: string, field: string): Date {
   const result = new Date(value);
-  if (Number.isNaN(result.getTime())) throw invalid('INVALID_DATE', `${field} is invalid`);
+  if (Number.isNaN(result.getTime()))
+    throw invalid('INVALID_DATE', `${field} is invalid`);
   return result;
 }
 function time(value: string): boolean {

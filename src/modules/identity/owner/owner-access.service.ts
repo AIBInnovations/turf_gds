@@ -3,10 +3,7 @@ import { ObjectId } from 'mongodb';
 import { hashSessionToken } from '../../../shared/auth/session-token.js';
 import { AppError } from '../../../shared/errors/app-error.js';
 import type { IdentityService } from './owner-auth.service.js';
-import type {
-  VenueMembershipRole,
-  VenuePermission,
-} from './owner.types.js';
+import type { VenueMembershipRole, VenuePermission } from './owner.types.js';
 import type { OwnerAccessRepository } from './owner-access.repository.js';
 
 export interface OwnerAccessService {
@@ -45,13 +42,15 @@ export interface OwnerAccessService {
   listMembers(
     actingOwnerId: string,
     venueId: string,
-  ): Promise<Array<{
-    ownerId: string;
-    legalName: string;
-    email: string;
-    role: VenueMembershipRole;
-    status: 'ACTIVE';
-  }>>;
+  ): Promise<
+    Array<{
+      ownerId: string;
+      legalName: string;
+      email: string;
+      role: VenueMembershipRole;
+      status: 'ACTIVE';
+    }>
+  >;
   addMember(input: {
     actingOwnerId: string;
     venueId: string;
@@ -121,9 +120,7 @@ export function createOwnerAccessService(input: {
         id: membership._id.toHexString(),
         venueId: membership.venue_id.toHexString(),
         role: membership.role,
-        permissions: await input.repository.listPermissions(
-          membership.role,
-        ),
+        permissions: await input.repository.listPermissions(membership.role),
       })),
     );
 
@@ -152,9 +149,7 @@ export function createOwnerAccessService(input: {
       throw permissionDenied();
     }
 
-    const permissions = await input.repository.listPermissions(
-      membership.role,
-    );
+    const permissions = await input.repository.listPermissions(membership.role);
 
     if (!permissions.includes(permission)) {
       throw permissionDenied();
@@ -243,20 +238,14 @@ export function createOwnerAccessService(input: {
     actingOwnerId: string,
     venueId: string,
   ): ReturnType<OwnerAccessService['listMembers']> {
-    await requirePermission(
-      actingOwnerId,
-      venueId,
-      'MANAGE_MEMBERS',
-    );
+    await requirePermission(actingOwnerId, venueId, 'MANAGE_MEMBERS');
 
     const memberships = await input.repository.listVenueMemberships(
       toObjectId(venueId, permissionDenied),
     );
     const members = await Promise.all(
       memberships.map(async (membership) => {
-        const owner = await input.repository.findOwnerById(
-          membership.owner_id,
-        );
+        const owner = await input.repository.findOwnerById(membership.owner_id);
 
         if (!owner) {
           throw new AppError({
@@ -296,10 +285,7 @@ export function createOwnerAccessService(input: {
       });
     }
 
-    const memberOwnerId = toObjectId(
-      values.memberOwnerId,
-      ownerNotFound,
-    );
+    const memberOwnerId = toObjectId(values.memberOwnerId, ownerNotFound);
     const venueId = toObjectId(values.venueId, permissionDenied);
     const membership = await input.repository.findMembership(
       memberOwnerId,
@@ -341,10 +327,7 @@ export function createOwnerAccessService(input: {
   };
 }
 
-function toObjectId(
-  value: string,
-  errorFactory: () => AppError,
-): ObjectId {
+function toObjectId(value: string, errorFactory: () => AppError): ObjectId {
   if (!ObjectId.isValid(value)) {
     throw errorFactory();
   }

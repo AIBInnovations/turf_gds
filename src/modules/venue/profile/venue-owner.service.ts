@@ -3,6 +3,7 @@ import { ObjectId } from 'mongodb';
 import type { OwnerAccessService } from '../../identity/owner/owner-access.service.js';
 import { AppError } from '../../../shared/errors/app-error.js';
 import type { MediaStorage } from '../../../shared/media/cloudinary-media-storage.js';
+import { inspectUploadedFile } from '../../../shared/media/file-security.js';
 import type { VenueRepository } from './venue.repository.js';
 import type { OwnerEventPublisher } from '../../../shared/communications/owner-event-publisher.js';
 import type {
@@ -76,9 +77,7 @@ export function createVenueOwnerService(input: {
       values.actorOwnerId,
       values.venueId,
     );
-    const venue = await input.repository.findById(
-      toObjectId(values.venueId),
-    );
+    const venue = await input.repository.findById(toObjectId(values.venueId));
 
     if (!venue) {
       throw venueNotFound();
@@ -118,7 +117,16 @@ export function createVenueOwnerService(input: {
       throw versionConflict(current?.version ?? existing.version);
     }
 
-    await input.events?.publish({aggregateType:'VENUE',aggregateId:updated._id,venueId:updated._id,eventType:'VENUE_UPDATED',eventVersion:updated.version,correlationId:values.correlationId,payload:{venueId:values.venueId,changedFields},now:updated.updated_at});
+    await input.events?.publish({
+      aggregateType: 'VENUE',
+      aggregateId: updated._id,
+      venueId: updated._id,
+      eventType: 'VENUE_UPDATED',
+      eventVersion: updated.version,
+      correlationId: values.correlationId,
+      payload: { venueId: values.venueId, changedFields },
+      now: updated.updated_at,
+    });
     return presentVenue(updated);
   }
 
@@ -153,6 +161,7 @@ export function createVenueOwnerService(input: {
         statusCode: 400,
       });
     }
+    inspectUploadedFile(values.buffer, mimeType, [...VENUE_MEDIA_MIME_TYPES]);
 
     const uploaded = await input.mediaStorage.uploadBuffer(values.buffer, {
       access: 'public',
@@ -189,23 +198,26 @@ export function createVenueOwnerService(input: {
 
       if (!updated) {
         const current = await input.repository.findById(venueId);
-        if (
-          current &&
-          current.media.length >= VENUE_MEDIA_MAX_ITEMS
-        ) {
+        if (current && current.media.length >= VENUE_MEDIA_MAX_ITEMS) {
           throw venueMediaLimitReached();
         }
         throw versionConflict(current?.version ?? existing.version);
       }
 
-      await input.events?.publish({aggregateType:'VENUE',aggregateId:updated._id,venueId:updated._id,eventType:'VENUE_UPDATED',eventVersion:updated.version,correlationId:values.correlationId,payload:{venueId:values.venueId,changedFields:['media']},now:updated.updated_at});
+      await input.events?.publish({
+        aggregateType: 'VENUE',
+        aggregateId: updated._id,
+        venueId: updated._id,
+        eventType: 'VENUE_UPDATED',
+        eventVersion: updated.version,
+        correlationId: values.correlationId,
+        payload: { venueId: values.venueId, changedFields: ['media'] },
+        now: updated.updated_at,
+      });
       return presentVenue(updated);
     } catch (error) {
       await input.mediaStorage
-        .delete(
-          uploaded.publicId,
-          toDeletableResource(uploaded.resourceType),
-        )
+        .delete(uploaded.publicId, toDeletableResource(uploaded.resourceType))
         .catch(() => undefined);
       throw error;
     }
@@ -232,10 +244,7 @@ function normalizeProfileChanges(input: UpdateVenueProfileInput): {
     });
   }
 
-  if (
-    (input.latitude === undefined) !==
-    (input.longitude === undefined)
-  ) {
+  if ((input.latitude === undefined) !== (input.longitude === undefined)) {
     throw new AppError({
       code: 'VENUE_COORDINATES_REQUIRED',
       message: 'Latitude and longitude must be supplied together',
@@ -268,12 +277,8 @@ function normalizeProfileChanges(input: UpdateVenueProfileInput): {
         : {}),
       city: nonBlank(input.address.city, 'address.city'),
       state: nonBlank(input.address.state, 'address.state'),
-      postal_code: nonBlank(
-        input.address.postalCode,
-        'address.postalCode',
-      ),
-      country: nonBlank(input.address.country, 'address.country')
-        .toUpperCase(),
+      postal_code: nonBlank(input.address.postalCode, 'address.postalCode'),
+      country: nonBlank(input.address.country, 'address.country').toUpperCase(),
     };
     changedFields.push('address');
   }
@@ -394,8 +399,6 @@ function venueMediaLimitReached(): AppError {
   });
 }
 
-function toDeletableResource(
-  value: string,
-): 'image' | 'video' | 'raw' {
+function toDeletableResource(value: string): 'image' | 'video' | 'raw' {
   return value === 'video' || value === 'raw' ? value : 'image';
 }

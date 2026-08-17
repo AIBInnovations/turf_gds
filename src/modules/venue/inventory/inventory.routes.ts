@@ -22,9 +22,10 @@ const dateTime = {
   format: 'date-time',
 } as const;
 
-const inventoryRoutes: FastifyPluginAsync<
-  InventoryRoutesOptions
-> = async (fastify, options) => {
+const inventoryRoutes: FastifyPluginAsync<InventoryRoutesOptions> = async (
+  fastify,
+  options,
+) => {
   const authenticate = createOwnerAuthenticationHook(
     options.ownerAccessService,
   );
@@ -251,12 +252,9 @@ const inventoryRoutes: FastifyPluginAsync<
         reason: request.body.reason,
         correlationId: request.id,
       });
-      return result
-        ? reply.send(result)
-        : reply.status(204).send();
+      return result ? reply.send(result) : reply.status(204).send();
     },
   );
-
 };
 
 interface PricingBody {
@@ -289,10 +287,7 @@ function pricingBodySchema(required: boolean) {
     properties: {
       name: text(2, 120),
       dayOfWeek: {
-        anyOf: [
-          { type: 'integer', minimum: 1, maximum: 7 },
-          { type: 'null' },
-        ],
+        anyOf: [{ type: 'integer', minimum: 1, maximum: 7 }, { type: 'null' }],
       },
       startTime: { anyOf: [timeSchema(), { type: 'null' }] },
       endTime: { anyOf: [timeSchema(), { type: 'null' }] },

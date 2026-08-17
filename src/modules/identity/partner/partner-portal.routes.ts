@@ -7,6 +7,7 @@ import {
 import type { PartnerAccessService } from './partner-access.service.js';
 import type { PartnerPortalService } from './partner-portal.service.js';
 import { createSimplePdf } from '../../../shared/documents/simple-pdf.js';
+import type { RouteDocs } from '../../../shared/openapi/route-docs.js';
 
 export interface PartnerPortalRoutesOptions {
   service: PartnerPortalService;
@@ -14,6 +15,40 @@ export interface PartnerPortalRoutesOptions {
 }
 
 const objectId = { type: 'string', pattern: '^[a-fA-F0-9]{24}$' } as const;
+
+/** Shared RouteDocs shape for every Partner HMAC read endpoint. */
+function partnerDocs(values: {
+  summary: string;
+  scopes: readonly string[];
+  description?: string;
+  responses?: RouteDocs['responses'];
+}): RouteDocs {
+  return {
+    tag: 'Partner',
+    summary: values.summary,
+    ...(values.description ? { description: values.description } : {}),
+    security: ['partnerHmac'],
+    scopes: values.scopes,
+    rateLimited: true,
+    internal: false,
+    responses: values.responses ?? {
+      '200': { description: 'Successful response' },
+      '401': { description: 'Partner authentication failed' },
+      '403': { description: 'The required Partner scope is missing' },
+      '429': { description: 'Rate limit exceeded' },
+    },
+  };
+}
+
+const PAGINATION_NOTE =
+  'Cursor-paginated. Cursors are opaque — do not parse or construct them. ' +
+  'Rows are returned in a strict total order, so within one pagination run ' +
+  'over unchanged inventory no row is repeated or skipped.';
+
+const TRUNCATION_NOTE =
+  '`truncated: true` means this page reached its server-side scan budget ' +
+  'before covering the whole radius. `nextCursor` is then non-null and the ' +
+  'page may hold fewer than `limit` items — keep paging.';
 const cursorPaging = {
   cursor: { type: 'string', minLength: 1, maxLength: 500 },
   limit: { type: 'integer', minimum: 1, maximum: 100 },
@@ -23,386 +58,601 @@ const dateFilters = {
   to: { type: 'string', format: 'date-time' },
 } as const;
 
-const partnerPortalRoutes: FastifyPluginAsync<PartnerPortalRoutesOptions> =
-  async (fastify, options) => {
-    const authenticate = createPartnerAuthenticationHook(
-      options.partnerAccessService,
-    );
-    const startedAt = new WeakMap<object, number>();
-    fastify.addHook('onRequest', async (request) => {
-      startedAt.set(request, performance.now());
-    });
-    fastify.addHook('onResponse', async (request, reply) => {
-      const identity = request.identity;
-      if (identity?.actorType !== 'PARTNER') return;
-      await options.partnerAccessService.recordApiUsage({
+const partnerPortalRoutes: FastifyPluginAsync<
+  PartnerPortalRoutesOptions
+> = async (fastify, options) => {
+  const authenticate = createPartnerAuthenticationHook(
+    options.partnerAccessService,
+  );
+  const startedAt = new WeakMap<object, number>();
+  fastify.addHook('onRequest', async (request) => {
+    startedAt.set(request, performance.now());
+  });
+  fastify.addHook('onResponse', async (request, reply) => {
+    const identity = request.identity;
+    if (identity?.actorType !== 'PARTNER') return;
+    await options.partnerAccessService
+      .recordApiUsage({
         partnerId: identity.partnerId,
         environment: identity.environment,
         statusCode: reply.statusCode,
         latencyMs: performance.now() - (startedAt.get(request) ?? 0),
         rateLimited: reply.statusCode === 429,
-      }).catch((error: unknown) => {
+      })
+      .catch((error: unknown) => {
         request.log.error({ err: error }, 'Failed to record API usage');
       });
-    });
+  });
 
-    fastify.get<{
-      Querystring: {
-        latitude: number;
-        longitude: number;
-        radiusMeters: number;
-        sportType:
-          | 'FOOTBALL' | 'CRICKET' | 'BADMINTON' | 'TENNIS'
-          | 'PICKLEBALL' | 'MULTI_SPORT' | 'OTHER';
-        startsAt: string;
-        endsAt: string;
-        bookingType?: 'OPEN_TIME' | 'FIXED_SLOT';
-        cursor?: string;
-        limit?: number;
-      };
-    }>(
-      '/availability',
-      {
-        config: { rawBody: true },
-        preHandler: authenticate,
-        schema: {
-          querystring: {
-            type: 'object',
-            additionalProperties: false,
-            required: [
-              'latitude', 'longitude', 'radiusMeters', 'sportType',
-              'startsAt', 'endsAt',
-            ],
-            properties: {
-              latitude: { type: 'number', minimum: -90, maximum: 90 },
-              longitude: { type: 'number', minimum: -180, maximum: 180 },
-              radiusMeters: {
-                type: 'integer',
-                minimum: 100,
-                maximum: 100_000,
-              },
-              sportType: {
-                enum: [
-                  'FOOTBALL', 'CRICKET', 'BADMINTON', 'TENNIS',
-                  'PICKLEBALL', 'MULTI_SPORT', 'OTHER',
-                ],
-              },
-              startsAt: { type: 'string', format: 'date-time' },
-              endsAt: { type: 'string', format: 'date-time' },
-              bookingType: { enum: ['OPEN_TIME', 'FIXED_SLOT'] },
-              ...cursorPaging,
+  fastify.get<{
+    Querystring: {
+      latitude: number;
+      longitude: number;
+      radiusMeters: number;
+      sportType:
+        | 'FOOTBALL'
+        | 'CRICKET'
+        | 'BADMINTON'
+        | 'TENNIS'
+        | 'PICKLEBALL'
+        | 'MULTI_SPORT'
+        | 'OTHER';
+      startsAt: string;
+      endsAt: string;
+      bookingType?: 'OPEN_TIME' | 'FIXED_SLOT';
+      cursor?: string;
+      limit?: number;
+    };
+  }>(
+    '/availability',
+    {
+      config: {
+        rawBody: true,
+        docs: partnerDocs({
+          summary: 'Search bookable inventory near a point',
+          scopes: ['availability:read'],
+          description:
+            `${PAGINATION_NOTE}\n\n${TRUNCATION_NOTE}\n\nOnly ` +
+            'venues covered by an in-effect contract for the calling ' +
+            'Partner are returned. Ordering is by distance, then court, ' +
+            'then start time, then booking type, then availability id.',
+        }),
+      },
+      preHandler: authenticate,
+      schema: {
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          required: [
+            'latitude',
+            'longitude',
+            'radiusMeters',
+            'sportType',
+            'startsAt',
+            'endsAt',
+          ],
+          properties: {
+            latitude: { type: 'number', minimum: -90, maximum: 90 },
+            longitude: { type: 'number', minimum: -180, maximum: 180 },
+            radiusMeters: {
+              type: 'integer',
+              minimum: 100,
+              maximum: 100_000,
             },
-          },
-        },
-      },
-      async (request) => {
-        const partner = requirePartnerScope(request, 'availability:read');
-        return options.service.searchAvailability({
-          ...request.query,
-          partnerId: partner.partnerId,
-          environment: partner.environment,
-        });
-      },
-    );
-
-    fastify.get<{
-      Querystring: {
-        from?: string; to?: string; cursor?: string; limit?: number;
-      };
-    }>(
-      '/partners/me/usage',
-      {
-        config: { rawBody: true },
-        preHandler: authenticate,
-        schema: {
-          querystring: {
-            type: 'object',
-            additionalProperties: false,
-            properties: { ...dateFilters, ...cursorPaging },
-          },
-        },
-      },
-      async (request) => {
-        const partner = requirePartnerScope(request, 'reports:read');
-        return options.service.listUsage({
-          ...request.query,
-          partnerId: partner.partnerId,
-          environment: partner.environment,
-        });
-      },
-    );
-
-    fastify.get<{
-      Querystring: {
-        from?: string; to?: string;
-        status?: 'CONFIRMED' | 'CANCELLED' | 'REFUND_PENDING' | 'REFUNDED' |
-          'DISPUTED';
-        cursor?: string; limit?: number;
-      };
-    }>(
-      '/partners/me/bookings',
-      {
-        config: { rawBody: true },
-        preHandler: authenticate,
-        schema: {
-          querystring: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              ...dateFilters,
-              status: {
-                enum: [
-                  'CONFIRMED', 'CANCELLED', 'REFUND_PENDING', 'REFUNDED',
-                  'DISPUTED',
-                ],
-              },
-              ...cursorPaging,
+            sportType: {
+              enum: [
+                'FOOTBALL',
+                'CRICKET',
+                'BADMINTON',
+                'TENNIS',
+                'PICKLEBALL',
+                'MULTI_SPORT',
+                'OTHER',
+              ],
             },
+            startsAt: { type: 'string', format: 'date-time' },
+            endsAt: { type: 'string', format: 'date-time' },
+            bookingType: { enum: ['OPEN_TIME', 'FIXED_SLOT'] },
+            ...cursorPaging,
           },
         },
       },
-      async (request) => {
-        const partner = requirePartnerScope(request, 'reports:read');
-        return options.service.listBookings({
-          ...request.query,
-          partnerId: partner.partnerId,
-          environment: partner.environment,
-        });
-      },
-    );
+    },
+    async (request) => {
+      const partner = requirePartnerScope(request, 'availability:read');
+      return options.service.searchAvailability({
+        ...request.query,
+        partnerId: partner.partnerId,
+        environment: partner.environment,
+      });
+    },
+  );
 
-    fastify.get<{
-      Querystring: {
-        from?: string; to?: string;
-        status?: 'DRAFT' | 'PENDING_FUNDS' | 'RECONCILING' | 'RECONCILED' |
-          'COMPLETED' | 'FAILED' | 'REVERSED';
-        cursor?: string; limit?: number;
-      };
-    }>(
-      '/partners/me/settlements',
-      {
-        config: { rawBody: true },
-        preHandler: authenticate,
-        schema: {
-          querystring: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              ...dateFilters,
-              status: {
-                enum: [
-                  'DRAFT', 'PENDING_FUNDS', 'RECONCILING', 'RECONCILED',
-                  'COMPLETED', 'FAILED', 'REVERSED',
-                ],
-              },
-              ...cursorPaging,
+  fastify.get<{
+    Querystring: {
+      from?: string;
+      to?: string;
+      cursor?: string;
+      limit?: number;
+    };
+  }>(
+    '/partners/me/usage',
+    {
+      config: {
+        rawBody: true,
+        docs: partnerDocs({
+          summary: 'List daily API usage',
+          scopes: ['reports:read'],
+        }),
+      },
+      preHandler: authenticate,
+      schema: {
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { ...dateFilters, ...cursorPaging },
+        },
+      },
+    },
+    async (request) => {
+      const partner = requirePartnerScope(request, 'reports:read');
+      return options.service.listUsage({
+        ...request.query,
+        partnerId: partner.partnerId,
+        environment: partner.environment,
+      });
+    },
+  );
+
+  fastify.get<{
+    Querystring: {
+      from?: string;
+      to?: string;
+      status?:
+        'CONFIRMED' | 'CANCELLED' | 'REFUND_PENDING' | 'REFUNDED' | 'DISPUTED';
+      cursor?: string;
+      limit?: number;
+    };
+  }>(
+    '/partners/me/bookings',
+    {
+      config: {
+        rawBody: true,
+        docs: partnerDocs({
+          summary: 'List bookings made by this Partner',
+          scopes: ['reports:read'],
+          description: PAGINATION_NOTE,
+        }),
+      },
+      preHandler: authenticate,
+      schema: {
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            ...dateFilters,
+            status: {
+              enum: [
+                'CONFIRMED',
+                'CANCELLED',
+                'REFUND_PENDING',
+                'REFUNDED',
+                'DISPUTED',
+              ],
             },
+            ...cursorPaging,
           },
         },
       },
-      async (request) => {
-        const partner = requirePartnerScope(request, 'finance:read');
-        return options.service.listSettlements({
-          ...request.query,
-          partnerId: partner.partnerId,
-          environment: partner.environment,
-        });
-      },
-    );
+    },
+    async (request) => {
+      const partner = requirePartnerScope(request, 'reports:read');
+      return options.service.listBookings({
+        ...request.query,
+        partnerId: partner.partnerId,
+        environment: partner.environment,
+      });
+    },
+  );
 
-    fastify.get<{ Params: { settlementId: string } }>(
-      '/partners/me/settlements/:settlementId',
-      {
-        config: { rawBody: true },
-        preHandler: authenticate,
-        schema: {
-          params: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['settlementId'],
-            properties: { settlementId: objectId },
-          },
-        },
+  fastify.get<{
+    Querystring: {
+      from?: string;
+      to?: string;
+      status?:
+        | 'DRAFT'
+        | 'PENDING_FUNDS'
+        | 'RECONCILING'
+        | 'RECONCILED'
+        | 'COMPLETED'
+        | 'FAILED'
+        | 'REVERSED';
+      cursor?: string;
+      limit?: number;
+    };
+  }>(
+    '/partners/me/settlements',
+    {
+      config: {
+        rawBody: true,
+        docs: partnerDocs({
+          summary: 'List settlements owed by this Partner',
+          scopes: ['finance:read'],
+          description: PAGINATION_NOTE,
+        }),
       },
-      async (request) => {
-        const partner = requirePartnerScope(request, 'finance:read');
-        return options.service.getSettlement({
-          settlementId: request.params.settlementId,
-          partnerId: partner.partnerId,
-          environment: partner.environment,
-        });
-      },
-    );
-
-    fastify.get<{Params:{settlementId:string}}>('/partners/me/settlements/:settlementId/statement.pdf',{config:{rawBody:true},preHandler:authenticate,schema:{params:{type:'object',additionalProperties:false,required:['settlementId'],properties:{settlementId:objectId}}}},async(request,reply)=>{const partner=requirePartnerScope(request,'finance:read');const value=await options.service.getSettlement({settlementId:request.params.settlementId,partnerId:partner.partnerId,environment:partner.environment});return reply.header('content-type','application/pdf').header('content-disposition',`attachment; filename="partner-settlement-${request.params.settlementId}.pdf"`).send(createSimplePdf('Partner Settlement Statement',documentLines(value)));});
-
-    fastify.get<{
-      Querystring: { cursor?: string; limit?: number };
-    }>(
-      '/partners/me/invoices',
-      {
-        config: { rawBody: true },
-        preHandler: authenticate,
-        schema: {
-          querystring: {
-            type: 'object',
-            additionalProperties: false,
-            properties: cursorPaging,
-          },
-        },
-      },
-      async (request) => {
-        const partner = requirePartnerScope(request, 'finance:read');
-        return options.service.listInvoices({
-          ...request.query,
-          partnerId: partner.partnerId,
-          environment: partner.environment,
-        });
-      },
-    );
-
-    fastify.get<{ Params: { bookingId: string } }>(
-      '/partners/me/bookings/:bookingId',
-      {
-        config: { rawBody: true },
-        preHandler: authenticate,
-        schema: {
-          params: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['bookingId'],
-            properties: { bookingId: objectId },
-          },
-        },
-      },
-      async (request) => {
-        const partner = requirePartnerScope(request, 'reports:read');
-        return options.service.getBooking({
-          bookingId: request.params.bookingId,
-          partnerId: partner.partnerId,
-          environment: partner.environment,
-        });
-      },
-    );
-
-    fastify.get<{
-      Querystring: {
-        latitude: number;
-        longitude: number;
-        radiusMeters: number;
-        sportType:
-          | 'FOOTBALL' | 'CRICKET' | 'BADMINTON' | 'TENNIS'
-          | 'PICKLEBALL' | 'MULTI_SPORT' | 'OTHER';
-        cursor?: string;
-        limit?: number;
-      };
-    }>(
-      '/venues/search',
-      {
-        config: { rawBody: true },
-        preHandler: authenticate,
-        schema: {
-          querystring: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['latitude', 'longitude', 'radiusMeters', 'sportType'],
-            properties: {
-              latitude: { type: 'number', minimum: -90, maximum: 90 },
-              longitude: { type: 'number', minimum: -180, maximum: 180 },
-              radiusMeters: { type: 'integer', minimum: 100, maximum: 100_000 },
-              sportType: {
-                enum: [
-                  'FOOTBALL', 'CRICKET', 'BADMINTON', 'TENNIS',
-                  'PICKLEBALL', 'MULTI_SPORT', 'OTHER',
-                ],
-              },
-              ...cursorPaging,
+      preHandler: authenticate,
+      schema: {
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            ...dateFilters,
+            status: {
+              enum: [
+                'DRAFT',
+                'PENDING_FUNDS',
+                'RECONCILING',
+                'RECONCILED',
+                'COMPLETED',
+                'FAILED',
+                'REVERSED',
+              ],
             },
+            ...cursorPaging,
           },
         },
       },
-      async (request) => {
-        const partner = requirePartnerScope(request, 'availability:read');
-        return options.service.searchVenues({
-          ...request.query,
-          partnerId: partner.partnerId,
-          environment: partner.environment,
-        });
-      },
-    );
+    },
+    async (request) => {
+      const partner = requirePartnerScope(request, 'finance:read');
+      return options.service.listSettlements({
+        ...request.query,
+        partnerId: partner.partnerId,
+        environment: partner.environment,
+      });
+    },
+  );
 
-    fastify.get<{
-      Params: { venueId: string };
-      Querystring: {
-        startsAt: string;
-        endsAt: string;
-        bookingType?: 'OPEN_TIME' | 'FIXED_SLOT';
-        cursor?: string;
-        limit?: number;
-      };
-    }>(
-      '/venues/:venueId/availability',
-      {
-        config: { rawBody: true },
-        preHandler: authenticate,
-        schema: {
-          params: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['venueId'],
-            properties: { venueId: objectId },
+  fastify.get<{
+    Params: { settlementId: string };
+    Querystring: { allocationCursor?: string; allocationLimit?: number };
+  }>(
+    '/partners/me/settlements/:settlementId',
+    {
+      config: { rawBody: true },
+      preHandler: authenticate,
+      schema: {
+        params: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['settlementId'],
+          properties: { settlementId: objectId },
+        },
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            allocationCursor: cursorPaging.cursor,
+            allocationLimit: cursorPaging.limit,
           },
-          querystring: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['startsAt', 'endsAt'],
-            properties: {
-              startsAt: { type: 'string', format: 'date-time' },
-              endsAt: { type: 'string', format: 'date-time' },
-              bookingType: { enum: ['OPEN_TIME', 'FIXED_SLOT'] },
-              ...cursorPaging,
+        },
+      },
+    },
+    async (request) => {
+      const partner = requirePartnerScope(request, 'finance:read');
+      return options.service.getSettlement({
+        settlementId: request.params.settlementId,
+        partnerId: partner.partnerId,
+        environment: partner.environment,
+        ...(request.query.allocationCursor !== undefined
+          ? { allocationCursor: request.query.allocationCursor }
+          : {}),
+        ...(request.query.allocationLimit !== undefined
+          ? { allocationLimit: request.query.allocationLimit }
+          : {}),
+      });
+    },
+  );
+
+  fastify.get<{
+    Params: { settlementId: string };
+    Querystring: { cursor?: string; limit?: number };
+  }>(
+    '/partners/me/settlements/:settlementId/allocations',
+    {
+      config: { rawBody: true },
+      preHandler: authenticate,
+      schema: {
+        params: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['settlementId'],
+          properties: { settlementId: objectId },
+        },
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          properties: cursorPaging,
+        },
+      },
+    },
+    async (request) => {
+      const partner = requirePartnerScope(request, 'finance:read');
+      return options.service.listSettlementAllocations({
+        ...request.query,
+        settlementId: request.params.settlementId,
+        partnerId: partner.partnerId,
+        environment: partner.environment,
+      });
+    },
+  );
+
+  fastify.get<{ Params: { settlementId: string } }>(
+    '/partners/me/settlements/:settlementId/statement.pdf',
+    {
+      config: { rawBody: true },
+      preHandler: authenticate,
+      schema: {
+        params: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['settlementId'],
+          properties: { settlementId: objectId },
+        },
+      },
+    },
+    async (request, reply) => {
+      const partner = requirePartnerScope(request, 'finance:read');
+      const value = await options.service.getSettlement({
+        settlementId: request.params.settlementId,
+        partnerId: partner.partnerId,
+        environment: partner.environment,
+      });
+      return reply
+        .header('content-type', 'application/pdf')
+        .header(
+          'content-disposition',
+          `attachment; filename="partner-settlement-${request.params.settlementId}.pdf"`,
+        )
+        .send(
+          createSimplePdf('Partner Settlement Statement', documentLines(value)),
+        );
+    },
+  );
+
+  fastify.get<{
+    Querystring: { cursor?: string; limit?: number };
+  }>(
+    '/partners/me/invoices',
+    {
+      config: {
+        rawBody: true,
+        docs: partnerDocs({
+          summary: 'List invoices issued to this Partner',
+          scopes: ['finance:read'],
+          description: PAGINATION_NOTE,
+        }),
+      },
+      preHandler: authenticate,
+      schema: {
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          properties: cursorPaging,
+        },
+      },
+    },
+    async (request) => {
+      const partner = requirePartnerScope(request, 'finance:read');
+      return options.service.listInvoices({
+        ...request.query,
+        partnerId: partner.partnerId,
+        environment: partner.environment,
+      });
+    },
+  );
+
+  fastify.get<{ Params: { bookingId: string } }>(
+    '/partners/me/bookings/:bookingId',
+    {
+      config: { rawBody: true },
+      preHandler: authenticate,
+      schema: {
+        params: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['bookingId'],
+          properties: { bookingId: objectId },
+        },
+      },
+    },
+    async (request) => {
+      const partner = requirePartnerScope(request, 'reports:read');
+      return options.service.getBooking({
+        bookingId: request.params.bookingId,
+        partnerId: partner.partnerId,
+        environment: partner.environment,
+      });
+    },
+  );
+
+  fastify.get<{
+    Querystring: {
+      latitude: number;
+      longitude: number;
+      radiusMeters: number;
+      sportType:
+        | 'FOOTBALL'
+        | 'CRICKET'
+        | 'BADMINTON'
+        | 'TENNIS'
+        | 'PICKLEBALL'
+        | 'MULTI_SPORT'
+        | 'OTHER';
+      cursor?: string;
+      limit?: number;
+    };
+  }>(
+    '/venues/search',
+    {
+      config: {
+        rawBody: true,
+        docs: partnerDocs({
+          summary: 'Search contracted venues near a point',
+          scopes: ['availability:read'],
+          description: `${PAGINATION_NOTE}
+
+${TRUNCATION_NOTE}`,
+        }),
+      },
+      preHandler: authenticate,
+      schema: {
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['latitude', 'longitude', 'radiusMeters', 'sportType'],
+          properties: {
+            latitude: { type: 'number', minimum: -90, maximum: 90 },
+            longitude: { type: 'number', minimum: -180, maximum: 180 },
+            radiusMeters: { type: 'integer', minimum: 100, maximum: 100_000 },
+            sportType: {
+              enum: [
+                'FOOTBALL',
+                'CRICKET',
+                'BADMINTON',
+                'TENNIS',
+                'PICKLEBALL',
+                'MULTI_SPORT',
+                'OTHER',
+              ],
             },
+            ...cursorPaging,
           },
         },
       },
-      async (request) => {
-        const partner = requirePartnerScope(request, 'availability:read');
-        return options.service.getVenueAvailability({
-          ...request.query,
-          venueId: request.params.venueId,
-          partnerId: partner.partnerId,
-          environment: partner.environment,
-        });
-      },
-    );
+    },
+    async (request) => {
+      const partner = requirePartnerScope(request, 'availability:read');
+      return options.service.searchVenues({
+        ...request.query,
+        partnerId: partner.partnerId,
+        environment: partner.environment,
+      });
+    },
+  );
 
-    fastify.get<{ Params: { invoiceId: string } }>(
-      '/partners/me/invoices/:invoiceId',
-      {
-        config: { rawBody: true },
-        preHandler: authenticate,
-        schema: {
-          params: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['invoiceId'],
-            properties: { invoiceId: objectId },
+  fastify.get<{
+    Params: { venueId: string };
+    Querystring: {
+      startsAt: string;
+      endsAt: string;
+      bookingType?: 'OPEN_TIME' | 'FIXED_SLOT';
+      cursor?: string;
+      limit?: number;
+    };
+  }>(
+    '/venues/:venueId/availability',
+    {
+      config: { rawBody: true },
+      preHandler: authenticate,
+      schema: {
+        params: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['venueId'],
+          properties: { venueId: objectId },
+        },
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['startsAt', 'endsAt'],
+          properties: {
+            startsAt: { type: 'string', format: 'date-time' },
+            endsAt: { type: 'string', format: 'date-time' },
+            bookingType: { enum: ['OPEN_TIME', 'FIXED_SLOT'] },
+            ...cursorPaging,
           },
         },
       },
-      async (request) => {
-        const partner = requirePartnerScope(request, 'finance:read');
-        return options.service.getInvoice({
-          invoiceId: request.params.invoiceId,
-          partnerId: partner.partnerId,
-          environment: partner.environment,
-        });
+    },
+    async (request) => {
+      const partner = requirePartnerScope(request, 'availability:read');
+      return options.service.getVenueAvailability({
+        ...request.query,
+        venueId: request.params.venueId,
+        partnerId: partner.partnerId,
+        environment: partner.environment,
+      });
+    },
+  );
+
+  fastify.get<{ Params: { invoiceId: string } }>(
+    '/partners/me/invoices/:invoiceId',
+    {
+      config: { rawBody: true },
+      preHandler: authenticate,
+      schema: {
+        params: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['invoiceId'],
+          properties: { invoiceId: objectId },
+        },
       },
-    );
+    },
+    async (request) => {
+      const partner = requirePartnerScope(request, 'finance:read');
+      return options.service.getInvoice({
+        invoiceId: request.params.invoiceId,
+        partnerId: partner.partnerId,
+        environment: partner.environment,
+      });
+    },
+  );
 
-    fastify.get<{Params:{invoiceId:string}}>('/partners/me/invoices/:invoiceId/invoice.pdf',{config:{rawBody:true},preHandler:authenticate,schema:{params:{type:'object',additionalProperties:false,required:['invoiceId'],properties:{invoiceId:objectId}}}},async(request,reply)=>{const partner=requirePartnerScope(request,'finance:read');const value=await options.service.getInvoice({invoiceId:request.params.invoiceId,partnerId:partner.partnerId,environment:partner.environment});return reply.header('content-type','application/pdf').header('content-disposition',`attachment; filename="partner-invoice-${request.params.invoiceId}.pdf"`).send(createSimplePdf('Partner Invoice',documentLines(value)));});
-  };
+  fastify.get<{ Params: { invoiceId: string } }>(
+    '/partners/me/invoices/:invoiceId/invoice.pdf',
+    {
+      config: { rawBody: true },
+      preHandler: authenticate,
+      schema: {
+        params: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['invoiceId'],
+          properties: { invoiceId: objectId },
+        },
+      },
+    },
+    async (request, reply) => {
+      const partner = requirePartnerScope(request, 'finance:read');
+      const value = await options.service.getInvoice({
+        invoiceId: request.params.invoiceId,
+        partnerId: partner.partnerId,
+        environment: partner.environment,
+      });
+      return reply
+        .header('content-type', 'application/pdf')
+        .header(
+          'content-disposition',
+          `attachment; filename="partner-invoice-${request.params.invoiceId}.pdf"`,
+        )
+        .send(createSimplePdf('Partner Invoice', documentLines(value)));
+    },
+  );
+};
 
-function documentLines(value:unknown):string[]{if(!value||typeof value!=='object')return[String(value)];return Object.entries(value as Record<string,unknown>).flatMap(([key,item])=>item===undefined?[]:[`${key}: ${typeof item==='object'?JSON.stringify(item):String(item)}`]);}
+function documentLines(value: unknown): string[] {
+  if (!value || typeof value !== 'object') return [String(value)];
+  return Object.entries(value as Record<string, unknown>).flatMap(
+    ([key, item]) =>
+      item === undefined
+        ? []
+        : [
+            `${key}: ${typeof item === 'object' ? JSON.stringify(item) : String(item)}`,
+          ],
+  );
+}
 
 export default partnerPortalRoutes;

@@ -4,8 +4,13 @@ const attemptSchema: Document = {
   bsonType: 'object',
   additionalProperties: false,
   required: [
-    'attempted_at', 'request_payload', 'redacted_headers', 'response_code',
-    'response_payload', 'error', 'completed_at',
+    'attempted_at',
+    'request_payload',
+    'redacted_headers',
+    'response_code',
+    'response_payload',
+    'error',
+    'completed_at',
   ],
   properties: {
     attempted_at: { bsonType: 'date' },
@@ -22,8 +27,15 @@ const deliverySchema: Document = {
   bsonType: 'object',
   additionalProperties: false,
   required: [
-    'endpoint_id', 'status', 'attempt_count', 'next_attempt_at', 'last_error',
-    'delivered_at', 'attempts', 'created_at', 'updated_at',
+    'endpoint_id',
+    'status',
+    'attempt_count',
+    'next_attempt_at',
+    'last_error',
+    'delivered_at',
+    'attempts',
+    'created_at',
+    'updated_at',
   ],
   properties: {
     endpoint_id: { bsonType: 'objectId' },
@@ -47,12 +59,26 @@ const validator: Document = {
     bsonType: 'object',
     additionalProperties: false,
     required: [
-      '_id', 'aggregate_type', 'aggregate_id', 'partner_id', 'venue_id',
-      'environment', 'event_type', 'event_version', 'correlation_id',
-      'payload', 'status', 'attempts', 'available_at', 'locked_by',
-      'locked_until', 'webhook_endpoint_ids',
+      '_id',
+      'aggregate_type',
+      'aggregate_id',
+      'partner_id',
+      'venue_id',
+      'environment',
+      'event_type',
+      'event_version',
+      'correlation_id',
+      'payload',
+      'status',
+      'attempts',
+      'available_at',
+      'locked_by',
+      'locked_until',
+      'webhook_endpoint_ids',
       'published_at',
-      'webhook_deliveries', 'created_at', 'updated_at',
+      'webhook_deliveries',
+      'created_at',
+      'updated_at',
     ],
     properties: {
       _id: { bsonType: 'objectId' },
@@ -90,7 +116,9 @@ const validator: Document = {
 
 export async function initializeOutboxPersistence(db: Db): Promise<void> {
   const name = 'outbox_events';
-  const exists = await db.listCollections({ name }, { nameOnly: true }).hasNext();
+  const exists = await db
+    .listCollections({ name }, { nameOnly: true })
+    .hasNext();
   if (!exists) {
     await db.createCollection(name, {
       validator,
@@ -143,10 +171,12 @@ export async function initializeOutboxPersistence(db: Db): Promise<void> {
       validationAction: 'error',
     });
   }
-  await db.collection(name).createIndex(
-    { status: 1, available_at: 1, locked_until: 1 },
-    { name: 'ix_outbox_dispatch' },
-  );
+  await db
+    .collection(name)
+    .createIndex(
+      { status: 1, available_at: 1, locked_until: 1 },
+      { name: 'ix_outbox_dispatch' },
+    );
   await db.collection(name).createIndex(
     {
       'webhook_deliveries.status': 1,
@@ -155,8 +185,11 @@ export async function initializeOutboxPersistence(db: Db): Promise<void> {
     { name: 'ix_outbox_webhook_delivery_due' },
   );
   const indexes = await db.collection(name).indexes();
-  if (indexes.some(({ name: indexName }) =>
-    indexName === 'uq_outbox_aggregate_version')) {
+  if (
+    indexes.some(
+      ({ name: indexName }) => indexName === 'uq_outbox_aggregate_version',
+    )
+  ) {
     await db.collection(name).dropIndex('uq_outbox_aggregate_version');
   }
   await db.collection(name).createIndex(

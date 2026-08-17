@@ -54,10 +54,7 @@ export interface CommunicationsService {
     limit?: number;
   }): Promise<Record<string, unknown>>;
   getEvent(eventId: string): Promise<Record<string, unknown>>;
-  retryDelivery(input: {
-    eventId: string;
-    endpointId: string;
-  }): Promise<void>;
+  retryDelivery(input: { eventId: string; endpointId: string }): Promise<void>;
   processNext(workerId: string): Promise<boolean>;
   drain(workerId: string, limit?: number): Promise<number>;
 }
@@ -79,8 +76,12 @@ export function createCommunicationsService(input: {
       const ownerId = oid(values.ownerId);
       const deviceId = values.deviceId.trim();
       const token = values.token.trim();
-      if (!deviceId || deviceId.length > 200 || token.length < 20 ||
-          token.length > 4_096) {
+      if (
+        !deviceId ||
+        deviceId.length > 200 ||
+        token.length < 20 ||
+        token.length > 4_096
+      ) {
         throw badRequest(
           'INVALID_DEVICE_REGISTRATION',
           'Device ID or FCM token is invalid',
@@ -217,7 +218,8 @@ export function createCommunicationsService(input: {
         });
       }
       const delivery = event.webhook_deliveries.find(({ endpoint_id }) =>
-        endpoint_id.equals(endpointId));
+        endpoint_id.equals(endpointId),
+      );
       if (!delivery || delivery.status !== 'FAILED') {
         throw new AppError({
           code: 'WEBHOOK_DELIVERY_NOT_FAILED',
@@ -248,7 +250,7 @@ export function createCommunicationsService(input: {
     },
     async drain(workerId, limit = input.config.batchSize) {
       let processed = 0;
-      while (processed < limit && await this.processNext(workerId)) {
+      while (processed < limit && (await this.processNext(workerId))) {
         processed += 1;
       }
       return processed;
@@ -267,9 +269,10 @@ export function createCommunicationsService(input: {
         delivery,
       ]),
     );
-    const deliveries = event.webhook_endpoint_ids.map((endpointId) =>
-      byEndpoint.get(endpointId.toHexString()) ??
-      newDelivery(endpointId, event.created_at),
+    const deliveries = event.webhook_endpoint_ids.map(
+      (endpointId) =>
+        byEndpoint.get(endpointId.toHexString()) ??
+        newDelivery(endpointId, event.created_at),
     );
     const envelope = webhookEnvelope(event);
     const body = JSON.stringify(envelope);
@@ -302,7 +305,9 @@ export function createCommunicationsService(input: {
       }
       const secret = deriveSigningSecret(
         input.authConfig.partnerCredentialMasterSecret,
-        (endpoint.secret_version??1)===1?`webhook:${endpoint._id.toHexString()}`:`webhook:${endpoint._id.toHexString()}:v${endpoint.secret_version}`,
+        (endpoint.secret_version ?? 1) === 1
+          ? `webhook:${endpoint._id.toHexString()}`
+          : `webhook:${endpoint._id.toHexString()}:v${endpoint.secret_version}`,
       );
       if (hashCredential(secret) !== endpoint.signing_secret_hash) {
         deliveries[index] = terminalDelivery(
@@ -335,8 +340,7 @@ export function createCommunicationsService(input: {
         };
       } else {
         const retrying =
-          result.retryable &&
-          attemptCount < input.config.maxWebhookAttempts;
+          result.retryable && attemptCount < input.config.maxWebhookAttempts;
         deliveries[index] = {
           ...delivery,
           status: retrying ? 'RETRYING' : 'FAILED',
@@ -352,7 +356,8 @@ export function createCommunicationsService(input: {
     }
     const timestamp = now();
     const retryDates = deliveries.flatMap(({ status, next_attempt_at }) =>
-      status === 'RETRYING' && next_attempt_at ? [next_attempt_at] : []);
+      status === 'RETRYING' && next_attempt_at ? [next_attempt_at] : [],
+    );
     const failed = deliveries.some(({ status }) => status === 'FAILED');
     const status: OutboxEventDocument['status'] =
       retryDates.length > 0 ? 'PENDING' : failed ? 'FAILED' : 'PUBLISHED';
@@ -361,9 +366,10 @@ export function createCommunicationsService(input: {
       workerId,
       status,
       deliveries,
-      availableAt: retryDates.length > 0
-        ? new Date(Math.min(...retryDates.map((value) => value.getTime())))
-        : timestamp,
+      availableAt:
+        retryDates.length > 0
+          ? new Date(Math.min(...retryDates.map((value) => value.getTime())))
+          : timestamp,
       publishedAt: status === 'PUBLISHED' ? timestamp : null,
       now: timestamp,
     });
@@ -467,8 +473,16 @@ function ownerTarget(event: OutboxEventDocument): {
   const mapped = {
     PAYOUT_PENDING: ['PAYOUT_PENDING', 'PAYOUT', 'VIEW_FINANCE'],
     PAYOUT_FAILED: ['PAYOUT_FAILED', 'PAYOUT', 'VIEW_FINANCE'],
-    SETTLEMENT_DRAFT_CREATED: ['SETTLEMENT_CREATED', 'SETTLEMENT', 'VIEW_FINANCE'],
-    SETTLEMENT_COMPLETED: ['SETTLEMENT_COMPLETED', 'SETTLEMENT', 'VIEW_FINANCE'],
+    SETTLEMENT_DRAFT_CREATED: [
+      'SETTLEMENT_CREATED',
+      'SETTLEMENT',
+      'VIEW_FINANCE',
+    ],
+    SETTLEMENT_COMPLETED: [
+      'SETTLEMENT_COMPLETED',
+      'SETTLEMENT',
+      'VIEW_FINANCE',
+    ],
     CONTRACT_PROPOSED: ['CONTRACT_PROPOSED', 'CONTRACT', 'MANAGE_VENUE'],
     CONTRACT_ACCEPTED: ['CONTRACT_ACCEPTED', 'CONTRACT', 'MANAGE_VENUE'],
     KYC_SUBMITTED: ['KYC_SUBMITTED', 'KYC', 'MANAGE_KYC'],
@@ -478,14 +492,21 @@ function ownerTarget(event: OutboxEventDocument): {
     PAYMENT_REFUNDED: ['PAYMENT_REFUNDED', 'PAYMENT', 'VIEW_FINANCE'],
     VENUE_UPDATED: ['VENUE_UPDATED', 'VENUE', 'MANAGE_VENUE'],
     COURT_UPDATED: ['COURT_UPDATED', 'COURT', 'MANAGE_COURTS'],
-    AVAILABILITY_CHANGED: ['AVAILABILITY_CHANGED', 'INVENTORY', 'MANAGE_AVAILABILITY'],
+    AVAILABILITY_CHANGED: [
+      'AVAILABILITY_CHANGED',
+      'INVENTORY',
+      'MANAGE_AVAILABILITY',
+    ],
   } as const;
   const value = mapped[event.event_type as keyof typeof mapped];
-  if (value) return { type: value[0], aggregateType: value[1], permission: value[2] };
+  if (value)
+    return { type: value[0], aggregateType: value[1], permission: value[2] };
   return null;
 }
 
-function notificationAggregate(type: OwnerNotificationType): import('./communications.types.js').OwnerNotificationAggregateType {
+function notificationAggregate(
+  type: OwnerNotificationType,
+): import('./communications.types.js').OwnerNotificationAggregateType {
   if (type.startsWith('BOOKING_')) return 'BOOKING';
   if (type.startsWith('PAYMENT_')) return 'PAYMENT';
   if (type.startsWith('SETTLEMENT_')) return 'SETTLEMENT';
@@ -590,7 +611,8 @@ function eventView(value: OutboxEventDocument) {
     lockedBy: value.locked_by,
     lockedUntil: value.locked_until?.toISOString() ?? null,
     webhookEndpointIds: value.webhook_endpoint_ids.map((id) =>
-      id.toHexString()),
+      id.toHexString(),
+    ),
     publishedAt: value.published_at?.toISOString() ?? null,
     webhookDeliveries: value.webhook_deliveries.map(deliveryView),
     createdAt: value.created_at.toISOString(),

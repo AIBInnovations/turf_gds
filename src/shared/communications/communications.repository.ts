@@ -65,7 +65,11 @@ export interface CommunicationsRepository {
     now: Date,
   ): Promise<boolean>;
   listOwnerTokens(ownerId: ObjectId): Promise<FcmTokenDocument[]>;
-  removeOwnerTokens(ownerId: ObjectId, tokens: string[], now: Date): Promise<void>;
+  removeOwnerTokens(
+    ownerId: ObjectId,
+    tokens: string[],
+    now: Date,
+  ): Promise<void>;
   upsertDevice(input: {
     ownerId: ObjectId;
     deviceId: string;
@@ -73,7 +77,11 @@ export interface CommunicationsRepository {
     platform: DevicePlatform;
     now: Date;
   }): Promise<'UPDATED' | 'TOKEN_CONFLICT' | 'OWNER_NOT_FOUND'>;
-  removeDevice(ownerId: ObjectId, deviceId: string, now: Date): Promise<boolean>;
+  removeDevice(
+    ownerId: ObjectId,
+    deviceId: string,
+    now: Date,
+  ): Promise<boolean>;
   listNotifications(input: {
     ownerId: ObjectId;
     venueId?: ObjectId;
@@ -318,9 +326,9 @@ export function createCommunicationsRepository(
       const all = [...(owner?.notifications ?? [])].sort(
         (a, b) =>
           b.created_at.getTime() - a.created_at.getTime() ||
-          b.aggregate_id.toHexString().localeCompare(
-            a.aggregate_id.toHexString(),
-          ),
+          b.aggregate_id
+            .toHexString()
+            .localeCompare(a.aggregate_id.toHexString()),
       );
       const unreadCount = all.filter(({ read_at }) => read_at === null).length;
       const filtered = all.filter(
@@ -367,12 +375,14 @@ export function createCommunicationsRepository(
           },
         },
         {
-          arrayFilters: [{
-            'notification.notification_type': input.notificationType,
-            'notification.aggregate_type': input.aggregateType,
-            'notification.aggregate_id': input.aggregateId,
-            'notification.read_at': null,
-          }],
+          arrayFilters: [
+            {
+              'notification.notification_type': input.notificationType,
+              'notification.aggregate_type': input.aggregateType,
+              'notification.aggregate_id': input.aggregateId,
+              'notification.read_at': null,
+            },
+          ],
         },
       );
       return result.modifiedCount ? 'UPDATED' : 'ALREADY_READ';
@@ -395,9 +405,7 @@ export function createCommunicationsRepository(
         ...(input.endpointId
           ? { 'webhook_deliveries.endpoint_id': input.endpointId }
           : {}),
-        ...(input.status
-          ? { 'webhook_deliveries.status': input.status }
-          : {}),
+        ...(input.status ? { 'webhook_deliveries.status': input.status } : {}),
       };
       const offset = (input.page - 1) * input.limit;
       const result = await events()
@@ -446,7 +454,7 @@ export function createCommunicationsRepository(
       const result = await events().updateOne(
         {
           _id: eventId,
-          'webhook_deliveries': {
+          webhook_deliveries: {
             $elemMatch: { endpoint_id: endpointId, status: 'FAILED' },
           },
         },
@@ -466,10 +474,12 @@ export function createCommunicationsRepository(
           },
         },
         {
-          arrayFilters: [{
-            'delivery.endpoint_id': endpointId,
-            'delivery.status': 'FAILED',
-          }],
+          arrayFilters: [
+            {
+              'delivery.endpoint_id': endpointId,
+              'delivery.status': 'FAILED',
+            },
+          ],
         },
       );
       return result.modifiedCount > 0;

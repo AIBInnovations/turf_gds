@@ -64,8 +64,8 @@ export function createSecureWebhookTransport(): WebhookTransport {
           headers,
           timeoutMs: input.timeoutMs,
         });
-        const delivered = response.statusCode >= 200 &&
-          response.statusCode < 300;
+        const delivered =
+          response.statusCode >= 200 && response.statusCode < 300;
         const retryable =
           response.statusCode === 408 ||
           response.statusCode === 425 ||
@@ -181,11 +181,7 @@ function sendPinned(input: {
         headers: input.headers,
         timeout: input.timeoutMs,
         lookup: (_hostname, _options, callback) => {
-          callback(
-            null,
-            input.destination.address,
-            input.destination.family,
-          );
+          callback(null, input.destination.address, input.destination.family);
         },
       },
       (response) => {

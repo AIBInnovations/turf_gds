@@ -30,7 +30,7 @@ export interface AdminAuthService {
     adminId: string;
     role: AdminRole;
   }>;
-  logout?(token:string):Promise<void>;
+  logout?(token: string): Promise<void>;
   bootstrapAdmin(input: {
     email: string;
     password: string;
@@ -65,13 +65,34 @@ export function createAdminAuthService(input: {
       });
     }
 
-    if (
-      !(await verifyPassword(credentials.password, admin.password_hash))
-    ) {
+    const timestamp = now();
+
+    if (admin.locked_until && admin.locked_until > timestamp) {
+      throw new AppError({
+        code: 'ADMIN_ACCOUNT_LOCKED',
+        message: 'Too many failed login attempts. Try again later',
+        statusCode: 423,
+        details: { lockedUntil: admin.locked_until.toISOString() },
+      });
+    }
+
+    if (admin.locked_until && admin.locked_until <= timestamp) {
+      await input.repository.resetLoginFailures(admin._id, timestamp);
+    }
+
+    if (!(await verifyPassword(credentials.password, admin.password_hash))) {
+      const lockedUntil = new Date(
+        timestamp.getTime() + input.authConfig.lockMinutes * 60_000,
+      );
+      await input.repository.recordFailedLogin(
+        admin._id,
+        input.authConfig.maxLoginAttempts,
+        lockedUntil,
+        timestamp,
+      );
       throw invalidAdminCredentials();
     }
 
-    const timestamp = now();
     const issuedAt = Math.floor(timestamp.getTime() / 1_000);
     const expiresAt = new Date(
       timestamp.getTime() +
@@ -114,10 +135,12 @@ export function createAdminAuthService(input: {
       throw invalidAdminToken();
     }
 
-    if(input.repository.isTokenRevoked&&await input.repository.isTokenRevoked(payload.jti))throw invalidAdminToken();
-    const admin = await input.repository.findById(
-      new ObjectId(payload.sub),
-    );
+    if (
+      input.repository.isTokenRevoked &&
+      (await input.repository.isTokenRevoked(payload.jti))
+    )
+      throw invalidAdminToken();
+    const admin = await input.repository.findById(new ObjectId(payload.sub));
 
     if (!admin || admin.status !== 'ACTIVE' || admin.role !== payload.role) {
       throw invalidAdminToken();
@@ -130,7 +153,26 @@ export function createAdminAuthService(input: {
     };
   }
 
-  async function logout(token:string){const payload=verifyAdminJwt(token,input.authConfig.adminAccessTokenSecret,Math.floor(now().getTime()/1_000));if(!payload||!ObjectId.isValid(payload.sub))throw invalidAdminToken();if(!input.repository.revokeToken)throw new AppError({code:'ADMIN_LOGOUT_UNAVAILABLE',message:'Admin logout is unavailable',statusCode:503});await input.repository.revokeToken(payload.jti,new ObjectId(payload.sub),new Date(payload.exp*1000),now());}
+  async function logout(token: string) {
+    const payload = verifyAdminJwt(
+      token,
+      input.authConfig.adminAccessTokenSecret,
+      Math.floor(now().getTime() / 1_000),
+    );
+    if (!payload || !ObjectId.isValid(payload.sub)) throw invalidAdminToken();
+    if (!input.repository.revokeToken)
+      throw new AppError({
+        code: 'ADMIN_LOGOUT_UNAVAILABLE',
+        message: 'Admin logout is unavailable',
+        statusCode: 503,
+      });
+    await input.repository.revokeToken(
+      payload.jti,
+      new ObjectId(payload.sub),
+      new Date(payload.exp * 1000),
+      now(),
+    );
+  }
 
   async function bootstrapAdmin(
     values: Parameters<AdminAuthService['bootstrapAdmin']>[0],
@@ -154,6 +196,8 @@ export function createAdminAuthService(input: {
         display_name: values.displayName.trim(),
         role: values.role,
         status: 'ACTIVE',
+        failed_login_count: 0,
+        locked_until: null,
         fcm_tokens: [],
         audit_history: [],
         last_login_at: null,

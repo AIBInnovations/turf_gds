@@ -11,6 +11,8 @@ import type {
   BookingCancellationDocument,
   BookingDocument,
 } from '../src/modules/booking/booking.types.js';
+import type { CourtDocument } from '../src/modules/venue/courts/court.types.js';
+import type { SlotDocument } from '../src/modules/venue/inventory/inventory.types.js';
 import { initializeIdentityPersistence } from '../src/modules/identity/persistence.js';
 import { createIdentityRepository } from '../src/modules/identity/owner/owner-auth.repository.js';
 import { createIdentityService } from '../src/modules/identity/owner/owner-auth.service.js';
@@ -248,6 +250,119 @@ test('Owner Booking persistence enforces filters, detail scope, cancellation, an
     ).map((index) => index.name);
     assert.ok(indexNames.includes('uq_booking_confirmation_idempotency'));
     assert.ok(indexNames.includes('ix_booking_owner_list'));
+
+    const raceCourtId = new ObjectId();
+    const raceCourt: CourtDocument = {
+      _id: raceCourtId,
+      venue_id: sameVenueId,
+      name: 'Race Court',
+      sport_type: 'FOOTBALL',
+      surface_type: 'TURF',
+      capacity: 10,
+      status: 'AVAILABLE',
+      booking_mode: 'OPEN_TIME',
+      operating_hours: { entries: [] },
+      min_booking_minutes: 60,
+      booking_increment_minutes: 30,
+      fixed_slot_duration_minutes: null,
+      fixed_slot_anchor_minutes: null,
+      media: [],
+      audit_history: [],
+      version: 1,
+      created_at: timestamp,
+      updated_at: timestamp,
+    };
+    await database.db.collection<CourtDocument>('courts').insertOne(raceCourt);
+
+    const raceResults = await Promise.allSettled([
+      service.createDirectBooking({
+        actorOwnerId: firstOwner.ownerId,
+        venueId: firstOwner.venueId,
+        courtId: raceCourtId.toHexString(),
+        startsAt: '2026-08-05T10:00:00.000Z',
+        endsAt: '2026-08-05T11:00:00.000Z',
+        correlationId: 'race-a',
+      }),
+      service.createDirectBooking({
+        actorOwnerId: firstOwner.ownerId,
+        venueId: firstOwner.venueId,
+        courtId: raceCourtId.toHexString(),
+        startsAt: '2026-08-05T10:30:00.000Z',
+        endsAt: '2026-08-05T11:30:00.000Z',
+        correlationId: 'race-b',
+      }),
+    ]);
+    const fulfilled = raceResults.filter((result) => result.status === 'fulfilled');
+    const rejected = raceResults.filter((result) => result.status === 'rejected');
+    assert.equal(fulfilled.length, 1);
+    assert.equal(rejected.length, 1);
+    const rejectedReason = (rejected[0] as PromiseRejectedResult).reason;
+    assert.ok(
+      rejectedReason instanceof AppError &&
+        ['INVENTORY_OVERLAP', 'COURT_VERSION_CONFLICT'].includes(
+          rejectedReason.code,
+        ),
+    );
+
+    const raceCourtAfter = await database.db
+      .collection<CourtDocument>('courts')
+      .findOne({ _id: raceCourtId });
+    assert.equal(raceCourtAfter?.version, 2);
+
+    const raceSlots = await database.db
+      .collection('slots')
+      .find({ court_id: raceCourtId, status: 'BOOKED' })
+      .toArray();
+    assert.equal(raceSlots.length, 1);
+
+    const raceBookings = await database.db
+      .collection<BookingDocument>('bookings')
+      .find({ court_id: raceCourtId, status: 'CONFIRMED' })
+      .toArray();
+    assert.equal(raceBookings.length, 1);
+
+    const staleHoldCourtId = new ObjectId();
+    const staleHoldCourt: CourtDocument = {
+      ...raceCourt,
+      _id: staleHoldCourtId,
+      name: 'Stale Hold Court',
+      version: 1,
+    };
+    await database.db.collection<CourtDocument>('courts').insertOne(staleHoldCourt);
+    const staleHold: SlotDocument = {
+      _id: new ObjectId(),
+      court_id: staleHoldCourtId,
+      venue_id: sameVenueId,
+      environment: 'PRODUCTION',
+      booking_type: 'OPEN_TIME',
+      starts_at: new Date('2026-08-06T10:00:00.000Z'),
+      ends_at: new Date('2026-08-06T11:00:00.000Z'),
+      price_minor: null,
+      currency: 'INR',
+      status: 'HELD',
+      hold_id: 'expired-hold',
+      hold_partner_id: new ObjectId(),
+      hold_expires_at: new Date('2026-08-01T00:00:00.000Z'),
+      hold_created_at: new Date('2026-07-31T23:00:00.000Z'),
+      source: 'BOOKING',
+      booking_id: null,
+      consumed_by_slot_id: null,
+      audit_history: [],
+      version: 1,
+      created_at: timestamp,
+      updated_at: timestamp,
+    };
+    await database.db.collection<SlotDocument>('slots').insertOne(staleHold);
+
+    const overStaleHold = await service.createDirectBooking({
+      actorOwnerId: firstOwner.ownerId,
+      venueId: firstOwner.venueId,
+      courtId: staleHoldCourtId.toHexString(),
+      startsAt: '2026-08-06T10:30:00.000Z',
+      endsAt: '2026-08-06T11:30:00.000Z',
+      correlationId: 'over-stale-hold',
+    });
+    assert.equal(overStaleHold.status, 'CONFIRMED');
   } finally {
     if (databaseName.startsWith('turf_gds_owner_booking_it_')) {
       await database.db.dropDatabase().catch(() => undefined);

@@ -3,6 +3,7 @@ import { ObjectId } from 'mongodb';
 import type { OwnerAccessService } from '../../identity/owner/owner-access.service.js';
 import { AppError } from '../../../shared/errors/app-error.js';
 import type { MediaStorage } from '../../../shared/media/cloudinary-media-storage.js';
+import { inspectUploadedFile } from '../../../shared/media/file-security.js';
 import type { CourtRepository } from './court.repository.js';
 import type {
   CourtBookingMode,
@@ -136,38 +137,35 @@ export function createCourtOwnerService(input: {
       min_booking_minutes: values.minBookingMinutes,
       booking_increment_minutes: values.bookingIncrementMinutes,
       operating_hours: { entries: [] },
-      fixed_slot_duration_minutes:
-        values.fixedSlotDurationMinutes ?? null,
-      fixed_slot_anchor_minutes:
-        values.fixedSlotAnchorMinutes ?? null,
+      fixed_slot_duration_minutes: values.fixedSlotDurationMinutes ?? null,
+      fixed_slot_anchor_minutes: values.fixedSlotAnchorMinutes ?? null,
       media: [],
-      audit_history: [{
-        event_type: 'COURT_CREATED',
-        actor_type: 'VENUE_OWNER',
-        actor_id: toObjectId(values.actorOwnerId),
-        correlation_id: values.correlationId,
-        changed_fields: [
-          'name',
-          'sport_type',
-          'surface_type',
-          'capacity',
-          'booking_mode',
-          'min_booking_minutes',
-          'booking_increment_minutes',
-          'fixed_slot_duration_minutes',
-          'fixed_slot_anchor_minutes',
-          'status',
-        ],
-        occurred_at: timestamp,
-      }],
+      audit_history: [
+        {
+          event_type: 'COURT_CREATED',
+          actor_type: 'VENUE_OWNER',
+          actor_id: toObjectId(values.actorOwnerId),
+          correlation_id: values.correlationId,
+          changed_fields: [
+            'name',
+            'sport_type',
+            'surface_type',
+            'capacity',
+            'booking_mode',
+            'min_booking_minutes',
+            'booking_increment_minutes',
+            'fixed_slot_duration_minutes',
+            'fixed_slot_anchor_minutes',
+            'status',
+          ],
+          occurred_at: timestamp,
+        },
+      ],
       version: 1,
       created_at: timestamp,
       updated_at: timestamp,
     };
-    assertDurations(
-      court.min_booking_minutes,
-      court.booking_increment_minutes,
-    );
+    assertDurations(court.min_booking_minutes, court.booking_increment_minutes);
 
     try {
       await input.repository.insert(court);
@@ -178,7 +176,20 @@ export function createCourtOwnerService(input: {
       throw error;
     }
 
-    await input.events?.publish({aggregateType:'COURT',aggregateId:court._id,venueId,eventType:'COURT_UPDATED',eventVersion:court.version,correlationId:values.correlationId,payload:{courtId:court._id.toHexString(),venueId:values.venueId,action:'CREATED'},now:timestamp});
+    await input.events?.publish({
+      aggregateType: 'COURT',
+      aggregateId: court._id,
+      venueId,
+      eventType: 'COURT_UPDATED',
+      eventVersion: court.version,
+      correlationId: values.correlationId,
+      payload: {
+        courtId: court._id.toHexString(),
+        venueId: values.venueId,
+        action: 'CREATED',
+      },
+      now: timestamp,
+    });
     return presentCourt(court);
   }
 
@@ -189,9 +200,9 @@ export function createCourtOwnerService(input: {
       values.actorOwnerId,
       values.venueId,
     );
-    return (
-      await input.repository.listByVenue(toObjectId(values.venueId))
-    ).map(presentCourt);
+    return (await input.repository.listByVenue(toObjectId(values.venueId))).map(
+      presentCourt,
+    );
   }
 
   async function get(
@@ -222,19 +233,13 @@ export function createCourtOwnerService(input: {
     );
     const venueId = toObjectId(values.venueId);
     const courtId = toObjectId(values.courtId);
-    const existing = await input.repository.findByIdAndVenue(
-      courtId,
-      venueId,
-    );
+    const existing = await input.repository.findByIdAndVenue(courtId, venueId);
 
     if (!existing) {
       throw courtNotFound();
     }
 
-    const { changes, changedFields } = normalizeCourtChanges(
-      values,
-      existing,
-    );
+    const { changes, changedFields } = normalizeCourtChanges(values, existing);
 
     try {
       const updated = await input.repository.update({
@@ -253,12 +258,23 @@ export function createCourtOwnerService(input: {
           courtId,
           venueId,
         );
-        throw courtVersionConflict(
-          current?.version ?? existing.version,
-        );
+        throw courtVersionConflict(current?.version ?? existing.version);
       }
 
-      await input.events?.publish({aggregateType:'COURT',aggregateId:updated._id,venueId,eventType:'COURT_UPDATED',eventVersion:updated.version,correlationId:values.correlationId,payload:{courtId:values.courtId,venueId:values.venueId,changedFields},now:updated.updated_at});
+      await input.events?.publish({
+        aggregateType: 'COURT',
+        aggregateId: updated._id,
+        venueId,
+        eventType: 'COURT_UPDATED',
+        eventVersion: updated.version,
+        correlationId: values.correlationId,
+        payload: {
+          courtId: values.courtId,
+          venueId: values.venueId,
+          changedFields,
+        },
+        now: updated.updated_at,
+      });
       return presentCourt(updated);
     } catch (error) {
       if (isDuplicateKeyError(error)) {
@@ -278,10 +294,7 @@ export function createCourtOwnerService(input: {
     );
     const venueId = toObjectId(values.venueId);
     const courtId = toObjectId(values.courtId);
-    const existing = await input.repository.findByIdAndVenue(
-      courtId,
-      venueId,
-    );
+    const existing = await input.repository.findByIdAndVenue(courtId, venueId);
 
     if (!existing) {
       throw courtNotFound();
@@ -302,6 +315,7 @@ export function createCourtOwnerService(input: {
         statusCode: 400,
       });
     }
+    inspectUploadedFile(values.buffer, mimeType, [...COURT_MEDIA_MIME_TYPES]);
 
     const uploaded = await input.mediaStorage.uploadBuffer(values.buffer, {
       access: 'public',
@@ -345,19 +359,27 @@ export function createCourtOwnerService(input: {
         if (current && current.media.length >= COURT_MEDIA_MAX_ITEMS) {
           throw courtMediaLimitReached();
         }
-        throw courtVersionConflict(
-          current?.version ?? existing.version,
-        );
+        throw courtVersionConflict(current?.version ?? existing.version);
       }
 
-      await input.events?.publish({aggregateType:'COURT',aggregateId:updated._id,venueId,eventType:'COURT_UPDATED',eventVersion:updated.version,correlationId:values.correlationId,payload:{courtId:values.courtId,venueId:values.venueId,changedFields:['media']},now:updated.updated_at});
+      await input.events?.publish({
+        aggregateType: 'COURT',
+        aggregateId: updated._id,
+        venueId,
+        eventType: 'COURT_UPDATED',
+        eventVersion: updated.version,
+        correlationId: values.correlationId,
+        payload: {
+          courtId: values.courtId,
+          venueId: values.venueId,
+          changedFields: ['media'],
+        },
+        now: updated.updated_at,
+      });
       return presentCourt(updated);
     } catch (error) {
       await input.mediaStorage
-        .delete(
-          uploaded.publicId,
-          toDeletableResource(uploaded.resourceType),
-        )
+        .delete(uploaded.publicId, toDeletableResource(uploaded.resourceType))
         .catch(() => undefined);
       throw error;
     }
@@ -373,17 +395,12 @@ export function createCourtOwnerService(input: {
     );
     const venueId = toObjectId(values.venueId);
     const courtId = toObjectId(values.courtId);
-    const existing = await input.repository.findByIdAndVenue(
-      courtId,
-      venueId,
-    );
+    const existing = await input.repository.findByIdAndVenue(courtId, venueId);
     if (!existing) {
       throw courtNotFound();
     }
 
-    const operatingHours = normalizeOperatingHours(
-      values.operatingHours,
-    );
+    const operatingHours = normalizeOperatingHours(values.operatingHours);
     const updated = await input.repository.update({
       courtId,
       venueId,
@@ -395,15 +412,23 @@ export function createCourtOwnerService(input: {
       now: now(),
     });
     if (!updated) {
-      const current = await input.repository.findByIdAndVenue(
-        courtId,
-        venueId,
-      );
-      throw courtVersionConflict(
-        current?.version ?? existing.version,
-      );
+      const current = await input.repository.findByIdAndVenue(courtId, venueId);
+      throw courtVersionConflict(current?.version ?? existing.version);
     }
-    await input.events?.publish({aggregateType:'COURT',aggregateId:updated._id,venueId,eventType:'COURT_UPDATED',eventVersion:updated.version,correlationId:values.correlationId,payload:{courtId:values.courtId,venueId:values.venueId,changedFields:['operating_hours']},now:updated.updated_at});
+    await input.events?.publish({
+      aggregateType: 'COURT',
+      aggregateId: updated._id,
+      venueId,
+      eventType: 'COURT_UPDATED',
+      eventVersion: updated.version,
+      correlationId: values.correlationId,
+      payload: {
+        courtId: values.courtId,
+        venueId: values.venueId,
+        changedFields: ['operating_hours'],
+      },
+      now: updated.updated_at,
+    });
     return presentCourt(updated);
   }
 
@@ -482,8 +507,7 @@ function normalizeCourtChanges(
 
   assertDurations(
     changes.min_booking_minutes ?? existing.min_booking_minutes,
-    changes.booking_increment_minutes ??
-      existing.booking_increment_minutes,
+    changes.booking_increment_minutes ?? existing.booking_increment_minutes,
   );
   return { changes, changedFields };
 }
@@ -502,8 +526,13 @@ function normalizeName(value: string): string {
 
 function normalizeSportType(value: CourtSportType): CourtSportType {
   const allowed: CourtSportType[] = [
-    'FOOTBALL', 'CRICKET', 'BADMINTON', 'TENNIS', 'PICKLEBALL',
-    'MULTI_SPORT', 'OTHER',
+    'FOOTBALL',
+    'CRICKET',
+    'BADMINTON',
+    'TENNIS',
+    'PICKLEBALL',
+    'MULTI_SPORT',
+    'OTHER',
   ];
   if (!allowed.includes(value)) {
     throw new AppError({
@@ -716,8 +745,6 @@ function isDuplicateKeyError(error: unknown): boolean {
   );
 }
 
-function toDeletableResource(
-  value: string,
-): 'image' | 'video' | 'raw' {
+function toDeletableResource(value: string): 'image' | 'video' | 'raw' {
   return value === 'video' || value === 'raw' ? value : 'image';
 }

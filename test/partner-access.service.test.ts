@@ -14,6 +14,7 @@ import type {
 } from '../src/modules/identity/partner/partner-access.types.js';
 import { createCanonicalRequest } from '../src/shared/auth/partner-signature.js';
 import { AppError } from '../src/shared/errors/app-error.js';
+import { hashPassword } from '../src/shared/auth/password.js';
 
 const fixedNow = new Date('2026-07-28T08:00:00.000Z');
 const authConfig: AppConfig['auth'] = {
@@ -96,6 +97,9 @@ function createFixture() {
       return true;
     },
     async recordUsage() {},
+    async consumeRateLimitWindow() {
+      return { count: 1 };
+    },
     async insertWebhook() {
       return true;
     },
@@ -179,4 +183,55 @@ test('stale Partner request timestamps are rejected', async () => {
       error instanceof AppError &&
       error.code === 'INVALID_PARTNER_AUTHENTICATION',
   );
+});
+
+test('partner login records a hashed IP and user agent on the new session', async () => {
+  const partner: PartnerDocument = {
+    _id: new ObjectId('687f00000000000000000020'),
+    legal_name: 'Login Partner Private Limited',
+    display_name: 'Login Partner',
+    email: 'partner@example.com',
+    password_hash: await hashPassword('correct-horse-battery'),
+    failed_login_count: 0,
+    locked_until: null,
+    sessions: [],
+    kyc_status: 'PENDING',
+    status: 'ACTIVE',
+    rate_limit_tier: 'STARTER',
+    sandbox_approved_at: fixedNow,
+    production_approved_by: null,
+    production_approved_at: null,
+    audit_history: [],
+    created_at: fixedNow,
+    updated_at: fixedNow,
+  };
+  let recordedSessionArgs: unknown[] | undefined;
+  const repository: Partial<PartnerAccessRepository> = {
+    async findPartnerByEmail(email) {
+      return email === partner.email ? partner : null;
+    },
+    async recordSuccessfulLogin(...args) {
+      recordedSessionArgs = args;
+      return true;
+    },
+  };
+  const service = createPartnerAccessService({
+    repository: repository as PartnerAccessRepository,
+    kycService: createKycFake(),
+    authConfig,
+    now: () => fixedNow,
+  });
+
+  await service.login({
+    email: partner.email!,
+    password: 'correct-horse-battery',
+    ipAddress: '203.0.113.7',
+    userAgent: 'integration-test-agent/1.0',
+  });
+
+  assert.ok(recordedSessionArgs);
+  const [, , , , ipHash, userAgent] = recordedSessionArgs!;
+  assert.equal(typeof ipHash, 'string');
+  assert.notEqual(ipHash, '203.0.113.7');
+  assert.equal(userAgent, 'integration-test-agent/1.0');
 });

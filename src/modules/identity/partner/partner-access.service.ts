@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { ObjectId } from 'mongodb';
 
 import type { AppConfig } from '../../../config/env.js';
@@ -7,11 +8,19 @@ import {
   deriveSigningSecret,
   extractKeyPrefix,
   hashCredential,
+  timingSafeEqualStrings,
   verifyHmacSignature,
 } from '../../../shared/auth/partner-signature.js';
 import { AppError } from '../../../shared/errors/app-error.js';
-import { DUMMY_PASSWORD_HASH, hashPassword, verifyPassword } from '../../../shared/auth/password.js';
-import { generateSessionToken, hashSessionToken } from '../../../shared/auth/session-token.js';
+import {
+  DUMMY_PASSWORD_HASH,
+  hashPassword,
+  verifyPassword,
+} from '../../../shared/auth/password.js';
+import {
+  generateSessionToken,
+  hashSessionToken,
+} from '../../../shared/auth/session-token.js';
 import type {
   PartnerRateLimiter,
   RateLimitDecision,
@@ -34,15 +43,28 @@ export interface PartnerAccessService {
     phoneE164: string;
     password: string;
   }): Promise<{ partnerId: string; status: 'PENDING' }>;
-  login(input: { email: string; password: string }): Promise<{
+  login(input: {
+    email: string;
+    password: string;
+    ipAddress: string;
+    userAgent: string;
+  }): Promise<{
     sessionToken: string;
     expiresAt: string;
-    partner: { id: string; legalName: string; displayName: string; email: string; status: string };
+    partner: {
+      id: string;
+      legalName: string;
+      displayName: string;
+      email: string;
+      status: string;
+    };
   }>;
   authenticatePortalSession(token: string): Promise<{
-    actorType: 'PARTNER_PORTAL'; partnerId: string; status: 'PENDING'|'ACTIVE';
+    actorType: 'PARTNER_PORTAL';
+    partnerId: string;
+    status: 'PENDING' | 'ACTIVE';
   }>;
-  logoutPortalSession(partnerId:string,token:string):Promise<void>;
+  logoutPortalSession(partnerId: string, token: string): Promise<void>;
   approveSandbox(input: {
     partnerId: string;
     adminId: string;
@@ -100,7 +122,7 @@ export interface PartnerAccessService {
     latencyMs: number;
     rateLimited?: boolean;
   }): Promise<void>;
-  consumeRateLimit?(input: {
+  consumeRateLimit(input: {
     partnerId: string;
     environment: PartnerEnvironment;
   }): Promise<RateLimitDecision>;
@@ -115,9 +137,20 @@ export interface PartnerAccessService {
     signingSecret: string;
     subscribedEvents: ExternalEventType[];
   }>;
-  listWebhooks(input:{partnerId:string;environment:PartnerEnvironment}):Promise<unknown[]>;
-  rotateWebhookSecret(input:{webhookId:string;partnerId:string;environment:PartnerEnvironment}):Promise<{signingSecret:string;status:'PENDING'}>;
-  testWebhook(input:{webhookId:string;partnerId:string;environment:PartnerEnvironment}):Promise<{status:'ACTIVE';responseCode:number|null}>;
+  listWebhooks(input: {
+    partnerId: string;
+    environment: PartnerEnvironment;
+  }): Promise<unknown[]>;
+  rotateWebhookSecret(input: {
+    webhookId: string;
+    partnerId: string;
+    environment: PartnerEnvironment;
+  }): Promise<{ signingSecret: string; status: 'PENDING' }>;
+  testWebhook(input: {
+    webhookId: string;
+    partnerId: string;
+    environment: PartnerEnvironment;
+  }): Promise<{ status: 'ACTIVE'; responseCode: number | null }>;
   replaceWebhookSubscriptions(input: {
     webhookId: string;
     partnerId: string;
@@ -182,31 +215,95 @@ export function createPartnerAccessService(input: {
 
   async function login(values: Parameters<PartnerAccessService['login']>[0]) {
     const timestamp = now();
-    const partner = await input.repository.findPartnerByEmail?.(values.email.trim().toLowerCase()) ?? null;
+    const partner =
+      (await input.repository.findPartnerByEmail?.(
+        values.email.trim().toLowerCase(),
+      )) ?? null;
     if (!partner) {
       await verifyPassword(values.password, DUMMY_PASSWORD_HASH);
       throw invalidPartnerCredentials();
     }
-    if (partner.status === 'SUSPENDED') throw new AppError({ code: 'PARTNER_SUSPENDED', message: 'This Partner account is suspended', statusCode: 403 });
-    if (partner.locked_until && partner.locked_until > timestamp) throw new AppError({ code: 'PARTNER_ACCOUNT_LOCKED', message: 'Too many failed login attempts', statusCode: 423, details: { lockedUntil: partner.locked_until.toISOString() } });
-    if (!partner.password_hash || !(await verifyPassword(values.password, partner.password_hash))) {
-      await input.repository.recordFailedLogin?.(partner._id, input.authConfig.maxLoginAttempts, new Date(timestamp.getTime() + input.authConfig.lockMinutes * 60_000), timestamp);
+    if (partner.status === 'SUSPENDED')
+      throw new AppError({
+        code: 'PARTNER_SUSPENDED',
+        message: 'This Partner account is suspended',
+        statusCode: 403,
+      });
+    if (partner.locked_until && partner.locked_until > timestamp)
+      throw new AppError({
+        code: 'PARTNER_ACCOUNT_LOCKED',
+        message: 'Too many failed login attempts',
+        statusCode: 423,
+        details: { lockedUntil: partner.locked_until.toISOString() },
+      });
+    if (
+      !partner.password_hash ||
+      !(await verifyPassword(values.password, partner.password_hash))
+    ) {
+      await input.repository.recordFailedLogin?.(
+        partner._id,
+        input.authConfig.maxLoginAttempts,
+        new Date(timestamp.getTime() + input.authConfig.lockMinutes * 60_000),
+        timestamp,
+      );
       throw invalidPartnerCredentials();
     }
     const sessionToken = generateSessionToken();
-    const expiresAt = new Date(timestamp.getTime() + input.authConfig.sessionTtlHours * 60 * 60_000);
-    if (!(await input.repository.recordSuccessfulLogin?.(partner._id, hashSessionToken(sessionToken), expiresAt, timestamp))) throw invalidPartnerCredentials();
-    return { sessionToken, expiresAt: expiresAt.toISOString(), partner: { id: partner._id.toHexString(), legalName: partner.legal_name, displayName: partner.display_name, email: partner.email ?? '', status: partner.status } };
+    const expiresAt = new Date(
+      timestamp.getTime() + input.authConfig.sessionTtlHours * 60 * 60_000,
+    );
+    const ipHash = createHash('sha256')
+      .update(values.ipAddress.slice(0, 64))
+      .digest('hex');
+    const userAgent = values.userAgent.slice(0, 512);
+    if (
+      !(await input.repository.recordSuccessfulLogin?.(
+        partner._id,
+        hashSessionToken(sessionToken),
+        expiresAt,
+        timestamp,
+        ipHash,
+        userAgent,
+      ))
+    )
+      throw invalidPartnerCredentials();
+    return {
+      sessionToken,
+      expiresAt: expiresAt.toISOString(),
+      partner: {
+        id: partner._id.toHexString(),
+        legalName: partner.legal_name,
+        displayName: partner.display_name,
+        email: partner.email ?? '',
+        status: partner.status,
+      },
+    };
   }
 
   async function authenticatePortalSession(token: string) {
-    const partner = await input.repository.findBySessionTokenHash?.(hashSessionToken(token), now()) ?? null;
+    const partner =
+      (await input.repository.findBySessionTokenHash?.(
+        hashSessionToken(token),
+        now(),
+      )) ?? null;
     if (!partner) throw invalidPartnerCredentials();
-    return { actorType: 'PARTNER_PORTAL' as const, partnerId: partner._id.toHexString(), status: partner.status as 'PENDING'|'ACTIVE' };
+    return {
+      actorType: 'PARTNER_PORTAL' as const,
+      partnerId: partner._id.toHexString(),
+      status: partner.status as 'PENDING' | 'ACTIVE',
+    };
   }
 
-  async function logoutPortalSession(partnerId:string,token:string){
-    if(!input.repository.revokeSession||!(await input.repository.revokeSession(toObjectId(partnerId),hashSessionToken(token),now())))throw invalidPartnerCredentials();
+  async function logoutPortalSession(partnerId: string, token: string) {
+    if (
+      !input.repository.revokeSession ||
+      !(await input.repository.revokeSession(
+        toObjectId(partnerId),
+        hashSessionToken(token),
+        now(),
+      ))
+    )
+      throw invalidPartnerCredentials();
   }
 
   async function approveSandbox(
@@ -260,11 +357,9 @@ export function createPartnerAccessService(input: {
     if (
       !partner ||
       partner.status === 'SUSPENDED' ||
-      (values.environment === 'SANDBOX' &&
-        !partner.sandbox_approved_at) ||
+      (values.environment === 'SANDBOX' && !partner.sandbox_approved_at) ||
       (values.environment === 'PRODUCTION' &&
-        (partner.status !== 'ACTIVE' ||
-          !partner.production_approved_at))
+        (partner.status !== 'ACTIVE' || !partner.production_approved_at))
     ) {
       throw new AppError({
         code: 'KEY_ISSUANCE_NOT_ALLOWED',
@@ -320,9 +415,7 @@ export function createPartnerAccessService(input: {
   }
 
   async function recordIntegrationReview(
-    values: Parameters<
-      PartnerAccessService['recordIntegrationReview']
-    >[0],
+    values: Parameters<PartnerAccessService['recordIntegrationReview']>[0],
   ): Promise<void> {
     if (
       !(await input.repository.setIntegrationReviewStatus(
@@ -359,7 +452,7 @@ export function createPartnerAccessService(input: {
       !key ||
       key.status !== 'ACTIVE' ||
       (key.expires_at && key.expires_at <= now()) ||
-      hashCredential(values.apiKey) !== key.key_hash
+      !timingSafeEqualStrings(hashCredential(values.apiKey), key.key_hash)
     ) {
       throw invalidPartnerAuthentication();
     }
@@ -370,7 +463,10 @@ export function createPartnerAccessService(input: {
     );
 
     if (
-      hashCredential(signingSecret) !== key.signing_secret_hash ||
+      !timingSafeEqualStrings(
+        hashCredential(signingSecret),
+        key.signing_secret_hash,
+      ) ||
       !verifyHmacSignature(
         createCanonicalRequest({
           timestamp: values.timestamp,
@@ -385,8 +481,23 @@ export function createPartnerAccessService(input: {
     ) {
       throw invalidPartnerAuthentication();
     }
-    if (input.repository.claimRequestSignature && !(await input.repository.claimRequestSignature(key._id,hashCredential(`${values.timestamp}:${values.nonce ?? ''}:${values.signature}`),new Date(now().getTime()+input.authConfig.partnerHmacMaxSkewSeconds*1_000)))) {
-      throw new AppError({code:'PARTNER_REQUEST_REPLAYED',message:'This signed Partner request was already used',statusCode:409});
+    if (
+      input.repository.claimRequestSignature &&
+      !(await input.repository.claimRequestSignature(
+        key._id,
+        hashCredential(
+          `${values.timestamp}:${values.nonce ?? ''}:${values.signature}`,
+        ),
+        new Date(
+          now().getTime() + input.authConfig.partnerHmacMaxSkewSeconds * 1_000,
+        ),
+      ))
+    ) {
+      throw new AppError({
+        code: 'PARTNER_REQUEST_REPLAYED',
+        message: 'This signed Partner request was already used',
+        statusCode: 409,
+      });
     }
 
     const partner = await input.repository.findPartner(key.partner_id);
@@ -409,12 +520,10 @@ export function createPartnerAccessService(input: {
     };
   }
 
-  async function consumeRateLimit(
-    values: {
-      partnerId: string;
-      environment: PartnerEnvironment;
-    },
-  ): Promise<RateLimitDecision> {
+  async function consumeRateLimit(values: {
+    partnerId: string;
+    environment: PartnerEnvironment;
+  }): Promise<RateLimitDecision> {
     const partner = await input.repository.findPartner(
       toObjectId(values.partnerId),
     );
@@ -439,13 +548,16 @@ export function createPartnerAccessService(input: {
   async function setRateLimitTier(
     values: Parameters<PartnerAccessService['setRateLimitTier']>[0],
   ): Promise<void> {
-    if (!input.repository.setRateLimitTier || !(await input.repository.setRateLimitTier(
-      toObjectId(values.partnerId),
-      values.tier,
-      toObjectId(values.adminId),
-      values.correlationId,
-      now(),
-    ))) {
+    if (
+      !input.repository.setRateLimitTier ||
+      !(await input.repository.setRateLimitTier(
+        toObjectId(values.partnerId),
+        values.tier,
+        toObjectId(values.adminId),
+        values.correlationId,
+        now(),
+      ))
+    ) {
       throw transitionNotAllowed();
     }
   }
@@ -484,7 +596,11 @@ export function createPartnerAccessService(input: {
 
     const webhookId = new ObjectId();
     const subscribedEvents = normalizeSubscriptions(values.subscribedEvents);
-    const signingSecret = webhookSecret(input.authConfig.partnerCredentialMasterSecret,webhookId,1);
+    const signingSecret = webhookSecret(
+      input.authConfig.partnerCredentialMasterSecret,
+      webhookId,
+      1,
+    );
     const timestamp = now();
     const created = await input.repository.insertWebhook({
       _id: webhookId,
@@ -516,30 +632,112 @@ export function createPartnerAccessService(input: {
     };
   }
 
-  async function listWebhooks(values:Parameters<PartnerAccessService['listWebhooks']>[0]){
-    const rows=await input.repository.listWebhooks?.(toObjectId(values.partnerId),values.environment)??[];
-    return rows.map(v=>({webhookId:v._id.toHexString(),url:v.url,environment:v.environment,subscribedEvents:v.subscribed_event_types,status:v.status,verifiedAt:v.verified_at?.toISOString()??null,secretVersion:v.secret_version??1,createdAt:v.created_at.toISOString(),updatedAt:v.updated_at.toISOString()}));
+  async function listWebhooks(
+    values: Parameters<PartnerAccessService['listWebhooks']>[0],
+  ) {
+    const rows =
+      (await input.repository.listWebhooks?.(
+        toObjectId(values.partnerId),
+        values.environment,
+      )) ?? [];
+    return rows.map((v) => ({
+      webhookId: v._id.toHexString(),
+      url: v.url,
+      environment: v.environment,
+      subscribedEvents: v.subscribed_event_types,
+      status: v.status,
+      verifiedAt: v.verified_at?.toISOString() ?? null,
+      secretVersion: v.secret_version ?? 1,
+      createdAt: v.created_at.toISOString(),
+      updatedAt: v.updated_at.toISOString(),
+    }));
   }
 
-  async function rotateWebhookSecret(values:Parameters<PartnerAccessService['rotateWebhookSecret']>[0]){
-    const id=toObjectId(values.webhookId);const endpoint=await input.repository.findWebhook?.(id,toObjectId(values.partnerId),values.environment);
-    if(!endpoint)throw transitionNotAllowed();const version=(endpoint.secret_version??1)+1;const signingSecret=webhookSecret(input.authConfig.partnerCredentialMasterSecret,id,version);
-    if(!(await input.repository.rotateWebhookSecret?.(id,endpoint.partner_id,values.environment,hashCredential(signingSecret),version,now())))throw transitionNotAllowed();
-    return{signingSecret,status:'PENDING' as const};
+  async function rotateWebhookSecret(
+    values: Parameters<PartnerAccessService['rotateWebhookSecret']>[0],
+  ) {
+    const id = toObjectId(values.webhookId);
+    const endpoint = await input.repository.findWebhook?.(
+      id,
+      toObjectId(values.partnerId),
+      values.environment,
+    );
+    if (!endpoint) throw transitionNotAllowed();
+    const version = (endpoint.secret_version ?? 1) + 1;
+    const signingSecret = webhookSecret(
+      input.authConfig.partnerCredentialMasterSecret,
+      id,
+      version,
+    );
+    if (
+      !(await input.repository.rotateWebhookSecret?.(
+        id,
+        endpoint.partner_id,
+        values.environment,
+        hashCredential(signingSecret),
+        version,
+        now(),
+      ))
+    )
+      throw transitionNotAllowed();
+    return { signingSecret, status: 'PENDING' as const };
   }
 
-  async function testWebhook(values:Parameters<PartnerAccessService['testWebhook']>[0]){
-    const id=toObjectId(values.webhookId);const endpoint=await input.repository.findWebhook?.(id,toObjectId(values.partnerId),values.environment);if(!endpoint||endpoint.status==='DISABLED')throw transitionNotAllowed();
-    const secret=webhookSecret(input.authConfig.partnerCredentialMasterSecret,id,endpoint.secret_version??1);if(hashCredential(secret)!==endpoint.signing_secret_hash)throw transitionNotAllowed();
-    const result=await createSecureWebhookTransport().deliver({url:endpoint.url,secret,eventId:new ObjectId().toHexString(),eventType:'webhook.test',body:JSON.stringify({eventType:'webhook.test',webhookId:values.webhookId,environment:values.environment}),timeoutMs:10_000,now:now()});
-    if(!result.delivered)throw new AppError({code:'WEBHOOK_TEST_FAILED',message:'The webhook endpoint did not accept the signed test event',statusCode:424,details:{responseCode:result.attempt.response_code,error:result.attempt.error}});
-    await verifyWebhook(values.webhookId);return{status:'ACTIVE' as const,responseCode:result.attempt.response_code};
+  async function testWebhook(
+    values: Parameters<PartnerAccessService['testWebhook']>[0],
+  ) {
+    const id = toObjectId(values.webhookId);
+    const endpoint = await input.repository.findWebhook?.(
+      id,
+      toObjectId(values.partnerId),
+      values.environment,
+    );
+    if (!endpoint || endpoint.status === 'DISABLED')
+      throw transitionNotAllowed();
+    const secret = webhookSecret(
+      input.authConfig.partnerCredentialMasterSecret,
+      id,
+      endpoint.secret_version ?? 1,
+    );
+    if (
+      !timingSafeEqualStrings(
+        hashCredential(secret),
+        endpoint.signing_secret_hash,
+      )
+    )
+      throw transitionNotAllowed();
+    const result = await createSecureWebhookTransport().deliver({
+      url: endpoint.url,
+      secret,
+      eventId: new ObjectId().toHexString(),
+      eventType: 'webhook.test',
+      body: JSON.stringify({
+        eventType: 'webhook.test',
+        webhookId: values.webhookId,
+        environment: values.environment,
+      }),
+      timeoutMs: 10_000,
+      now: now(),
+    });
+    if (!result.delivered)
+      throw new AppError({
+        code: 'WEBHOOK_TEST_FAILED',
+        message: 'The webhook endpoint did not accept the signed test event',
+        statusCode: 424,
+        details: {
+          responseCode: result.attempt.response_code,
+          error: result.attempt.error,
+        },
+      });
+    await verifyWebhook(values.webhookId);
+    return {
+      status: 'ACTIVE' as const,
+      responseCode: result.attempt.response_code,
+    };
   }
 
   async function replaceWebhookSubscriptions(
-    values: Parameters<
-      PartnerAccessService['replaceWebhookSubscriptions']
-    >[0],
+    values: Parameters<PartnerAccessService['replaceWebhookSubscriptions']>[0],
   ): Promise<void> {
     const subscribedEvents = normalizeSubscriptions(values.subscribedEvents);
     if (
@@ -556,12 +754,7 @@ export function createPartnerAccessService(input: {
   }
 
   async function verifyWebhook(webhookId: string): Promise<void> {
-    if (
-      !(await input.repository.verifyWebhook(
-        toObjectId(webhookId),
-        now(),
-      ))
-    ) {
+    if (!(await input.repository.verifyWebhook(toObjectId(webhookId), now()))) {
       throw transitionNotAllowed();
     }
   }
@@ -606,18 +799,32 @@ export function createPartnerAccessService(input: {
 }
 
 function invalidPartnerCredentials(): AppError {
-  return new AppError({ code: 'INVALID_PARTNER_CREDENTIALS', message: 'The Partner credentials are invalid', statusCode: 401 });
+  return new AppError({
+    code: 'INVALID_PARTNER_CREDENTIALS',
+    message: 'The Partner credentials are invalid',
+    statusCode: 401,
+  });
 }
-function webhookSecret(master:string,id:ObjectId,version:number){return deriveSigningSecret(master,version===1?`webhook:${id.toHexString()}`:`webhook:${id.toHexString()}:v${version}`);}
+function webhookSecret(master: string, id: ObjectId, version: number) {
+  return deriveSigningSecret(
+    master,
+    version === 1
+      ? `webhook:${id.toHexString()}`
+      : `webhook:${id.toHexString()}:v${version}`,
+  );
+}
 
-function normalizeSubscriptions(values: readonly string[]): ExternalEventType[] {
-  const unique = [...new Set(values.map((value) => value.trim().toLowerCase()))];
+function normalizeSubscriptions(
+  values: readonly string[],
+): ExternalEventType[] {
+  const unique = [
+    ...new Set(values.map((value) => value.trim().toLowerCase())),
+  ];
   if (
     unique.length === 0 ||
     unique.length > 20 ||
     unique.some(
-      (value) =>
-        !EXTERNAL_EVENT_TYPES.includes(value as ExternalEventType),
+      (value) => !EXTERNAL_EVENT_TYPES.includes(value as ExternalEventType),
     )
   ) {
     throw new AppError({
@@ -630,7 +837,10 @@ function normalizeSubscriptions(values: readonly string[]): ExternalEventType[] 
 }
 
 function normalizeScope(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9:_-]/g, '');
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9:_-]/g, '');
 }
 
 function toObjectId(value: string): ObjectId {

@@ -34,10 +34,7 @@ const cloudinaryPlugin: FastifyPluginAsync<CloudinaryPluginOptions> = async (
       hide_sensitive: true,
     });
 
-    storage = new CloudinaryMediaStorage(
-      cloudinary,
-      options.config.folder,
-    );
+    storage = new CloudinaryMediaStorage(cloudinary, options.config.folder);
   }
 
   fastify.decorate('mediaStorage', storage);

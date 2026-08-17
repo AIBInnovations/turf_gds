@@ -12,5 +12,23 @@ services:
     depends_on: [mongo]
     restart: "no"
     entrypoint: ["bash","-c","sleep 5 && mongosh --host mongo:27017 --eval 'try{rs.status()}catch(e){rs.initiate({_id:\"rs0\",members:[{_id:0,host:\"mongo:27017\"}]})}'"]
+  api:
+    build: .
+    depends_on: [mongo, redis, mongo-init]
+    env_file: [.env]
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/?replicaSet=rs0
+      REDIS_URL: redis://redis:6379
+    ports: ["3000:3000"]
+  # Exactly one worker. The jobs lease their work, so an overlapping deploy is
+  # safe, but there is no reason to run more than one steady-state.
+  worker:
+    build: .
+    command: ["node","dist/worker.js"]
+    depends_on: [mongo, redis, mongo-init]
+    env_file: [.env]
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/?replicaSet=rs0
+      REDIS_URL: redis://redis:6379
 volumes:
   mongo-data:

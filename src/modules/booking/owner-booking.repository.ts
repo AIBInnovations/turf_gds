@@ -1,7 +1,14 @@
 import type { Filter, ObjectId } from 'mongodb';
 
 import type { DatabaseConnection } from '../../shared/database/database-connection.js';
+import { archiveAuditEvent } from '../../shared/audit/audit.persistence.js';
+import {
+  consumeFixedSlots,
+  restoreConsumedFixedSlots,
+} from '../venue/inventory/slot-consumption.js';
+import type { CourtDocument } from '../venue/courts/court.types.js';
 import type { SlotDocument } from '../venue/inventory/inventory.types.js';
+import { queryOverlappingSlots } from '../venue/inventory/slot-overlap.js';
 import type {
   BookingCancellationDocument,
   BookingDocument,
@@ -30,7 +37,44 @@ export interface OwnerBookingRepository {
   findCancellation(
     bookingId: ObjectId,
   ): Promise<BookingCancellationDocument | null>;
-  findPayment(venueId:ObjectId,bookingId:ObjectId):Promise<BookingPaymentDocument|null>;
+  findPayment(
+    venueId: ObjectId,
+    bookingId: ObjectId,
+  ): Promise<BookingPaymentDocument | null>;
+  lockCourtForDirectBooking(input: {
+    courtId: ObjectId;
+    venueId: ObjectId;
+    expectedVersion: number;
+    now: Date;
+    session: import('mongodb').ClientSession;
+  }): Promise<boolean>;
+  /**
+   * Every slot overlapping the interval, whatever its booking type or status.
+   * Callers classify with `classifyOverlap`; see `slot-overlap.ts`.
+   */
+  findOverlappingSlots(input: {
+    courtId: ObjectId;
+    environment: 'SANDBOX' | 'PRODUCTION';
+    startsAt: Date;
+    endsAt: Date;
+    session: import('mongodb').ClientSession;
+  }): Promise<SlotDocument[]>;
+  insertDirectSlot(
+    slot: SlotDocument,
+    session: import('mongodb').ClientSession,
+  ): Promise<void>;
+  /** Mark overlapping FIXED_SLOTs as consumed by a new OPEN_TIME slot. */
+  consumeFixedSlots(input: {
+    courtId: ObjectId;
+    environment: 'SANDBOX' | 'PRODUCTION';
+    consumerSlotId: ObjectId;
+    fixedSlotIds: readonly ObjectId[];
+    staleConsumerIds: readonly ObjectId[];
+    actorOwnerId: ObjectId;
+    correlationId: string;
+    now: Date;
+    session: import('mongodb').ClientSession;
+  }): Promise<number>;
   insertDirectBooking(
     booking: BookingDocument,
     session: import('mongodb').ClientSession,
@@ -55,6 +99,7 @@ export interface OwnerBookingRepository {
   ): Promise<void>;
   releaseDirectSlot(input: {
     slotId: ObjectId;
+    courtId: ObjectId;
     bookingId: ObjectId;
     now: Date;
     correlationId: string;
@@ -108,7 +153,63 @@ export function createOwnerBookingRepository(
         .collection<BookingCancellationDocument>('booking_cancellations')
         .findOne({ booking_id: bookingId });
     },
-    findPayment(venueId,bookingId){return database.db.collection<BookingPaymentDocument>('booking_payments').findOne({venue_id:venueId,booking_id:bookingId});},
+    findPayment(venueId, bookingId) {
+      return database.db
+        .collection<BookingPaymentDocument>('booking_payments')
+        .findOne({ venue_id: venueId, booking_id: bookingId });
+    },
+
+    async lockCourtForDirectBooking(input) {
+      const result = await database.db
+        .collection<CourtDocument>('courts')
+        .updateOne(
+          {
+            _id: input.courtId,
+            venue_id: input.venueId,
+            version: input.expectedVersion,
+            status: 'AVAILABLE',
+          },
+          { $inc: { version: 1 }, $set: { updated_at: input.now } },
+          { session: input.session },
+        );
+      return result.modifiedCount === 1;
+    },
+
+    findOverlappingSlots(input) {
+      return queryOverlappingSlots(
+        database.db,
+        {
+          courtId: input.courtId,
+          environment: input.environment,
+          startsAt: input.startsAt,
+          endsAt: input.endsAt,
+        },
+        input.session,
+      );
+    },
+
+    async insertDirectSlot(slot, session) {
+      await database.db
+        .collection<SlotDocument>('slots')
+        .insertOne(slot, { session });
+    },
+
+    consumeFixedSlots(input) {
+      return consumeFixedSlots({
+        db: database.db,
+        courtId: input.courtId,
+        environment: input.environment,
+        consumerSlotId: input.consumerSlotId,
+        fixedSlotIds: input.fixedSlotIds,
+        staleConsumerIds: input.staleConsumerIds,
+        actorType: 'VENUE_OWNER',
+        actorId: input.actorOwnerId,
+        reason: 'Consumed by Venue Owner direct booking',
+        correlationId: input.correlationId,
+        now: input.now,
+        session: input.session,
+      });
+    },
 
     async insertDirectBooking(booking, session) {
       await database.db
@@ -133,23 +234,29 @@ export function createOwnerBookingRepository(
             version: input.booking.version,
           },
           {
-            $set: { status: 'CANCELLED', cancelled_at: input.now, updated_at: input.now },
+            $set: {
+              status: 'CANCELLED',
+              cancelled_at: input.now,
+              updated_at: input.now,
+            },
             $inc: { version: 1 },
             $push: {
               audit_history: {
-                $each: [{
-                  event_type: 'BOOKING_CANCELLED',
-                  actor_type: 'VENUE' as const,
-                  actor_id: input.actorOwnerId,
-                  correlation_id: input.correlationId,
-                  changes: {
-                    previous_status: 'CONFIRMED',
-                    new_status: 'CANCELLED',
-                    reason_code: input.reasonCode,
-                    reason_text: input.reasonText,
+                $each: [
+                  {
+                    event_type: 'BOOKING_CANCELLED',
+                    actor_type: 'VENUE' as const,
+                    actor_id: input.actorOwnerId,
+                    correlation_id: input.correlationId,
+                    changes: {
+                      previous_status: 'CONFIRMED',
+                      new_status: 'CANCELLED',
+                      reason_code: input.reasonCode,
+                      reason_text: input.reasonText,
+                    },
+                    occurred_at: input.now,
                   },
-                  occurred_at: input.now,
-                }],
+                ],
                 $slice: -100,
               },
             },
@@ -165,35 +272,48 @@ export function createOwnerBookingRepository(
     },
 
     async releaseDirectSlot(input) {
-      await database.db
-        .collection<SlotDocument>('slots')
-        .updateOne(
-          { _id: input.slotId, booking_id: input.bookingId, status: 'BOOKED' },
-          {
-            $set: {
-              status: 'AVAILABLE',
-              booking_id: null,
-              updated_at: input.now,
-            },
-            $inc: { version: 1 },
-            $push: {
-              audit_history: {
-                $each: [{
-                  event_type: 'SLOT_RELEASED',
-                  actor_type: 'VENUE_OWNER' as const,
-                  actor_id: input.actorOwnerId,
-                  previous_status: 'BOOKED' as const,
-                  new_status: 'AVAILABLE' as const,
-                  reason: 'Owner booking cancelled',
-                  correlation_id: input.correlationId,
-                  occurred_at: input.now,
-                }],
-                $slice: -100,
-              },
-            },
-          },
-          { session: input.session },
-        );
+      const slots = database.db.collection<SlotDocument>('slots');
+      const booked = await slots.findOne(
+        { _id: input.slotId, booking_id: input.bookingId, status: 'BOOKED' },
+        { session: input.session },
+      );
+      if (!booked) return;
+
+      await restoreConsumedFixedSlots({
+        db: database.db,
+        courtId: input.courtId,
+        consumerSlotId: booked._id,
+        actorType: 'VENUE_OWNER',
+        actorId: input.actorOwnerId,
+        reason: 'Owner booking cancelled',
+        correlationId: input.correlationId,
+        now: input.now,
+        session: input.session,
+      });
+      await archiveAuditEvent({
+        db: database.db,
+        aggregateType: 'SLOT',
+        aggregateId: booked._id,
+        environment: booked.environment,
+        event: {
+          event_type: 'SLOT_RELEASED',
+          actor_type: 'VENUE_OWNER',
+          actor_id: input.actorOwnerId,
+          previous_status: 'BOOKED',
+          new_status: 'AVAILABLE',
+          reason: 'Owner booking cancelled',
+          correlation_id: input.correlationId,
+          occurred_at: input.now,
+        },
+        session: input.session,
+      });
+      // Retire the slot rather than leaving an AVAILABLE husk, which would
+      // collide with uq_slots_court_mode_interval on the next booking of the
+      // same interval.
+      await slots.deleteOne(
+        { _id: booked._id, booking_id: input.bookingId, status: 'BOOKED' },
+        { session: input.session },
+      );
     },
   };
 }

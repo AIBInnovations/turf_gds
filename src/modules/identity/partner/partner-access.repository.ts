@@ -13,10 +13,29 @@ export interface PartnerAccessRepository {
   createPartner(partner: PartnerDocument): Promise<boolean>;
   findPartner(id: ObjectId): Promise<PartnerDocument | null>;
   findPartnerByEmail?(email: string): Promise<PartnerDocument | null>;
-  recordFailedLogin?(id: ObjectId, maxAttempts: number, lockedUntil: Date, now: Date): Promise<void>;
-  recordSuccessfulLogin?(id: ObjectId, tokenHash: string, expiresAt: Date, now: Date): Promise<boolean>;
-  findBySessionTokenHash?(tokenHash: string, now: Date): Promise<PartnerDocument | null>;
-  revokeSession?(partnerId:ObjectId,tokenHash:string,now:Date):Promise<boolean>;
+  recordFailedLogin?(
+    id: ObjectId,
+    maxAttempts: number,
+    lockedUntil: Date,
+    now: Date,
+  ): Promise<void>;
+  recordSuccessfulLogin?(
+    id: ObjectId,
+    tokenHash: string,
+    expiresAt: Date,
+    now: Date,
+    ipHash: string,
+    userAgent: string,
+  ): Promise<boolean>;
+  findBySessionTokenHash?(
+    tokenHash: string,
+    now: Date,
+  ): Promise<PartnerDocument | null>;
+  revokeSession?(
+    partnerId: ObjectId,
+    tokenHash: string,
+    now: Date,
+  ): Promise<boolean>;
   approveSandbox(
     partnerId: ObjectId,
     adminId: ObjectId,
@@ -37,11 +56,13 @@ export interface PartnerAccessRepository {
     now: Date,
   ): Promise<boolean>;
   insertApiKey(key: PartnerApiKeyDocument): Promise<void>;
-  findApiKeyByPrefix(
-    prefix: string,
-  ): Promise<PartnerApiKeyDocument | null>;
+  findApiKeyByPrefix(prefix: string): Promise<PartnerApiKeyDocument | null>;
   touchApiKey(id: ObjectId, now: Date): Promise<void>;
-  claimRequestSignature?(keyId:ObjectId,signatureHash:string,expiresAt:Date):Promise<boolean>;
+  claimRequestSignature?(
+    keyId: ObjectId,
+    signatureHash: string,
+    expiresAt: Date,
+  ): Promise<boolean>;
   revokeApiKey(id: ObjectId, now: Date): Promise<boolean>;
   recordUsage(input: {
     partnerId: ObjectId;
@@ -58,7 +79,7 @@ export interface PartnerAccessRepository {
     correlationId: string,
     now: Date,
   ): Promise<boolean>;
-  consumeRateLimitWindow?(input: {
+  consumeRateLimitWindow(input: {
     partnerId: string;
     environment: PartnerEnvironment;
     limit: number;
@@ -66,9 +87,23 @@ export interface PartnerAccessRepository {
     now: Date;
   }): Promise<{ count: number }>;
   insertWebhook(endpoint: WebhookEndpointDocument): Promise<boolean>;
-  listWebhooks?(partnerId:ObjectId,environment:PartnerEnvironment):Promise<WebhookEndpointDocument[]>;
-  findWebhook?(id:ObjectId,partnerId:ObjectId,environment:PartnerEnvironment):Promise<WebhookEndpointDocument|null>;
-  rotateWebhookSecret?(id:ObjectId,partnerId:ObjectId,environment:PartnerEnvironment,secretHash:string,secretVersion:number,now:Date):Promise<boolean>;
+  listWebhooks?(
+    partnerId: ObjectId,
+    environment: PartnerEnvironment,
+  ): Promise<WebhookEndpointDocument[]>;
+  findWebhook?(
+    id: ObjectId,
+    partnerId: ObjectId,
+    environment: PartnerEnvironment,
+  ): Promise<WebhookEndpointDocument | null>;
+  rotateWebhookSecret?(
+    id: ObjectId,
+    partnerId: ObjectId,
+    environment: PartnerEnvironment,
+    secretHash: string,
+    secretVersion: number,
+    now: Date,
+  ): Promise<boolean>;
   verifyWebhook(id: ObjectId, now: Date): Promise<boolean>;
   replaceWebhookSubscriptions(
     id: ObjectId,
@@ -88,15 +123,20 @@ export interface PartnerAccessRepository {
 export function createPartnerAccessRepository(
   database: DatabaseConnection,
 ): PartnerAccessRepository {
-  const partners = () =>
-    database.db.collection<PartnerDocument>('partners');
+  const partners = () => database.db.collection<PartnerDocument>('partners');
   const apiKeys = () =>
     database.db.collection<PartnerApiKeyDocument>('partner_api_keys');
   const usage = () =>
     database.db.collection<ApiUsageDailyDocument>('api_usage_daily');
   const webhooks = () =>
     database.db.collection<WebhookEndpointDocument>('webhook_endpoints');
-  const authReplays=()=>database.db.collection<{_id:ObjectId;key_id:ObjectId;signature_hash:string;expires_at:Date}>('partner_auth_replays');
+  const authReplays = () =>
+    database.db.collection<{
+      _id: ObjectId;
+      key_id: ObjectId;
+      signature_hash: string;
+      expires_at: Date;
+    }>('partner_auth_replays');
 
   return {
     async createPartner(partner) {
@@ -116,24 +156,75 @@ export function createPartnerAccessRepository(
     findPartnerByEmail(email) {
       return partners().findOne({ email });
     },
-    async claimRequestSignature(keyId,signatureHash,expiresAt){try{await authReplays().insertOne({_id:new ObjectId(),key_id:keyId,signature_hash:signatureHash,expires_at:expiresAt});return true;}catch(error){if(isDuplicateKeyError(error))return false;throw error;}},
-    async recordFailedLogin(id, maxAttempts, lockedUntil, now) {
-      const value = await partners().findOne({ _id: id }, { projection: { failed_login_count: 1 } });
-      const failures = (value?.failed_login_count ?? 0) + 1;
-      await partners().updateOne({ _id: id }, {
-        $set: {
-          failed_login_count: failures,
-          locked_until: failures >= maxAttempts ? lockedUntil : null,
-          updated_at: now,
-        },
-      });
+    async claimRequestSignature(keyId, signatureHash, expiresAt) {
+      try {
+        await authReplays().insertOne({
+          _id: new ObjectId(),
+          key_id: keyId,
+          signature_hash: signatureHash,
+          expires_at: expiresAt,
+        });
+        return true;
+      } catch (error) {
+        if (isDuplicateKeyError(error)) return false;
+        throw error;
+      }
     },
-    async recordSuccessfulLogin(id, tokenHash, expiresAt, now) {
+    async recordFailedLogin(id, maxAttempts, lockedUntil, now) {
+      await partners().updateOne({ _id: id }, [
+        {
+          $set: {
+            failed_login_count: {
+              $add: [{ $ifNull: ['$failed_login_count', 0] }, 1],
+            },
+            locked_until: {
+              $cond: [
+                {
+                  $gte: [
+                    { $add: [{ $ifNull: ['$failed_login_count', 0] }, 1] },
+                    maxAttempts,
+                  ],
+                },
+                lockedUntil,
+                '$locked_until',
+              ],
+            },
+            updated_at: now,
+          },
+        },
+      ]);
+    },
+    async recordSuccessfulLogin(
+      id,
+      tokenHash,
+      expiresAt,
+      now,
+      ipHash,
+      userAgent,
+    ) {
       const result = await partners().updateOne(
         { _id: id, status: { $ne: 'SUSPENDED' } },
         {
-          $set: { failed_login_count: 0, locked_until: null, last_login_at: now, updated_at: now },
-          $push: { sessions: { $each: [{ token_hash: tokenHash, expires_at: expiresAt, created_at: now }], $slice: -10 } },
+          $set: {
+            failed_login_count: 0,
+            locked_until: null,
+            last_login_at: now,
+            updated_at: now,
+          },
+          $push: {
+            sessions: {
+              $each: [
+                {
+                  token_hash: tokenHash,
+                  ip_hash: ipHash,
+                  user_agent: userAgent,
+                  expires_at: expiresAt,
+                  created_at: now,
+                },
+              ],
+              $slice: -10,
+            },
+          },
         },
       );
       return result.modifiedCount > 0;
@@ -141,10 +232,21 @@ export function createPartnerAccessRepository(
     findBySessionTokenHash(tokenHash, now) {
       return partners().findOne({
         status: { $ne: 'SUSPENDED' },
-        sessions: { $elemMatch: { token_hash: tokenHash, expires_at: { $gt: now } } },
+        sessions: {
+          $elemMatch: { token_hash: tokenHash, expires_at: { $gt: now } },
+        },
       });
     },
-    async revokeSession(partnerId,tokenHash,now){const result=await partners().updateOne({_id:partnerId,'sessions.token_hash':tokenHash},{$pull:{sessions:{token_hash:tokenHash}},$set:{updated_at:now}});return result.modifiedCount>0;},
+    async revokeSession(partnerId, tokenHash, now) {
+      const result = await partners().updateOne(
+        { _id: partnerId, 'sessions.token_hash': tokenHash },
+        {
+          $pull: { sessions: { token_hash: tokenHash } },
+          $set: { updated_at: now },
+        },
+      );
+      return result.modifiedCount > 0;
+    },
     async approveSandbox(partnerId, adminId, correlationId, now) {
       const result = await partners().updateOne(
         { _id: partnerId, status: 'PENDING', sandbox_approved_at: null },
@@ -153,14 +255,16 @@ export function createPartnerAccessRepository(
             sandbox_approved_at: now,
             updated_at: now,
           },
-          $push: { audit_history: boundedAudit({
-            event_type: 'SANDBOX_APPROVED',
-            actor_type: 'ADMIN',
-            actor_id: adminId,
-            correlation_id: correlationId,
-            changes: {},
-            occurred_at: now,
-          }) },
+          $push: {
+            audit_history: boundedAudit({
+              event_type: 'SANDBOX_APPROVED',
+              actor_type: 'ADMIN',
+              actor_id: adminId,
+              correlation_id: correlationId,
+              changes: {},
+              occurred_at: now,
+            }),
+          },
         },
       );
       return result.modifiedCount > 0;
@@ -185,14 +289,16 @@ export function createPartnerAccessRepository(
             production_approved_at: now,
             updated_at: now,
           },
-          $push: { audit_history: boundedAudit({
-            event_type: 'PRODUCTION_APPROVED',
-            actor_type: 'ADMIN',
-            actor_id: adminId,
-            correlation_id: correlationId,
-            changes: { status: 'ACTIVE' },
-            occurred_at: now,
-          }) },
+          $push: {
+            audit_history: boundedAudit({
+              event_type: 'PRODUCTION_APPROVED',
+              actor_type: 'ADMIN',
+              actor_id: adminId,
+              correlation_id: correlationId,
+              changes: { status: 'ACTIVE' },
+              occurred_at: now,
+            }),
+          },
         },
       );
       return result.modifiedCount > 0;
@@ -213,14 +319,16 @@ export function createPartnerAccessRepository(
           $set: {
             updated_at: now,
           },
-          $push: { audit_history: boundedAudit({
-            event_type: 'INTEGRATION_REVIEW',
-            actor_type: 'ADMIN',
-            actor_id: adminId,
-            correlation_id: correlationId,
-            changes: { status },
-            occurred_at: now,
-          }) },
+          $push: {
+            audit_history: boundedAudit({
+              event_type: 'INTEGRATION_REVIEW',
+              actor_type: 'ADMIN',
+              actor_id: adminId,
+              correlation_id: correlationId,
+              changes: { status },
+              occurred_at: now,
+            }),
+          },
         },
       );
       return result.matchedCount > 0;
@@ -232,10 +340,7 @@ export function createPartnerAccessRepository(
       return apiKeys().findOne({ key_prefix: prefix });
     },
     async touchApiKey(id, now) {
-      await apiKeys().updateOne(
-        { _id: id },
-        { $set: { last_used_at: now } },
-      );
+      await apiKeys().updateOne({ _id: id }, { $set: { last_used_at: now } });
     },
     async revokeApiKey(id, now) {
       const result = await apiKeys().updateOne(
@@ -276,23 +381,28 @@ export function createPartnerAccessRepository(
         { upsert: true },
       );
       const sample = await usage().findOne(
-        { partner_id: input.partnerId, environment: input.environment, usage_date: usageDate },
+        {
+          partner_id: input.partnerId,
+          environment: input.environment,
+          usage_date: usageDate,
+        },
         { projection: { latency_samples: 1 } },
       );
-      const sorted = [...(sample?.latency_samples ?? [latency])].sort((a, b) => a - b);
-      const p95 = sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)] ?? latency;
+      const sorted = [...(sample?.latency_samples ?? [latency])].sort(
+        (a, b) => a - b,
+      );
+      const p95 =
+        sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)] ?? latency;
       await usage().updateOne(
-        { partner_id: input.partnerId, environment: input.environment, usage_date: usageDate },
+        {
+          partner_id: input.partnerId,
+          environment: input.environment,
+          usage_date: usageDate,
+        },
         { $set: { p95_latency_ms: p95 } },
       );
     },
-    async setRateLimitTier(
-      partnerId,
-      tier,
-      adminId,
-      correlationId,
-      now,
-    ) {
+    async setRateLimitTier(partnerId, tier, adminId, correlationId, now) {
       const result = await partners().updateOne(
         { _id: partnerId, status: { $in: ['PENDING', 'ACTIVE'] } },
         {
@@ -321,47 +431,41 @@ export function createPartnerAccessRepository(
         usage_date: usageDate,
       };
       const update = [
-          {
-            $set: {
-              _id: { $ifNull: ['$_id', new ObjectId()] },
-              partner_id: partnerId,
-              environment: input.environment,
-              usage_date: usageDate,
-              request_count: { $ifNull: ['$request_count', 0] },
-              error_count: { $ifNull: ['$error_count', 0] },
-              rate_limited_count: { $ifNull: ['$rate_limited_count', 0] },
-              p95_latency_ms: { $ifNull: ['$p95_latency_ms', 0] },
-              rate_limit_window_count: {
-                $cond: [
-                  {
-                    $eq: [
-                      '$rate_limit_window_started_at',
-                      input.windowStartedAt,
-                    ],
-                  },
-                  { $add: [{ $ifNull: ['$rate_limit_window_count', 0] }, 1] },
-                  1,
-                ],
-              },
-              rate_limit_window_started_at: input.windowStartedAt,
-              updated_at: input.now,
+        {
+          $set: {
+            _id: { $ifNull: ['$_id', new ObjectId()] },
+            partner_id: partnerId,
+            environment: input.environment,
+            usage_date: usageDate,
+            request_count: { $ifNull: ['$request_count', 0] },
+            error_count: { $ifNull: ['$error_count', 0] },
+            rate_limited_count: { $ifNull: ['$rate_limited_count', 0] },
+            p95_latency_ms: { $ifNull: ['$p95_latency_ms', 0] },
+            rate_limit_window_count: {
+              $cond: [
+                {
+                  $eq: ['$rate_limit_window_started_at', input.windowStartedAt],
+                },
+                { $add: [{ $ifNull: ['$rate_limit_window_count', 0] }, 1] },
+                1,
+              ],
             },
+            rate_limit_window_started_at: input.windowStartedAt,
+            updated_at: input.now,
           },
-        ];
+        },
+      ];
       let value;
       try {
-        value = await usage().findOneAndUpdate(
-          filter,
-          update,
-          { upsert: true, returnDocument: 'after' },
-        );
+        value = await usage().findOneAndUpdate(filter, update, {
+          upsert: true,
+          returnDocument: 'after',
+        });
       } catch (error) {
         if (!isDuplicateKeyError(error)) throw error;
-        value = await usage().findOneAndUpdate(
-          filter,
-          update,
-          { returnDocument: 'after' },
-        );
+        value = await usage().findOneAndUpdate(filter, update, {
+          returnDocument: 'after',
+        });
       }
       return { count: value?.rate_limit_window_count ?? input.limit + 1 };
     },
@@ -376,9 +480,46 @@ export function createPartnerAccessRepository(
         throw error;
       }
     },
-    listWebhooks(partnerId,environment){return webhooks().find({partner_id:partnerId,environment}).sort({created_at:-1}).toArray();},
-    findWebhook(id,partnerId,environment){return webhooks().findOne({_id:id,partner_id:partnerId,environment});},
-    async rotateWebhookSecret(id,partnerId,environment,secretHash,secretVersion,now){const result=await webhooks().updateOne({_id:id,partner_id:partnerId,environment,status:{$ne:'DISABLED'}},{$set:{signing_secret_hash:secretHash,secret_version:secretVersion,status:'PENDING',verified_at:null,updated_at:now}});return result.modifiedCount>0;},
+    listWebhooks(partnerId, environment) {
+      return webhooks()
+        .find({ partner_id: partnerId, environment })
+        .sort({ created_at: -1 })
+        .toArray();
+    },
+    findWebhook(id, partnerId, environment) {
+      return webhooks().findOne({
+        _id: id,
+        partner_id: partnerId,
+        environment,
+      });
+    },
+    async rotateWebhookSecret(
+      id,
+      partnerId,
+      environment,
+      secretHash,
+      secretVersion,
+      now,
+    ) {
+      const result = await webhooks().updateOne(
+        {
+          _id: id,
+          partner_id: partnerId,
+          environment,
+          status: { $ne: 'DISABLED' },
+        },
+        {
+          $set: {
+            signing_secret_hash: secretHash,
+            secret_version: secretVersion,
+            status: 'PENDING',
+            verified_at: null,
+            updated_at: now,
+          },
+        },
+      );
+      return result.modifiedCount > 0;
+    },
     async verifyWebhook(id, now) {
       const result = await webhooks().updateOne(
         { _id: id, status: 'PENDING' },

@@ -379,6 +379,170 @@ test('open-time holds enforce hours, duration, overlap, environment, and expiry 
   }
 });
 
+test('open-time and fixed-slot bookings cannot both sell the same court interval', async (context) => {
+  const uri = process.env.MONGODB_URI;
+  if (!uri) {
+    context.skip('MONGODB_URI is not configured');
+    return;
+  }
+  const databaseName = `turf_gds_mixed_mode_it_${process.pid}_${Date.now()}`;
+  const database = new MongoDatabaseConnection({
+    uri,
+    database: databaseName,
+    serverSelectionTimeoutMs: 2_000,
+    maxPoolSize: 8,
+  });
+  let clock = new Date('2026-08-03T02:30:00.000Z');
+  try {
+    try {
+      await database.connect();
+    } catch {
+      context.skip('MongoDB integration server is unavailable');
+      return;
+    }
+    await initializeIdentityPersistence(database.db);
+    await initializeVenuePersistence(database.db);
+    await initializeInventoryPersistence(database.db);
+    await initializeContractPersistence(database.db);
+    await initializeBookingPersistence(database.db);
+    await initializeLedgerPersistence(database.db);
+    await initializeOutboxPersistence(database.db);
+    const ids = await seed(database, clock);
+    const service = createBookingLifecycleService({
+      repository: createBookingLifecycleRepository(database),
+      ledgerService: createLedgerService(createLedgerRepository(database)),
+      outboxRepository: createOutboxRepository(database),
+      database,
+      now: () => clock,
+      holdTtlMs: 10 * 60_000,
+    });
+    const base = {
+      partnerId: ids.partnerId.toHexString(),
+      environment: 'PRODUCTION' as const,
+      venueId: ids.venueId.toHexString(),
+      courtId: ids.courtId.toHexString(),
+    };
+    const openInterval = {
+      ...base,
+      bookingType: 'OPEN_TIME' as const,
+      startsAt: '2026-08-03T04:30:00.000Z',
+      endsAt: '2026-08-03T05:30:00.000Z',
+    };
+    const fixedClaim = {
+      ...base,
+      bookingType: 'FIXED_SLOT' as const,
+      slotId: ids.fixedSlotId.toHexString(),
+    };
+    const slots = database.db.collection<SlotDocument>('slots');
+
+    // The seeded fixed slot covers exactly this interval, so the two requests
+    // are competing for the same physical court hour.
+    for (const [label, order] of [
+      ['open-first', ['OPEN', 'FIXED']],
+      ['fixed-first', ['FIXED', 'OPEN']],
+    ] as const) {
+      const race = await Promise.allSettled(
+        order.map((kind, index) =>
+          kind === 'OPEN'
+            ? service.hold({ ...openInterval, correlationId: `${label}-open-${index}` })
+            : service.hold({ ...fixedClaim, correlationId: `${label}-fixed-${index}` }),
+        ),
+      );
+      assert.equal(
+        race.filter(({ status }) => status === 'fulfilled').length,
+        1,
+        `${label}: exactly one of the two holds must win`,
+      );
+      assert.equal(
+        race.filter(({ status }) => status === 'rejected').length,
+        1,
+        `${label}: the loser must be rejected`,
+      );
+
+      // Reset for the next ordering.
+      clock = new Date(clock.getTime() + 11 * 60_000);
+      await service.recoverExpiredHolds();
+      await slots.updateOne(
+        { _id: ids.fixedSlotId },
+        {
+          $set: {
+            status: 'AVAILABLE',
+            consumed_by_slot_id: null,
+            hold_id: null,
+            hold_partner_id: null,
+            hold_expires_at: null,
+            hold_created_at: null,
+          },
+        },
+      );
+      await slots.deleteMany({ booking_type: 'OPEN_TIME', source: 'BOOKING' });
+      clock = new Date('2026-08-03T02:30:00.000Z');
+    }
+
+    // Sequential: an open-time hold consumes the grid beneath it.
+    const openHold = await service.hold({
+      ...openInterval,
+      correlationId: 'mixed-open-hold',
+    });
+    const consumed = await slots.findOne({ _id: ids.fixedSlotId });
+    assert.equal(consumed?.status, 'UNAVAILABLE');
+    assert.equal(
+      consumed?.consumed_by_slot_id?.toHexString(),
+      openHold.slotId,
+    );
+
+    await assert.rejects(
+      service.hold({ ...fixedClaim, correlationId: 'mixed-fixed-blocked' }),
+      (error: unknown) =>
+        error instanceof AppError && error.code === 'INVENTORY_OVERLAP',
+    );
+
+    // Expiring the consumer must hand the grid back.
+    clock = new Date('2026-08-03T02:41:00.000Z');
+    const recovered = await service.recoverExpiredHolds();
+    assert.equal(recovered.openReleased, 1);
+    const restored = await slots.findOne({ _id: ids.fixedSlotId });
+    assert.equal(restored?.status, 'AVAILABLE');
+    assert.equal(restored?.consumed_by_slot_id, null);
+
+    // And the fixed slot is claimable again.
+    const reclaimed = await service.hold({
+      ...fixedClaim,
+      correlationId: 'mixed-fixed-after-expiry',
+    });
+    assert.equal(reclaimed.slotId, ids.fixedSlotId.toHexString());
+
+    // Confirming the fixed slot must now block the open-time interval.
+    await service.confirm({
+      partnerId: base.partnerId,
+      environment: 'PRODUCTION',
+      holdId: reclaimed.holdId,
+      idempotencyKey: 'mixed-confirm-1',
+      externalBookingReference: 'MIXED-1',
+      correlationId: 'mixed-confirm',
+    });
+    await assert.rejects(
+      service.hold({ ...openInterval, correlationId: 'mixed-open-blocked' }),
+      (error: unknown) =>
+        error instanceof AppError && error.code === 'INVENTORY_OVERLAP',
+    );
+
+    // Exactly one booking exists for this court interval — never two.
+    assert.equal(
+      await database.db.collection('bookings').countDocuments({
+        court_id: ids.courtId,
+        status: 'CONFIRMED',
+      }),
+      1,
+    );
+  } finally {
+    if (databaseName.startsWith('turf_gds_mixed_mode_it_')) {
+      await database.db.dropDatabase().catch(() => undefined);
+    }
+    await database.close().catch(() => undefined);
+  }
+});
+
 async function seed(
   database: MongoDatabaseConnection,
   now: Date,
@@ -551,6 +715,7 @@ async function seed(
     hold_created_at: null,
     source: 'SYSTEM_GENERATED',
     booking_id: null,
+    consumed_by_slot_id: null,
     audit_history: [],
     version: 1,
     created_at: now,

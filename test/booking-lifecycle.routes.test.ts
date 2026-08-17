@@ -40,7 +40,13 @@ function fixture(scopes = ['bookings:write']) {
       return { bookingId, status: 'CANCELLED' };
     },
     async recoverExpiredHolds() {
-      return { fixedReleased: 0, openReleased: 0 };
+      return {
+        fixedReleased: 0,
+        openReleased: 0,
+        batches: 0,
+        scanned: 0,
+        exhausted: false,
+      };
     },
     async getAudit(input) {
       calls.getAudit = input;
@@ -61,6 +67,15 @@ function fixture(scopes = ['bookings:write']) {
       input: Parameters<PartnerAccessService['recordApiUsage']>[0],
     ) {
       calls.usage = input;
+    },
+    async consumeRateLimit() {
+      return {
+        allowed: true,
+        limit: 100,
+        remaining: 99,
+        resetAt: new Date('2026-08-03T04:00:00.000Z'),
+        source: 'MONGODB',
+      };
     },
   } as unknown as PartnerAccessService;
   const adminAuthService = {

@@ -25,49 +25,48 @@ export function createFirebasePushDelivery(
   config: AppConfig['fcm'],
 ): PushDelivery {
   if (!config.enabled) return createDisabledPushDelivery();
-  let cachedAccessToken:
-    | { value: string; refreshAt: number }
-    | undefined;
+  let cachedAccessToken: { value: string; refreshAt: number } | undefined;
 
   return {
     async send(input) {
       if (input.tokens.length === 0) return { invalidTokens: [] };
       const accessToken = await getAccessToken();
-      const outcomes = await Promise.all(input.tokens.map(async (registration) => {
-        const response = await fetch(
-          `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(
-            config.projectId!,
-          )}/messages:send`,
-          {
-            method: 'POST',
-            redirect: 'error',
-            signal: AbortSignal.timeout(10_000),
-            headers: {
-              authorization: `Bearer ${accessToken}`,
-              'content-type': 'application/json',
-            },
-            body: JSON.stringify({
-              message: {
-                token: registration.token,
-                data: stringifyData({
-                  notificationType: input.notification.notification_type,
-                  aggregateType: input.notification.aggregate_type,
-                  aggregateId:
-                    input.notification.aggregate_id.toHexString(),
-                  venueId: input.notification.venue_id.toHexString(),
-                  ...input.notification.payload,
-                }),
+      const outcomes = await Promise.all(
+        input.tokens.map(async (registration) => {
+          const response = await fetch(
+            `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(
+              config.projectId!,
+            )}/messages:send`,
+            {
+              method: 'POST',
+              redirect: 'error',
+              signal: AbortSignal.timeout(10_000),
+              headers: {
+                authorization: `Bearer ${accessToken}`,
+                'content-type': 'application/json',
               },
-            }),
-          },
-        );
-        if (response.ok) return null;
-        const body = await response.text();
-        if (isInvalidRegistration(response.status, body)) {
-          return registration.token;
-        }
-        throw new Error(`FCM delivery failed with HTTP ${response.status}`);
-      }));
+              body: JSON.stringify({
+                message: {
+                  token: registration.token,
+                  data: stringifyData({
+                    notificationType: input.notification.notification_type,
+                    aggregateType: input.notification.aggregate_type,
+                    aggregateId: input.notification.aggregate_id.toHexString(),
+                    venueId: input.notification.venue_id.toHexString(),
+                    ...input.notification.payload,
+                  }),
+                },
+              }),
+            },
+          );
+          if (response.ok) return null;
+          const body = await response.text();
+          if (isInvalidRegistration(response.status, body)) {
+            return registration.token;
+          }
+          throw new Error(`FCM delivery failed with HTTP ${response.status}`);
+        }),
+      );
       return {
         invalidTokens: outcomes.filter(
           (value): value is string => value !== null,
@@ -99,7 +98,7 @@ export function createFirebasePushDelivery(
     if (!response.ok) {
       throw new Error(`FCM OAuth failed with HTTP ${response.status}`);
     }
-    const value = await response.json() as {
+    const value = (await response.json()) as {
       access_token?: string;
       expires_in?: number;
     };
@@ -118,13 +117,15 @@ export function serviceAccountAssertion(input: {
   issuedAt: number;
 }): string {
   const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
-  const claims = base64url(JSON.stringify({
-    iss: input.clientEmail,
-    scope: 'https://www.googleapis.com/auth/firebase.messaging',
-    aud: 'https://oauth2.googleapis.com/token',
-    iat: input.issuedAt,
-    exp: input.issuedAt + 3_600,
-  }));
+  const claims = base64url(
+    JSON.stringify({
+      iss: input.clientEmail,
+      scope: 'https://www.googleapis.com/auth/firebase.messaging',
+      aud: 'https://oauth2.googleapis.com/token',
+      iat: input.issuedAt,
+      exp: input.issuedAt + 3_600,
+    }),
+  );
   const unsigned = `${header}.${claims}`;
   const signature = createSign('RSA-SHA256')
     .update(unsigned)
@@ -142,9 +143,7 @@ function isInvalidRegistration(status: number, body: string): boolean {
   );
 }
 
-function stringifyData(
-  value: Record<string, unknown>,
-): Record<string, string> {
+function stringifyData(value: Record<string, unknown>): Record<string, string> {
   return Object.fromEntries(
     Object.entries(value).map(([key, item]) => [
       key,

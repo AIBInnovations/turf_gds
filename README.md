@@ -30,8 +30,35 @@ Booking GDS described in `docs/`.
 4. Check:
 
    - `GET http://localhost:3000/health` for process liveness
-   - `GET http://localhost:3000/ready` for MongoDB and Cloudinary readiness
+   - `GET http://localhost:3000/ready` for MongoDB, Cloudinary and background
+     job readiness
    - `GET http://localhost:3000/api/v1` for API version discovery
+
+4. Start the background worker in a second terminal:
+
+   ```sh
+   npm run worker:dev
+   ```
+
+## Processes
+
+The API and the background worker are separate processes built from the same
+image. Run **both**.
+
+- `npm start` — the HTTP API. Runs no timers.
+- `npm run worker:start` — outbox delivery, expired-hold recovery and provider
+  payout reconciliation.
+
+Run exactly one worker steady-state. Its jobs lease their work, so an
+overlapping deploy is safe, but there is no reason to run more than one. If the
+worker stops, holds stop expiring and inventory leaks — `GET /ready` reports
+`dependencies.backgroundJobs` as `stale` or `down` so this is alertable. It is
+deliberately **not** part of the overall `status`: failing API readiness because
+the worker died would pull a healthy API out of the load balancer.
+
+Repair legacy inventory that predates cross-mode slot consumption with
+`npm run db:repair-inventory`. It fixes what it safely can and reports any
+already-materialised double booking for manual resolution.
 
 Dependency results are cached for `READINESS_CACHE_TTL_MS` so infrastructure
 probes do not exhaust Cloudinary Admin API limits.

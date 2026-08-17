@@ -23,14 +23,19 @@ const authConfig: AppConfig['auth'] = {
   partnerHmacMaxSkewSeconds: 300,
 };
 
-async function createFixture(status: 'ACTIVE' | 'DISABLED' = 'ACTIVE') {
+function createFixtureWithClock(
+  status: 'ACTIVE' | 'DISABLED' = 'ACTIVE',
+) {
+  let currentNow = fixedNow;
   const admin: AdminUserDocument = {
     _id: new ObjectId('687f00000000000000000001'),
     email: 'admin@example.com',
-    password_hash: await hashPassword('correct-horse-battery'),
+    password_hash: '',
     display_name: 'Platform Admin',
     role: 'ADMIN',
     status,
+    failed_login_count: 0,
+    locked_until: null,
     fcm_tokens: [],
     audit_history: [],
     last_login_at: null,
@@ -46,17 +51,38 @@ async function createFixture(status: 'ACTIVE' | 'DISABLED' = 'ACTIVE') {
     },
     async recordLogin(_id, now) {
       admin.last_login_at = now;
+      admin.failed_login_count = 0;
+      admin.locked_until = null;
+    },
+    async recordFailedLogin(_id, maximumAttempts, lockedUntil) {
+      admin.failed_login_count += 1;
+      if (admin.failed_login_count >= maximumAttempts) {
+        admin.locked_until = lockedUntil;
+      }
+    },
+    async resetLoginFailures() {
+      admin.failed_login_count = 0;
+      admin.locked_until = null;
     },
     async createAdmin() {},
   };
   return {
     admin,
+    setNow: (value: Date) => {
+      currentNow = value;
+    },
     service: createAdminAuthService({
       repository,
       authConfig,
-      now: () => fixedNow,
+      now: () => currentNow,
     }),
   };
+}
+
+async function createFixture(status: 'ACTIVE' | 'DISABLED' = 'ACTIVE') {
+  const fixture = createFixtureWithClock(status);
+  fixture.admin.password_hash = await hashPassword('correct-horse-battery');
+  return fixture;
 }
 
 test('active admin login creates a verifiable access token', async () => {
@@ -86,4 +112,92 @@ test('disabled admins cannot log in', async () => {
     (error: unknown) =>
       error instanceof AppError && error.code === 'ADMIN_DISABLED',
   );
+});
+
+test('admin account locks after maxLoginAttempts consecutive wrong passwords', async () => {
+  const fixture = await createFixture();
+
+  for (let attempt = 0; attempt < authConfig.maxLoginAttempts; attempt += 1) {
+    await assert.rejects(
+      fixture.service.login({
+        email: fixture.admin.email,
+        password: 'wrong-password',
+      }),
+      (error: unknown) =>
+        error instanceof AppError && error.code === 'INVALID_CREDENTIALS',
+    );
+  }
+
+  await assert.rejects(
+    fixture.service.login({
+      email: fixture.admin.email,
+      password: 'correct-horse-battery',
+    }),
+    (error: unknown) =>
+      error instanceof AppError &&
+      error.code === 'ADMIN_ACCOUNT_LOCKED' &&
+      error.statusCode === 423,
+  );
+});
+
+test('admin lockout naturally expires and resets the failure counter', async () => {
+  const fixture = await createFixture();
+
+  for (let attempt = 0; attempt < authConfig.maxLoginAttempts; attempt += 1) {
+    await assert.rejects(
+      fixture.service.login({
+        email: fixture.admin.email,
+        password: 'wrong-password',
+      }),
+    );
+  }
+  assert.ok(fixture.admin.locked_until);
+
+  fixture.setNow(
+    new Date(
+      fixture.admin.locked_until!.getTime() + 60_000,
+    ),
+  );
+
+  const login = await fixture.service.login({
+    email: fixture.admin.email,
+    password: 'correct-horse-battery',
+  });
+  assert.ok(login.accessToken);
+  assert.equal(fixture.admin.failed_login_count, 0);
+  assert.equal(fixture.admin.locked_until, null);
+});
+
+test('a successful login resets a sub-threshold failure counter', async () => {
+  const fixture = await createFixture();
+
+  await assert.rejects(
+    fixture.service.login({
+      email: fixture.admin.email,
+      password: 'wrong-password',
+    }),
+  );
+  assert.equal(fixture.admin.failed_login_count, 1);
+
+  await fixture.service.login({
+    email: fixture.admin.email,
+    password: 'correct-horse-battery',
+  });
+  assert.equal(fixture.admin.failed_login_count, 0);
+  assert.equal(fixture.admin.locked_until, null);
+});
+
+test('login for an unknown email stays enumeration-safe and does not touch lockout state', async () => {
+  const fixture = await createFixture();
+
+  await assert.rejects(
+    fixture.service.login({
+      email: 'nobody@example.com',
+      password: 'correct-horse-battery',
+    }),
+    (error: unknown) =>
+      error instanceof AppError && error.code === 'INVALID_CREDENTIALS',
+  );
+  assert.equal(fixture.admin.failed_login_count, 0);
+  assert.equal(fixture.admin.locked_until, null);
 });

@@ -5,8 +5,15 @@ const validator: Document = {
     bsonType: 'object',
     additionalProperties: false,
     required: [
-      '_id', 'venue_id', 'locale', 'content', 'version',
-      'updated_by_type', 'updated_by_id', 'created_at', 'updated_at',
+      '_id',
+      'venue_id',
+      'locale',
+      'content',
+      'version',
+      'updated_by_type',
+      'updated_by_id',
+      'created_at',
+      'updated_at',
     ],
     properties: {
       _id: { bsonType: 'objectId' },
@@ -24,14 +31,27 @@ const validator: Document = {
 
 export async function initializeVenueContentPersistence(db: Db): Promise<void> {
   const name = 'venue_contents';
-  const exists = await db.listCollections({ name }, { nameOnly: true }).hasNext();
+  const exists = await db
+    .listCollections({ name }, { nameOnly: true })
+    .hasNext();
   if (!exists) {
-    await db.createCollection(name, { validator, validationLevel: 'strict', validationAction: 'error' });
+    await db.createCollection(name, {
+      validator,
+      validationLevel: 'strict',
+      validationAction: 'error',
+    });
   } else {
-    await db.command({ collMod: name, validator, validationLevel: 'strict', validationAction: 'error' });
+    await db.command({
+      collMod: name,
+      validator,
+      validationLevel: 'strict',
+      validationAction: 'error',
+    });
   }
-  await db.collection(name).createIndex(
-    { venue_id: 1, locale: 1 },
-    { unique: true, name: 'uq_venue_content_locale' },
-  );
+  await db
+    .collection(name)
+    .createIndex(
+      { venue_id: 1, locale: 1 },
+      { unique: true, name: 'uq_venue_content_locale' },
+    );
 }

@@ -17,11 +17,20 @@ const notificationTypes = [
   'BOOKING_CONFIRMED',
   'BOOKING_CANCELLED',
   'PAYOUT_COMPLETED',
-  'PAYOUT_PENDING', 'PAYOUT_FAILED', 'SETTLEMENT_CREATED',
-  'SETTLEMENT_COMPLETED', 'CONTRACT_PROPOSED', 'CONTRACT_ACCEPTED',
-  'KYC_SUBMITTED', 'KYC_VERIFIED', 'KYC_REJECTED',
-  'PAYMENT_RECORDED', 'PAYMENT_REFUNDED', 'VENUE_UPDATED',
-  'COURT_UPDATED', 'AVAILABILITY_CHANGED',
+  'PAYOUT_PENDING',
+  'PAYOUT_FAILED',
+  'SETTLEMENT_CREATED',
+  'SETTLEMENT_COMPLETED',
+  'CONTRACT_PROPOSED',
+  'CONTRACT_ACCEPTED',
+  'KYC_SUBMITTED',
+  'KYC_VERIFIED',
+  'KYC_REJECTED',
+  'PAYMENT_RECORDED',
+  'PAYMENT_REFUNDED',
+  'VENUE_UPDATED',
+  'COURT_UPDATED',
+  'AVAILABILITY_CHANGED',
 ] as const;
 
 const ownerCommunicationsRoutes: FastifyPluginAsync<
@@ -69,7 +78,16 @@ const ownerCommunicationsRoutes: FastifyPluginAsync<
   fastify.patch<{
     Body: {
       notificationType: (typeof notificationTypes)[number];
-      aggregateType: 'BOOKING' | 'PAYMENT' | 'SETTLEMENT' | 'PAYOUT' | 'CONTRACT' | 'KYC' | 'VENUE' | 'COURT' | 'INVENTORY';
+      aggregateType:
+        | 'BOOKING'
+        | 'PAYMENT'
+        | 'SETTLEMENT'
+        | 'PAYOUT'
+        | 'CONTRACT'
+        | 'KYC'
+        | 'VENUE'
+        | 'COURT'
+        | 'INVENTORY';
       aggregateId: string;
     };
   }>(
@@ -83,7 +101,19 @@ const ownerCommunicationsRoutes: FastifyPluginAsync<
           required: ['notificationType', 'aggregateType', 'aggregateId'],
           properties: {
             notificationType: { enum: [...notificationTypes] },
-            aggregateType: { enum: ['BOOKING','PAYMENT','SETTLEMENT','PAYOUT','CONTRACT','KYC','VENUE','COURT','INVENTORY'] },
+            aggregateType: {
+              enum: [
+                'BOOKING',
+                'PAYMENT',
+                'SETTLEMENT',
+                'PAYOUT',
+                'CONTRACT',
+                'KYC',
+                'VENUE',
+                'COURT',
+                'INVENTORY',
+              ],
+            },
             aggregateId: objectId,
           },
         },

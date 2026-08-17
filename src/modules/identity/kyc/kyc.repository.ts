@@ -24,8 +24,14 @@ export interface KycRepository {
     session?: ClientSession,
   ): Promise<KycVerificationDocument | null>;
   insertDocument(document: KycDocumentDocument): Promise<void>;
-  listActiveDocuments?(verificationId:ObjectId):Promise<KycDocumentDocument[]>;
-  updateDocumentDetails?(documentId:ObjectId,verificationId:ObjectId,details:Record<string,string>):Promise<boolean>;
+  listActiveDocuments?(
+    verificationId: ObjectId,
+  ): Promise<KycDocumentDocument[]>;
+  updateDocumentDetails?(
+    documentId: ObjectId,
+    verificationId: ObjectId,
+    details: Record<string, string>,
+  ): Promise<boolean>;
   countActiveDocuments(verificationId: ObjectId): Promise<number>;
   submit(
     id: ObjectId,
@@ -43,7 +49,15 @@ export interface KycRepository {
     correlationId: string;
     now: Date;
   }): Promise<boolean>;
-  preliminaryReview?(input:{id:ObjectId;reviewerId:ObjectId;status:'APPROVED'|'REJECTED';checklist:Record<string,boolean>;notes:string|null;correlationId:string;now:Date}):Promise<boolean>;
+  preliminaryReview?(input: {
+    id: ObjectId;
+    reviewerId: ObjectId;
+    status: 'APPROVED' | 'REJECTED';
+    checklist: Record<string, boolean>;
+    notes: string | null;
+    correlationId: string;
+    now: Date;
+  }): Promise<boolean>;
 }
 
 export function createKycRepository(
@@ -116,8 +130,28 @@ export function createKycRepository(
     async insertDocument(document) {
       await documents().insertOne(document);
     },
-    listActiveDocuments(verificationId){return documents().find({kyc_verification_id:verificationId,status:'PENDING','file.status':'ACTIVE'}).sort({created_at:-1}).toArray();},
-    async updateDocumentDetails(documentId,verificationId,details){const result=await documents().updateOne({_id:documentId,kyc_verification_id:verificationId,status:'PENDING','file.status':'ACTIVE'},{$set:{details}});return result.matchedCount>0;},
+    listActiveDocuments(verificationId) {
+      return documents()
+        .find({
+          kyc_verification_id: verificationId,
+          status: 'PENDING',
+          'file.status': 'ACTIVE',
+        })
+        .sort({ created_at: -1 })
+        .toArray();
+    },
+    async updateDocumentDetails(documentId, verificationId, details) {
+      const result = await documents().updateOne(
+        {
+          _id: documentId,
+          kyc_verification_id: verificationId,
+          status: 'PENDING',
+          'file.status': 'ACTIVE',
+        },
+        { $set: { details } },
+      );
+      return result.matchedCount > 0;
+    },
     countActiveDocuments(verificationId) {
       return documents().countDocuments({
         kyc_verification_id: verificationId,
@@ -182,18 +216,20 @@ export function createKycRepository(
             },
             $push: {
               audit_history: {
-                $each: [{
-                  event_type: `KYC_${input.status}`,
-                  actor_type: 'ADMIN',
-                  actor_id: input.adminId,
-                  correlation_id: input.correlationId,
-                  changes: {
-                    status: input.status,
-                    expires_at: input.expiresAt,
-                    rejection_reason: input.rejectionReason,
+                $each: [
+                  {
+                    event_type: `KYC_${input.status}`,
+                    actor_type: 'ADMIN',
+                    actor_id: input.adminId,
+                    correlation_id: input.correlationId,
+                    changes: {
+                      status: input.status,
+                      expires_at: input.expiresAt,
+                      rejection_reason: input.rejectionReason,
+                    },
+                    occurred_at: input.now,
                   },
-                  occurred_at: input.now,
-                }],
+                ],
                 $slice: -100,
               },
             },
@@ -209,12 +245,9 @@ export function createKycRepository(
           },
           {
             $set: {
-              status:
-                input.status === 'VERIFIED' ? 'ACCEPTED' : 'REJECTED',
+              status: input.status === 'VERIFIED' ? 'ACCEPTED' : 'REJECTED',
               rejection_reason:
-                input.status === 'REJECTED'
-                  ? input.rejectionReason
-                  : null,
+                input.status === 'REJECTED' ? input.rejectionReason : null,
             },
           },
           { session },
@@ -237,6 +270,45 @@ export function createKycRepository(
         return true;
       });
     },
-    async preliminaryReview(input){const result=await verifications().updateOne({_id:input.id,status:'PENDING',is_current:true,audit_history:{$elemMatch:{event_type:'KYC_SUBMITTED'}},preliminary_status:null},{$set:{preliminary_reviewed_by:input.reviewerId,preliminary_reviewed_at:input.now,preliminary_status:input.status,preliminary_checklist:input.checklist,preliminary_notes:input.notes},$push:{audit_history:{$each:[{event_type:'KYC_PRELIMINARY_REVIEWED',actor_type:'ADMIN',actor_id:input.reviewerId,correlation_id:input.correlationId,changes:{status:input.status,checklist:input.checklist,notes:input.notes},occurred_at:input.now}],$slice:-100}}});return result.modifiedCount>0;},
+    async preliminaryReview(input) {
+      const result = await verifications().updateOne(
+        {
+          _id: input.id,
+          status: 'PENDING',
+          is_current: true,
+          audit_history: { $elemMatch: { event_type: 'KYC_SUBMITTED' } },
+          preliminary_status: null,
+        },
+        {
+          $set: {
+            preliminary_reviewed_by: input.reviewerId,
+            preliminary_reviewed_at: input.now,
+            preliminary_status: input.status,
+            preliminary_checklist: input.checklist,
+            preliminary_notes: input.notes,
+          },
+          $push: {
+            audit_history: {
+              $each: [
+                {
+                  event_type: 'KYC_PRELIMINARY_REVIEWED',
+                  actor_type: 'ADMIN',
+                  actor_id: input.reviewerId,
+                  correlation_id: input.correlationId,
+                  changes: {
+                    status: input.status,
+                    checklist: input.checklist,
+                    notes: input.notes,
+                  },
+                  occurred_at: input.now,
+                },
+              ],
+              $slice: -100,
+            },
+          },
+        },
+      );
+      return result.modifiedCount > 0;
+    },
   };
 }

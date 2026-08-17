@@ -9,10 +9,7 @@ import type {
 
 export interface IdentityRepository {
   ownerEmailExists(email: string, session: ClientSession): Promise<boolean>;
-  insertOwner(
-    owner: VenueOwnerDocument,
-    session: ClientSession,
-  ): Promise<void>;
+  insertOwner(owner: VenueOwnerDocument, session: ClientSession): Promise<void>;
   insertOwnerMembership(
     membership: VenueOwnerMembershipDocument,
     session: ClientSession,
@@ -35,12 +32,10 @@ export interface IdentityRepository {
     maximumSessions: number,
     now: Date,
   ): Promise<boolean>;
-  findOwnerBySessionTokenHash(tokenHash: string): Promise<VenueOwnerDocument | null>;
-  touchSession(
-    ownerId: ObjectId,
+  findOwnerBySessionTokenHash(
     tokenHash: string,
-    now: Date,
-  ): Promise<void>;
+  ): Promise<VenueOwnerDocument | null>;
+  touchSession(ownerId: ObjectId, tokenHash: string, now: Date): Promise<void>;
   findMembershipByOwnerAndVenue(
     ownerId: ObjectId,
     venueId: ObjectId,
@@ -112,29 +107,23 @@ export function createIdentityRepository(
     lockedUntil: Date,
     now: Date,
   ): Promise<void> {
-    await owners().updateOne(
-      { _id: ownerId },
-      [
-        {
-          $set: {
-            failed_login_count: { $add: ['$failed_login_count', 1] },
-            locked_until: {
-              $cond: [
-                {
-                  $gte: [
-                    { $add: ['$failed_login_count', 1] },
-                    maximumAttempts,
-                  ],
-                },
-                lockedUntil,
-                '$locked_until',
-              ],
-            },
-            updated_at: now,
+    await owners().updateOne({ _id: ownerId }, [
+      {
+        $set: {
+          failed_login_count: { $add: ['$failed_login_count', 1] },
+          locked_until: {
+            $cond: [
+              {
+                $gte: [{ $add: ['$failed_login_count', 1] }, maximumAttempts],
+              },
+              lockedUntil,
+              '$locked_until',
+            ],
           },
+          updated_at: now,
         },
-      ],
-    );
+      },
+    ]);
   }
 
   async function resetLoginFailures(
@@ -262,14 +251,16 @@ export function createIdentityRepository(
         },
         $push: {
           audit_history: {
-            $each: [{
-              event_type: 'OWNER_APPROVED',
-              actor_type: 'ADMIN',
-              actor_id: adminId,
-              correlation_id: correlationId,
-              changes: { approved_at: now },
-              occurred_at: now,
-            }],
+            $each: [
+              {
+                event_type: 'OWNER_APPROVED',
+                actor_type: 'ADMIN',
+                actor_id: adminId,
+                correlation_id: correlationId,
+                changes: { approved_at: now },
+                occurred_at: now,
+              },
+            ],
             $slice: -100,
           },
         },

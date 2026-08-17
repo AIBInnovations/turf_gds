@@ -13,4 +13,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 USER node
+# One image, two processes. The API serves requests; the worker runs the
+# recurring jobs (outbox delivery, hold recovery, payout reconciliation).
+# Run the worker by overriding the command with: node dist/worker.js
 CMD ["node","dist/server.js"]

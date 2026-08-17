@@ -50,7 +50,12 @@ export interface InventoryConflictDocument {
   venue_id: ObjectId;
   court_id: ObjectId | null;
   external_event_id: string;
-  type: 'UNMAPPED_RESOURCE' | 'OVERLAPPING_CONFIRMED_BOOKING' | 'STALE_UPDATE' | 'INVALID_EVENT';
+  type:
+    | 'UNMAPPED_RESOURCE'
+    | 'OVERLAPPING_CONFIRMED_BOOKING'
+    | 'STALE_UPDATE'
+    | 'INVALID_EVENT'
+    | 'COURT_LOCK_CONTENTION';
   status: 'OPEN' | 'RESOLVED' | 'IGNORED';
   details: Record<string, unknown>;
   resolved_by: ObjectId | null;
@@ -64,7 +69,11 @@ export interface ExternalInventoryEventDocument {
   connector_id: ObjectId;
   external_event_id: string;
   external_version: number;
-  event_type: 'AVAILABILITY_BLOCKED' | 'AVAILABILITY_RELEASED' | 'BOOKING_CONFIRMED' | 'BOOKING_CANCELLED';
+  event_type:
+    | 'AVAILABILITY_BLOCKED'
+    | 'AVAILABILITY_RELEASED'
+    | 'BOOKING_CONFIRMED'
+    | 'BOOKING_CANCELLED';
   external_court_id: string;
   starts_at: Date;
   ends_at: Date;

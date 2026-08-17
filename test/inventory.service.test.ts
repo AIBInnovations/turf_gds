@@ -113,10 +113,11 @@ function createFixture() {
       }
       return created;
     },
-    async listSlots(id, from, to) {
+    async listSlots(id, environment, from, to) {
       return slots.filter(
         (value) =>
           value.court_id.equals(id) &&
+          value.environment === environment &&
           value.starts_at < to &&
           value.ends_at > from,
       );
@@ -136,17 +137,14 @@ function createFixture() {
       slot.updated_at = input.now;
       return slot;
     },
-    async findOverlap(id, environment, startsAt, endsAt) {
-      return slots.find(
+    async findOverlappingSlots(values) {
+      return slots.filter(
         (value) =>
-          value.court_id.equals(id) &&
-          value.environment === environment &&
-          ['HELD', 'BOOKED', 'BLOCKED', 'UNAVAILABLE'].includes(
-            value.status,
-          ) &&
-          value.starts_at < endsAt &&
-          value.ends_at > startsAt,
-      ) ?? null;
+          value.court_id.equals(values.courtId) &&
+          value.environment === values.environment &&
+          value.starts_at < values.endsAt &&
+          value.ends_at > values.startsAt,
+      );
     },
     async lockCourtForInventory(input) {
       if (input.expectedVersion !== courtVersion) return false;
@@ -156,6 +154,19 @@ function createFixture() {
     },
     async insertOpenBlock(value) {
       slots.push(value);
+    },
+    async consumeFixedSlots(values) {
+      let consumed = 0;
+      for (const id of values.fixedSlotIds) {
+        const slot = slots.find((value) => value._id.equals(id));
+        if (!slot) continue;
+        slot.status = 'UNAVAILABLE';
+        slot.consumed_by_slot_id = values.consumerSlotId;
+        slot.version += 1;
+        slot.updated_at = values.now;
+        consumed += 1;
+      }
+      return consumed;
     },
     async deleteOpenBlock(input) {
       const index = slots.findIndex(
@@ -433,4 +444,133 @@ test('open-time blocks use the Court version mutex and reject overlap', async ()
     correlationId: 'open-release',
   });
   assert.equal(fixture.slots.length, 0);
+});
+
+test('an open-time block consumes the available fixed slots it covers', async () => {
+  const fixture = createFixture();
+  const fixedSlotId = new ObjectId();
+  fixture.slots.push({
+    _id: fixedSlotId,
+    court_id: courtId,
+    venue_id: venueId,
+    environment: 'PRODUCTION',
+    booking_type: 'FIXED_SLOT',
+    starts_at: new Date('2026-07-28T01:00:00.000Z'),
+    ends_at: new Date('2026-07-28T02:00:00.000Z'),
+    price_minor: 100_000,
+    currency: 'INR',
+    status: 'AVAILABLE',
+    hold_id: null,
+    hold_partner_id: null,
+    hold_expires_at: null,
+    hold_created_at: null,
+    source: 'SYSTEM_GENERATED',
+    booking_id: null,
+    consumed_by_slot_id: null,
+    audit_history: [],
+    version: 1,
+    created_at: fixedNow,
+    updated_at: fixedNow,
+  });
+
+  const blocked = await fixture.service.blockAvailability({
+    actorOwnerId: ownerId.toHexString(),
+    venueId: venueId.toHexString(),
+    courtId: courtId.toHexString(),
+    correlationId: 'block-over-grid',
+    reason: 'Private event',
+    courtVersion: fixture.getCourtVersion(),
+    startsAt: '2026-07-28T01:30:00.000Z',
+    endsAt: '2026-07-28T02:30:00.000Z',
+  }) as { id: string; status: string };
+
+  assert.equal(blocked.status, 'BLOCKED');
+  const consumed = fixture.slots.find((value) => value._id.equals(fixedSlotId));
+  assert.equal(consumed?.status, 'UNAVAILABLE');
+  assert.equal(
+    consumed?.consumed_by_slot_id?.toHexString(),
+    blocked.id,
+  );
+});
+
+test('an open-time block is still rejected by an overlapping booked fixed slot', async () => {
+  const fixture = createFixture();
+  fixture.slots.push({
+    _id: new ObjectId(),
+    court_id: courtId,
+    venue_id: venueId,
+    environment: 'PRODUCTION',
+    booking_type: 'FIXED_SLOT',
+    starts_at: new Date('2026-07-28T01:00:00.000Z'),
+    ends_at: new Date('2026-07-28T02:00:00.000Z'),
+    price_minor: 100_000,
+    currency: 'INR',
+    status: 'BOOKED',
+    hold_id: null,
+    hold_partner_id: null,
+    hold_expires_at: null,
+    hold_created_at: null,
+    source: 'SYSTEM_GENERATED',
+    booking_id: new ObjectId(),
+    consumed_by_slot_id: null,
+    audit_history: [],
+    version: 1,
+    created_at: fixedNow,
+    updated_at: fixedNow,
+  });
+
+  await assert.rejects(
+    fixture.service.blockAvailability({
+      actorOwnerId: ownerId.toHexString(),
+      venueId: venueId.toHexString(),
+      courtId: courtId.toHexString(),
+      correlationId: 'block-over-booked',
+      reason: 'Private event',
+      courtVersion: fixture.getCourtVersion(),
+      startsAt: '2026-07-28T01:30:00.000Z',
+      endsAt: '2026-07-28T02:30:00.000Z',
+    }),
+    (error: unknown) =>
+      error instanceof AppError && error.code === 'INVENTORY_OVERLAP',
+  );
+});
+
+test('blockAvailability does not treat an expired HELD slot as a blocking overlap', async () => {
+  const fixture = createFixture();
+  fixture.slots.push({
+    _id: new ObjectId(),
+    court_id: courtId,
+    venue_id: venueId,
+    environment: 'PRODUCTION',
+    booking_type: 'OPEN_TIME',
+    starts_at: new Date('2026-07-28T01:00:00.000Z'),
+    ends_at: new Date('2026-07-28T02:00:00.000Z'),
+    price_minor: null,
+    currency: 'INR',
+    status: 'HELD',
+    hold_id: 'stale-hold',
+    hold_partner_id: new ObjectId(),
+    hold_expires_at: new Date('2026-07-27T23:00:00.000Z'),
+    hold_created_at: new Date('2026-07-27T22:00:00.000Z'),
+    source: 'BOOKING',
+    booking_id: null,
+    consumed_by_slot_id: null,
+    audit_history: [],
+    version: 1,
+    created_at: fixedNow,
+    updated_at: fixedNow,
+  });
+
+  const blocked = await fixture.service.blockAvailability({
+    actorOwnerId: ownerId.toHexString(),
+    venueId: venueId.toHexString(),
+    courtId: courtId.toHexString(),
+    correlationId: 'block-over-stale-hold',
+    reason: 'Maintenance',
+    courtVersion: fixture.getCourtVersion(),
+    startsAt: '2026-07-28T01:30:00.000Z',
+    endsAt: '2026-07-28T02:30:00.000Z',
+  }) as { status: string };
+
+  assert.equal(blocked.status, 'BLOCKED');
 });

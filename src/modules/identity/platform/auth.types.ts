@@ -9,6 +9,8 @@ export interface AdminUserDocument {
   display_name: string;
   role: AdminRole;
   status: 'ACTIVE' | 'DISABLED';
+  failed_login_count: number;
+  locked_until: Date | null;
   fcm_tokens: unknown[];
   audit_history: unknown[];
   last_login_at: Date | null;

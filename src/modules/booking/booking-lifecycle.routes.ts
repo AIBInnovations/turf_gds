@@ -55,7 +55,31 @@ const bookingLifecycleRoutes: FastifyPluginAsync<
   }>(
     '/hold',
     {
-      config: { rawBody: true },
+      config: {
+        rawBody: true,
+        docs: {
+          tag: 'Bookings',
+          summary: 'Create a short-lived inventory hold',
+          description:
+            'Holds the requested inventory for a bounded window. An ' +
+            'OPEN_TIME hold also consumes any overlapping generated ' +
+            'FIXED_SLOT inventory for the same court, so the same court hour ' +
+            'can never be sold twice. Releasing or expiring the hold ' +
+            'restores it.',
+          security: ['partnerHmac'],
+          scopes: ['bookings:write'],
+          idempotent: false,
+          rateLimited: true,
+          internal: false,
+          responses: {
+            '201': { description: 'Hold created' },
+            '400': { description: 'Invalid interval or booking type' },
+            '409': {
+              description: 'Inventory is unavailable or changed concurrently',
+            },
+          },
+        },
+      },
       preHandler: partnerAuth,
       schema: {
         body: {
@@ -114,7 +138,27 @@ const bookingLifecycleRoutes: FastifyPluginAsync<
   }>(
     '/confirm',
     {
-      config: { rawBody: true },
+      config: {
+        rawBody: true,
+        docs: {
+          tag: 'Bookings',
+          summary: 'Confirm a held booking',
+          description:
+            'Requires an Idempotency-Key. Replaying the key returns the original booking; reusing it with a different body is rejected.',
+          security: ['partnerHmac'],
+          scopes: ['bookings:write'],
+          idempotent: true,
+          rateLimited: true,
+          internal: false,
+          responses: {
+            '201': { description: 'Booking confirmed' },
+            '409': {
+              description:
+                'The hold expired or the key was reused with a different request',
+            },
+          },
+        },
+      },
       preHandler: partnerAuth,
       schema: {
         headers: idempotencyHeaders(),
@@ -163,7 +207,27 @@ const bookingLifecycleRoutes: FastifyPluginAsync<
   }>(
     '/:bookingId/cancel',
     {
-      config: { rawBody: true },
+      config: {
+        rawBody: true,
+        docs: {
+          tag: 'Bookings',
+          summary: 'Cancel a confirmed booking',
+          description:
+            'Refund and inventory disposition follow the cancellation terms snapshotted onto the booking at confirmation time, not current policy.',
+          security: ['partnerHmac'],
+          scopes: ['bookings:write'],
+          idempotent: true,
+          rateLimited: true,
+          internal: false,
+          responses: {
+            '200': { description: 'Cancellation outcome' },
+            '409': {
+              description:
+                'The booking is not cancellable under its snapshotted terms',
+            },
+          },
+        },
+      },
       preHandler: partnerAuth,
       schema: {
         headers: idempotencyHeaders(),

@@ -21,6 +21,7 @@ import {
 import { MongoDatabaseConnection } from '../src/shared/database/database-connection.js';
 import { AppError } from '../src/shared/errors/app-error.js';
 import type { MediaStorage } from '../src/shared/media/cloudinary-media-storage.js';
+import { validJpegBuffer } from './fixtures/magic-bytes.js';
 
 const authConfig: AppConfig['auth'] = {
   sessionTtlHours: 168,
@@ -227,7 +228,7 @@ test('Venue Owner registration commits and rolls back as one MongoDB transaction
         documentType: document.documentType,
         filename: document.filename,
         mimeType: 'image/jpeg',
-        buffer: Buffer.from('document'),
+        buffer: validJpegBuffer(),
         details: document.details,
       });
     }

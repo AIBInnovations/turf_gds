@@ -57,9 +57,7 @@ export function createOwnerAuthenticationHook(
   service: OwnerAccessService,
 ): preHandlerHookHandler {
   return async (request) => {
-    request.identity = await service.authenticateOwner(
-      getBearerToken(request),
-    );
+    request.identity = await service.authenticateOwner(getBearerToken(request));
   };
 }
 
@@ -97,11 +95,12 @@ export function createPartnerAuthenticationHook(
       body:
         typeof request.rawBody === 'string'
           ? Buffer.from(request.rawBody, 'utf8')
-          : request.rawBody ?? Buffer.alloc(0),
-      ...(typeof nonce === 'string' && nonce.trim() ? { nonce: nonce.trim() } : {}),
+          : (request.rawBody ?? Buffer.alloc(0)),
+      ...(typeof nonce === 'string' && nonce.trim()
+        ? { nonce: nonce.trim() }
+        : {}),
     });
     request.identity = identity;
-    if (!service.consumeRateLimit) return;
     const rateLimit = await service.consumeRateLimit({
       partnerId: identity.partnerId,
       environment: identity.environment,
@@ -127,7 +126,9 @@ export function createPartnerPortalAuthenticationHook(
   service: PartnerAccessService,
 ): preHandlerHookHandler {
   return async (request) => {
-    request.identity = await service.authenticatePortalSession(getBearerToken(request));
+    request.identity = await service.authenticatePortalSession(
+      getBearerToken(request),
+    );
   };
 }
 
@@ -153,10 +154,9 @@ export function requireAdminContext(
 
 export function requireAdminRole(
   request: FastifyRequest,
-): Omit<
-  Extract<IdentityContext, { actorType: 'ADMIN' }>,
-  'role'
-> & { role: 'ADMIN' } {
+): Omit<Extract<IdentityContext, { actorType: 'ADMIN' }>, 'role'> & {
+  role: 'ADMIN';
+} {
   const admin = requireAdminContext(request);
   if (admin.role !== 'ADMIN') {
     throw new AppError({
@@ -181,7 +181,8 @@ export function requirePartnerContext(
 export function requirePartnerPortalContext(
   request: FastifyRequest,
 ): Extract<IdentityContext, { actorType: 'PARTNER_PORTAL' }> {
-  if (request.identity?.actorType !== 'PARTNER_PORTAL') throw authenticationRequired();
+  if (request.identity?.actorType !== 'PARTNER_PORTAL')
+    throw authenticationRequired();
   return request.identity;
 }
 

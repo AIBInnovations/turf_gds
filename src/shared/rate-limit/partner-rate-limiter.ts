@@ -64,12 +64,14 @@ export function createPartnerRateLimiter(
             input.partnerId,
             windowStartedAt.toISOString(),
           ].join(':');
-          const count = Number(await options.redis.eval(
-            "local c=redis.call('INCR',KEYS[1]); " +
-              "if c==1 then redis.call('PEXPIRE',KEYS[1],ARGV[1]) end; " +
-              'return c',
-            { keys: [key], arguments: ['120000'] },
-          ));
+          const count = Number(
+            await options.redis.eval(
+              "local c=redis.call('INCR',KEYS[1]); " +
+                "if c==1 then redis.call('PEXPIRE',KEYS[1],ARGV[1]) end; " +
+                'return c',
+              { keys: [key], arguments: ['120000'] },
+            ),
+          );
           return decision(count, limit, resetAt, 'REDIS');
         } catch {
           // MongoDB is the deliberate correctness fallback.

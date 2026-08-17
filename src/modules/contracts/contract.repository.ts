@@ -50,9 +50,7 @@ export function createContractRepository(
     },
     findById(id) {
       return database.db
-        .collection<PartnerVenueContractDocument>(
-          'partner_venue_contracts',
-        )
+        .collection<PartnerVenueContractDocument>('partner_venue_contracts')
         .findOne({ _id: id });
     },
     list(input) {
@@ -64,18 +62,14 @@ export function createContractRepository(
         query.venue_id = input.venueId;
       }
       return database.db
-        .collection<PartnerVenueContractDocument>(
-          'partner_venue_contracts',
-        )
+        .collection<PartnerVenueContractDocument>('partner_venue_contracts')
         .find(query)
         .sort({ partner_id: 1, venue_id: 1, effective_from: -1 })
         .toArray();
     },
     findLatest(partnerId, venueId, session) {
       return database.db
-        .collection<PartnerVenueContractDocument>(
-          'partner_venue_contracts',
-        )
+        .collection<PartnerVenueContractDocument>('partner_venue_contracts')
         .findOne(
           { partner_id: partnerId, venue_id: venueId, status: 'ACTIVE' },
           {
@@ -86,18 +80,13 @@ export function createContractRepository(
     },
     findEffective(partnerId, venueId, at) {
       return database.db
-        .collection<PartnerVenueContractDocument>(
-          'partner_venue_contracts',
-        )
+        .collection<PartnerVenueContractDocument>('partner_venue_contracts')
         .find({
           partner_id: partnerId,
           venue_id: venueId,
           status: 'ACTIVE',
           effective_from: { $lte: at },
-          $or: [
-            { effective_to: null },
-            { effective_to: { $gt: at } },
-          ],
+          $or: [{ effective_to: null }, { effective_to: { $gt: at } }],
         })
         .sort({ effective_from: -1 })
         .limit(1)
@@ -105,9 +94,7 @@ export function createContractRepository(
     },
     async supersede(input) {
       const result = await database.db
-        .collection<PartnerVenueContractDocument>(
-          'partner_venue_contracts',
-        )
+        .collection<PartnerVenueContractDocument>('partner_venue_contracts')
         .updateOne(
           { _id: input.id, status: 'ACTIVE', effective_to: null },
           {
@@ -122,9 +109,7 @@ export function createContractRepository(
     },
     async insert(document, session) {
       await database.db
-        .collection<PartnerVenueContractDocument>(
-          'partner_venue_contracts',
-        )
+        .collection<PartnerVenueContractDocument>('partner_venue_contracts')
         .insertOne(document, { session });
     },
   };

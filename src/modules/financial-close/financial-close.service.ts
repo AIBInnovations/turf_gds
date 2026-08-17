@@ -5,9 +5,7 @@ import type { DatabaseConnection } from '../../shared/database/database-connecti
 import { AppError } from '../../shared/errors/app-error.js';
 import type { OwnerAccessService } from '../identity/owner/owner-access.service.js';
 import type { BookingDocument } from '../booking/booking.types.js';
-import type {
-  LedgerEntryDocument,
-} from '../ledger/ledger.repository.js';
+import type { LedgerEntryDocument } from '../ledger/ledger.repository.js';
 import type { LedgerService } from '../ledger/ledger.service.js';
 import type { FinancialCloseRepository } from './financial-close.repository.js';
 import type {
@@ -53,10 +51,12 @@ export interface FinancialCloseService {
   generate(input: GenerateSettlementInput): Promise<Record<string, unknown>>;
   submit(input: MutationInput): Promise<Record<string, unknown>>;
   reconcile(input: RecordReconciliationInput): Promise<Record<string, unknown>>;
-  resolve(input: MutationInput & {
-    evidenceUri: string;
-    notes: string;
-  }): Promise<Record<string, unknown>>;
+  resolve(
+    input: MutationInput & {
+      evidenceUri: string;
+      notes: string;
+    },
+  ): Promise<Record<string, unknown>>;
   complete(input: MutationInput): Promise<Record<string, unknown>>;
   get(settlementId: string): Promise<Record<string, unknown>>;
   list(input: {
@@ -84,18 +84,26 @@ export interface FinancialCloseService {
     failureReason?: string;
     correlationId: string;
   }): Promise<Record<string, unknown>>;
-  listOwnerSettlements(input: OwnerListInput & {
-    status?: SettlementStatus;
-  }): Promise<PageView>;
-  getOwnerSettlement(input: OwnerScope & {
-    settlementId: string;
-  }): Promise<Record<string, unknown>>;
-  listOwnerPayouts(input: OwnerListInput & {
-    status?: PayoutStatus;
-  }): Promise<PageView>;
-  getOwnerPayout(input: OwnerScope & {
-    payoutId: string;
-  }): Promise<Record<string, unknown>>;
+  listOwnerSettlements(
+    input: OwnerListInput & {
+      status?: SettlementStatus;
+    },
+  ): Promise<PageView>;
+  getOwnerSettlement(
+    input: OwnerScope & {
+      settlementId: string;
+    },
+  ): Promise<Record<string, unknown>>;
+  listOwnerPayouts(
+    input: OwnerListInput & {
+      status?: PayoutStatus;
+    },
+  ): Promise<PageView>;
+  getOwnerPayout(
+    input: OwnerScope & {
+      payoutId: string;
+    },
+  ): Promise<Record<string, unknown>>;
   recordAdjustment?(input: AdjustmentInput): Promise<Record<string, unknown>>;
   createInvoice?(input: MutationInput): Promise<Record<string, unknown>>;
   listInvoices?(input: {
@@ -248,14 +256,16 @@ export function createFinancialCloseService(input: {
             status: 'DRAFT',
             ...totals,
             currency: 'INR',
-            audit_history: [{
-              event_type: 'SETTLEMENT_DRAFT_CREATED',
-              actor_type: 'ADMIN',
-              actor_id: adminId,
-              correlation_id: values.correlationId,
-              changes: { ledger_entry_count: entries.length },
-              occurred_at: timestamp,
-            }],
+            audit_history: [
+              {
+                event_type: 'SETTLEMENT_DRAFT_CREATED',
+                actor_type: 'ADMIN',
+                actor_id: adminId,
+                correlation_id: values.correlationId,
+                changes: { ledger_entry_count: entries.length },
+                occurred_at: timestamp,
+              },
+            ],
             created_at: timestamp,
             completed_at: null,
           };
@@ -291,8 +301,29 @@ export function createFinancialCloseService(input: {
             timestamp,
             session,
           );
-          for (const venueId of uniqueIds(entries.map(({ venue_id }) => venue_id))) {
-            await input.outboxRepository.enqueue({aggregateType:'SETTLEMENT',aggregateId:created._id,partnerId:null,venueId,environment:created.environment,eventType:'SETTLEMENT_DRAFT_CREATED',eventVersion:1,correlationId:`${values.correlationId}:venue:${venueId.toHexString()}`,payload:{settlement_id:created._id.toHexString(),venue_id:venueId.toHexString(),status:created.status,period_start:created.period_start.toISOString(),period_end:created.period_end.toISOString(),currency:created.currency},now:timestamp,session});
+          for (const venueId of uniqueIds(
+            entries.map(({ venue_id }) => venue_id),
+          )) {
+            await input.outboxRepository.enqueue({
+              aggregateType: 'SETTLEMENT',
+              aggregateId: created._id,
+              partnerId: null,
+              venueId,
+              environment: created.environment,
+              eventType: 'SETTLEMENT_DRAFT_CREATED',
+              eventVersion: 1,
+              correlationId: `${values.correlationId}:venue:${venueId.toHexString()}`,
+              payload: {
+                settlement_id: created._id.toHexString(),
+                venue_id: venueId.toHexString(),
+                status: created.status,
+                period_start: created.period_start.toISOString(),
+                period_end: created.period_end.toISOString(),
+                currency: created.currency,
+              },
+              now: timestamp,
+              session,
+            });
           }
         });
       } catch (error) {
@@ -304,7 +335,8 @@ export function createFinancialCloseService(input: {
         }
         throw error;
       }
-      if (!created) throw new Error('Settlement transaction returned no result');
+      if (!created)
+        throw new Error('Settlement transaction returned no result');
       return settlementView(created);
     },
 
@@ -333,7 +365,10 @@ export function createFinancialCloseService(input: {
       const evidenceUri = optional(values.evidenceUri);
       const notes = optional(values.notes);
       let result:
-        | { settlement: SettlementDocument; reconciliation: ReconciliationDocument }
+        | {
+            settlement: SettlementDocument;
+            reconciliation: ReconciliationDocument;
+          }
         | undefined;
       try {
         await input.database.withTransaction(async ({ session }) => {
@@ -357,7 +392,7 @@ export function createFinancialCloseService(input: {
             );
           }
           const timestamp = now();
-          const status = matched ? 'MATCHED' as const : 'MISMATCH' as const;
+          const status = matched ? ('MATCHED' as const) : ('MISMATCH' as const);
           const reconciliation: ReconciliationDocument = {
             _id: new ObjectId(),
             settlement_id: settlementId,
@@ -369,27 +404,31 @@ export function createFinancialCloseService(input: {
             status,
             reconciled_at: matched ? timestamp : null,
             notes,
-            attempt_history: [{
-              action: 'RECORDED',
-              reported_amount_minor: values.reportedAmountMinor,
-              expected_amount_minor: settlement.net_amount_minor,
-              bank_reference: bankReference,
-              evidence_uri: evidenceUri,
-              notes,
-              actor_id: adminId,
-              occurred_at: timestamp,
-            }],
-            audit_history: [{
-              event_type: `RECONCILIATION_${status}`,
-              actor_type: 'ADMIN',
-              actor_id: adminId,
-              correlation_id: values.correlationId,
-              changes: {
-                expected_amount_minor: settlement.net_amount_minor,
+            attempt_history: [
+              {
+                action: 'RECORDED',
                 reported_amount_minor: values.reportedAmountMinor,
+                expected_amount_minor: settlement.net_amount_minor,
+                bank_reference: bankReference,
+                evidence_uri: evidenceUri,
+                notes,
+                actor_id: adminId,
+                occurred_at: timestamp,
               },
-              occurred_at: timestamp,
-            }],
+            ],
+            audit_history: [
+              {
+                event_type: `RECONCILIATION_${status}`,
+                actor_type: 'ADMIN',
+                actor_id: adminId,
+                correlation_id: values.correlationId,
+                changes: {
+                  expected_amount_minor: settlement.net_amount_minor,
+                  reported_amount_minor: values.reportedAmountMinor,
+                },
+                occurred_at: timestamp,
+              },
+            ],
             created_at: timestamp,
           };
           await input.repository.insertReconciliation(reconciliation, session);
@@ -414,7 +453,8 @@ export function createFinancialCloseService(input: {
         }
         throw error;
       }
-      if (!result) throw new Error('Reconciliation transaction returned no result');
+      if (!result)
+        throw new Error('Reconciliation transaction returned no result');
       return reconciliationView(result.settlement, result.reconciliation);
     },
 
@@ -424,7 +464,10 @@ export function createFinancialCloseService(input: {
       const notes = required(values.notes, 'notes');
       const evidenceUri = required(values.evidenceUri, 'evidenceUri');
       let result:
-        | { settlement: SettlementDocument; reconciliation: ReconciliationDocument }
+        | {
+            settlement: SettlementDocument;
+            reconciliation: ReconciliationDocument;
+          }
         | undefined;
       await input.database.withTransaction(async ({ session }) => {
         const settlement = await input.repository.findSettlement(
@@ -550,11 +593,31 @@ export function createFinancialCloseService(input: {
             .map(({ _id }) => _id)
             .toArray();
           for (const venueId of venueIds) {
-            await input.outboxRepository.enqueue({aggregateType:'SETTLEMENT',aggregateId:completed._id,partnerId:null,venueId,environment:completed.environment,eventType:'SETTLEMENT_COMPLETED',eventVersion:2,correlationId:`${values.correlationId}:venue:${venueId.toHexString()}`,payload:{settlement_id:completed._id.toHexString(),venue_id:venueId.toHexString(),status:completed.status,period_start:completed.period_start.toISOString(),period_end:completed.period_end.toISOString(),currency:completed.currency},now:timestamp,session});
+            await input.outboxRepository.enqueue({
+              aggregateType: 'SETTLEMENT',
+              aggregateId: completed._id,
+              partnerId: null,
+              venueId,
+              environment: completed.environment,
+              eventType: 'SETTLEMENT_COMPLETED',
+              eventVersion: 2,
+              correlationId: `${values.correlationId}:venue:${venueId.toHexString()}`,
+              payload: {
+                settlement_id: completed._id.toHexString(),
+                venue_id: venueId.toHexString(),
+                status: completed.status,
+                period_start: completed.period_start.toISOString(),
+                period_end: completed.period_end.toISOString(),
+                currency: completed.currency,
+              },
+              now: timestamp,
+              session,
+            });
           }
         }
       });
-      if (!completed) throw new Error('Completion transaction returned no result');
+      if (!completed)
+        throw new Error('Completion transaction returned no result');
       return settlementView(completed);
     },
 
@@ -581,7 +644,11 @@ export function createFinancialCloseService(input: {
         ...(values.to ? { to: instant(values.to, 'to') } : {}),
         ...pagination,
       });
-      return pageView(result.items.map(settlementView), result.total, pagination);
+      return pageView(
+        result.items.map(settlementView),
+        result.total,
+        pagination,
+      );
     },
 
     async initiatePayout(values) {
@@ -696,7 +763,9 @@ export function createFinancialCloseService(input: {
               'Venue Ledger entries must match the Settlement Partner, environment, and currency',
             );
           }
-          const eligible = entries.filter(({ payout_id }) => payout_id === null);
+          const eligible = entries.filter(
+            ({ payout_id }) => payout_id === null,
+          );
           if (eligible.length === 0) {
             throw conflict(
               'NO_PAYABLE_LEDGER_ENTRIES',
@@ -726,18 +795,20 @@ export function createFinancialCloseService(input: {
             failure_reason: null,
             initiated_at: timestamp,
             paid_at: null,
-            audit_history: [{
-              event_type: 'PAYOUT_PENDING',
-              actor_type: 'ADMIN',
-              actor_id: adminId,
-              correlation_id: values.correlationId,
-              changes: {
-                settlement_id: settlementId.toHexString(),
-                venue_id: venueId.toHexString(),
-                amount_minor: totals.net_amount_minor,
+            audit_history: [
+              {
+                event_type: 'PAYOUT_PENDING',
+                actor_type: 'ADMIN',
+                actor_id: adminId,
+                correlation_id: values.correlationId,
+                changes: {
+                  settlement_id: settlementId.toHexString(),
+                  venue_id: venueId.toHexString(),
+                  amount_minor: totals.net_amount_minor,
+                },
+                occurred_at: timestamp,
               },
-              occurred_at: timestamp,
-            }],
+            ],
             created_at: timestamp,
             updated_at: timestamp,
           };
@@ -870,7 +941,8 @@ export function createFinancialCloseService(input: {
         }
         throw error;
       }
-      if (!payout) throw new Error('Payout result transaction returned no result');
+      if (!payout)
+        throw new Error('Payout result transaction returned no result');
       return payoutView(payout);
     },
 
@@ -965,28 +1037,28 @@ export function createFinancialCloseService(input: {
             'Adjustment time must be between Settlement completion and now',
           );
         }
-        const booking = await input.database.db.collection<BookingDocument>(
-          'bookings',
-        ).findOne(
-          {
-            _id: bookingId,
-            partner_id: settlement.partner_id,
-            environment: settlement.environment,
-          },
-          { session },
-        );
+        const booking = await input.database.db
+          .collection<BookingDocument>('bookings')
+          .findOne(
+            {
+              _id: bookingId,
+              partner_id: settlement.partner_id,
+              environment: settlement.environment,
+            },
+            { session },
+          );
         if (!booking) throw notFound('BOOKING_NOT_FOUND');
-        const allocated = await input.database.db.collection<LedgerEntryDocument>(
-          'ledger_entries',
-        ).findOne(
-          {
-            booking_id: bookingId,
-            settlement_id: settlementId,
-            partner_id: settlement.partner_id,
-            environment: settlement.environment,
-          },
-          { session },
-        );
+        const allocated = await input.database.db
+          .collection<LedgerEntryDocument>('ledger_entries')
+          .findOne(
+            {
+              booking_id: bookingId,
+              settlement_id: settlementId,
+              partner_id: settlement.partner_id,
+              environment: settlement.environment,
+            },
+            { session },
+          );
         if (!allocated) {
           throw conflict(
             'BOOKING_NOT_IN_SETTLEMENT',
@@ -1023,9 +1095,8 @@ export function createFinancialCloseService(input: {
       let invoice: InvoiceDocument | undefined;
       try {
         await input.database.withTransaction(async ({ session }) => {
-          const collection = input.database.db.collection<InvoiceDocument>(
-            'invoices',
-          );
+          const collection =
+            input.database.db.collection<InvoiceDocument>('invoices');
           const existing = await collection.findOne(
             { settlement_id: settlementId, type: 'TAX_INVOICE' },
             { session },
@@ -1049,6 +1120,7 @@ export function createFinancialCloseService(input: {
           invoice = {
             _id: id,
             settlement_id: settlement._id,
+            partner_id: settlement.partner_id,
             environment: settlement.environment,
             invoice_number: invoiceNumber(
               id,
@@ -1070,8 +1142,10 @@ export function createFinancialCloseService(input: {
         });
       } catch (error) {
         if (!duplicate(error)) throw error;
-        invoice = await input.database.db.collection<InvoiceDocument>('invoices')
-          .findOne({ settlement_id: settlementId, type: 'TAX_INVOICE' }) ??
+        invoice =
+          (await input.database.db
+            .collection<InvoiceDocument>('invoices')
+            .findOne({ settlement_id: settlementId, type: 'TAX_INVOICE' })) ??
           undefined;
       }
       if (!invoice) throw new Error('Invoice transaction returned no result');
@@ -1087,22 +1161,24 @@ export function createFinancialCloseService(input: {
         ...(values.environment ? { environment: values.environment } : {}),
         ...(values.status ? { status: values.status } : {}),
       };
-      const collection = input.database.db.collection<InvoiceDocument>(
-        'invoices',
-      );
+      const collection =
+        input.database.db.collection<InvoiceDocument>('invoices');
       const [items, total] = await Promise.all([
-        collection.find(filter).sort({ created_at: -1, _id: -1 })
+        collection
+          .find(filter)
+          .sort({ created_at: -1, _id: -1 })
           .skip((pagination.page - 1) * pagination.limit)
-          .limit(pagination.limit).toArray(),
+          .limit(pagination.limit)
+          .toArray(),
         collection.countDocuments(filter),
       ]);
       return pageView(items.map(invoiceView), total, pagination);
     },
 
     async getInvoice(invoiceId) {
-      const invoice = await input.database.db.collection<InvoiceDocument>(
-        'invoices',
-      ).findOne({ _id: oid(invoiceId) });
+      const invoice = await input.database.db
+        .collection<InvoiceDocument>('invoices')
+        .findOne({ _id: oid(invoiceId) });
       if (!invoice) throw notFound('INVOICE_NOT_FOUND');
       return invoiceView(invoice);
     },
@@ -1137,8 +1213,7 @@ export function createFinancialCloseService(input: {
       entries
         .map(({ reverses_entry_id }) => reverses_entry_id)
         .filter(
-          (id): id is ObjectId =>
-            id !== null && !present.has(id.toHexString()),
+          (id): id is ObjectId => id !== null && !present.has(id.toHexString()),
         ),
     );
     const originals = await input.ledgerService.findByIds(ids, session);
@@ -1167,11 +1242,13 @@ export function createFinancialCloseService(input: {
     return originals;
   }
 
-  async function transition(values: MutationInput & {
-    from: SettlementStatus;
-    to: SettlementStatus;
-    errorCode: string;
-  }): Promise<Record<string, unknown>> {
+  async function transition(
+    values: MutationInput & {
+      from: SettlementStatus;
+      to: SettlementStatus;
+      errorCode: string;
+    },
+  ): Promise<Record<string, unknown>> {
     const timestamp = now();
     let settlement: SettlementDocument | undefined;
     await input.database.withTransaction(async ({ session }) => {
@@ -1217,7 +1294,7 @@ export function createFinancialCloseService(input: {
     const originals = await hydrateReversalOriginals(entries);
     const totals = aggregate(entries, originals);
     return {
-      ...settlementView(settlement),
+      ...ownerSettlementSummary(settlement),
       venueId: venueId.toHexString(),
       venueTotals: amountView(totals),
       ...(includeAllocations
@@ -1250,9 +1327,14 @@ export function createFinancialCloseService(input: {
     const entries = allEntries.filter(
       ({ payout_id }) => payout_id?.equals(payout._id) ?? false,
     );
+    const originals = await hydrateReversalOriginals(allEntries);
+    const venueTotals = aggregate(allEntries, originals);
     return {
       ...payoutView(payout),
-      settlement: settlementView(settlement),
+      settlement: {
+        ...ownerSettlementSummary(settlement),
+        venueTotals: amountView(venueTotals),
+      },
       payoutAccount: {
         id: account._id.toHexString(),
         accountHolderName: account.account_holder_name,
@@ -1282,8 +1364,7 @@ export function createFinancialCloseService(input: {
       );
       return {
         bookingId: bookingId.toHexString(),
-        externalBookingReference:
-          booking?.external_booking_reference ?? null,
+        externalBookingReference: booking?.external_booking_reference ?? null,
         startsAt: booking?.starts_at.toISOString() ?? null,
         status: booking?.status ?? null,
         entries: values.map((entry) => ({
@@ -1310,9 +1391,7 @@ export function createFinancialCloseService(input: {
     session: ClientSession,
   ): Promise<void> {
     await input.outboxRepository.enqueue({
-      aggregateType: eventType.startsWith('PAYOUT')
-        ? 'PAYOUT'
-        : 'SETTLEMENT',
+      aggregateType: eventType.startsWith('PAYOUT') ? 'PAYOUT' : 'SETTLEMENT',
       aggregateId,
       partnerId,
       venueId,
@@ -1352,10 +1431,6 @@ function aggregate(
   for (const entry of entries) {
     const component = componentOf(entry, originals);
     const sign = entry.direction === 'CREDIT' ? 1 : -1;
-    if (entry.entry_type === 'REFUND') {
-      refund += entry.amount_minor;
-      continue;
-    }
     if (entry.entry_type === 'REVERSAL') {
       if (component === 'GROSS') refund += entry.amount_minor;
       if (component === 'COMMISSION') commission += sign * entry.amount_minor;
@@ -1443,6 +1518,24 @@ function settlementView(value: SettlementDocument): Record<string, unknown> {
   };
 }
 
+function ownerSettlementSummary(
+  value: SettlementDocument,
+): Record<string, unknown> {
+  return {
+    settlementId: value._id.toHexString(),
+    partnerId: value.partner_id.toHexString(),
+    environment: value.environment,
+    periodStart: value.period_start.toISOString(),
+    periodEnd: value.period_end.toISOString(),
+    cycle: value.cycle,
+    dueAt: value.due_at.toISOString(),
+    status: value.status,
+    currency: value.currency,
+    completedAt: value.completed_at?.toISOString() ?? null,
+    createdAt: value.created_at.toISOString(),
+  };
+}
+
 function amountView(value: Totals): Record<string, number> {
   return {
     grossAmountMinor: value.gross_amount_minor,
@@ -1507,7 +1600,8 @@ async function transitionInvoice(
   to: 'ISSUED' | 'VOID',
   now: Date,
 ): Promise<Record<string, unknown>> {
-  const value = await database.db.collection<InvoiceDocument>('invoices')
+  const value = await database.db
+    .collection<InvoiceDocument>('invoices')
     .findOneAndUpdate(
       { _id: id, status: { $in: from } },
       {
@@ -1557,7 +1651,10 @@ function reconciliationOnlyView(
   };
 }
 
-function page(value?: number, limitValue?: number): {
+function page(
+  value?: number,
+  limitValue?: number,
+): {
   page: number;
   limit: number;
 } {

@@ -16,9 +16,7 @@ export interface OwnerAccessRepository {
     tokenHash: string,
     now: Date,
   ): Promise<boolean>;
-  listMemberships(
-    ownerId: ObjectId,
-  ): Promise<VenueOwnerMembershipDocument[]>;
+  listMemberships(ownerId: ObjectId): Promise<VenueOwnerMembershipDocument[]>;
   findActiveMembership(
     ownerId: ObjectId,
     venueId: ObjectId,

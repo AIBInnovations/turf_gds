@@ -8,6 +8,7 @@ import type { PayoutAccountRepository } from '../src/modules/venue/payout-accoun
 import { createPayoutAccountService } from '../src/modules/venue/payout-accounts/payout-account.service.js';
 import type { VenuePayoutAccountDocument } from '../src/modules/venue/payout-accounts/payout-account.types.js';
 import { AppError } from '../src/shared/errors/app-error.js';
+import { mismatchedMagicBytesBuffer, validPdfBuffer } from './fixtures/magic-bytes.js';
 
 const ownerId = new ObjectId('687f00000000000000000100');
 const venueId = new ObjectId('687f00000000000000000101');
@@ -46,6 +47,19 @@ function fixture() {
       account.updated_at = input.now;
       return account;
     },
+    async addDocument(input) {
+      const account = accounts.find(
+        (value) =>
+          value._id.equals(input.accountId) &&
+          value.venue_id.equals(input.venueId) &&
+          value.version === input.expectedVersion,
+      );
+      if (!account) return null;
+      account.documents = [...account.documents, input.document];
+      account.version += 1;
+      account.updated_at = input.now;
+      return account;
+    },
   } as PayoutAccountRepository;
   const ownerAccessService = {
     async requirePermission(
@@ -56,13 +70,30 @@ function fixture() {
       permissions.push(permission);
     },
   } as unknown as OwnerAccessService;
+  const deletedPublicIds: string[] = [];
   return {
     accounts,
     permissions,
+    getDeletedPublicIds: () => deletedPublicIds,
     service: createPayoutAccountService({
       repository,
       ownerAccessService,
-      mediaStorage: { async ping(){}, async uploadBuffer(){throw new Error('not used');}, async delete(){} },
+      mediaStorage: {
+        async ping() {},
+        async uploadBuffer() {
+          return {
+            publicId: 'payout-accounts/doc-1',
+            secureUrl: 'https://cdn.example.com/payout-accounts/doc-1',
+            resourceType: 'image',
+            deliveryType: 'authenticated',
+            format: 'pdf',
+            bytes: 2048,
+          } as never;
+        },
+        async delete(publicId) {
+          deletedPublicIds.push(publicId);
+        },
+      },
       now: () => fixedNow,
     }),
   };
@@ -130,6 +161,63 @@ test('failed payout-account verification requires a reason and disables it', asy
     failureReason: 'Account-holder name mismatch',
   }) as Record<string, unknown>;
   assert.equal(failed.status, 'DISABLED');
+});
+
+test('payout account document upload accepts a valid PDF and lowercases the stored MIME type', async () => {
+  const value = fixture();
+  const account = await value.service.add({
+    actorOwnerId: ownerId.toHexString(),
+    venueId: venueId.toHexString(),
+    accountHolderName: 'Venue Operations Pvt Ltd',
+    vaultProvider: 'bank-vault',
+    vaultAccountToken: 'tok_account_upload_123',
+    accountLast4: '4321',
+    bankName: 'Example Bank',
+    ifscCode: 'ABCD0123456',
+  }) as Record<string, unknown>;
+
+  const result = await value.service.uploadDocument({
+    actorOwnerId: ownerId.toHexString(),
+    venueId: venueId.toHexString(),
+    accountId: account.id as string,
+    version: account.version as number,
+    documentType: 'CANCELLED_CHEQUE',
+    filename: 'cheque.PDF',
+    mimeType: 'APPLICATION/PDF',
+    buffer: validPdfBuffer(),
+  }) as { documents: Array<{ mimeType: string }> };
+
+  assert.equal(result.documents.length, 1);
+  assert.equal(result.documents[0]?.mimeType, 'application/pdf');
+});
+
+test('payout account document upload rejects content whose magic bytes do not match the declared MIME type', async () => {
+  const value = fixture();
+  const account = await value.service.add({
+    actorOwnerId: ownerId.toHexString(),
+    venueId: venueId.toHexString(),
+    accountHolderName: 'Venue Operations Pvt Ltd',
+    vaultProvider: 'bank-vault',
+    vaultAccountToken: 'tok_account_mismatch_123',
+    accountLast4: '5678',
+    bankName: 'Example Bank',
+    ifscCode: 'ABCD0123456',
+  }) as Record<string, unknown>;
+
+  await assert.rejects(
+    value.service.uploadDocument({
+      actorOwnerId: ownerId.toHexString(),
+      venueId: venueId.toHexString(),
+      accountId: account.id as string,
+      version: account.version as number,
+      documentType: 'CANCELLED_CHEQUE',
+      filename: 'cheque.jpg',
+      mimeType: 'image/jpeg',
+      buffer: mismatchedMagicBytesBuffer(),
+    }),
+    (error: unknown) =>
+      error instanceof AppError && error.code === 'FILE_CONTENT_MISMATCH',
+  );
 });
 
 test('payout account rejects a raw numeric bank account in the vault-token field', async () => {

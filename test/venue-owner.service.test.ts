@@ -9,6 +9,11 @@ import { createVenueOwnerService } from '../src/modules/venue/profile/venue-owne
 import type { VenueDocument } from '../src/modules/venue/profile/venue.types.js';
 import { AppError } from '../src/shared/errors/app-error.js';
 import type { MediaStorage } from '../src/shared/media/cloudinary-media-storage.js';
+import {
+  mismatchedMagicBytesBuffer,
+  validJpegBuffer,
+  validMp4Buffer,
+} from './fixtures/magic-bytes.js';
 
 const fixedNow = new Date('2026-07-28T10:00:00.000Z');
 const ownerId = new ObjectId('687f00000000000000000060');
@@ -268,7 +273,7 @@ test('addMedia embeds public metadata and cleans up failed writes', async () => 
     expectedVersion: 3,
     filename: 'hero.jpg',
     mimeType: 'image/jpeg',
-    buffer: Buffer.from('document'),
+    buffer: validJpegBuffer(),
   });
 
   assert.equal(result.media[0]?.storageKey, 'venues/green-arena/hero');
@@ -283,7 +288,7 @@ test('addMedia embeds public metadata and cleans up failed writes', async () => 
       expectedVersion: 3,
       filename: 'hero.jpg',
       mimeType: 'image/jpeg',
-      buffer: Buffer.from('document'),
+      buffer: validJpegBuffer(),
     }),
     (error: unknown) =>
       error instanceof AppError &&
@@ -292,6 +297,39 @@ test('addMedia embeds public metadata and cleans up failed writes', async () => 
   assert.equal(
     conflicting.getDeletedMedia(),
     'venues/green-arena/hero',
+  );
+});
+
+test('addMedia accepts a valid MP4 upload', async () => {
+  const fixture = createFixture();
+  const result = await fixture.service.addMedia({
+    actorOwnerId: ownerId.toHexString(),
+    venueId: venueId.toHexString(),
+    correlationId: 'request-media-mp4',
+    expectedVersion: 3,
+    filename: 'hero.mp4',
+    mimeType: 'video/mp4',
+    buffer: validMp4Buffer(),
+  });
+
+  assert.equal(result.version, 4);
+});
+
+test('addMedia rejects content whose magic bytes do not match the declared MIME type', async () => {
+  const fixture = createFixture();
+
+  await assert.rejects(
+    fixture.service.addMedia({
+      actorOwnerId: ownerId.toHexString(),
+      venueId: venueId.toHexString(),
+      correlationId: 'request-media-mismatch',
+      expectedVersion: 3,
+      filename: 'hero.jpg',
+      mimeType: 'image/jpeg',
+      buffer: mismatchedMagicBytesBuffer(),
+    }),
+    (error: unknown) =>
+      error instanceof AppError && error.code === 'FILE_CONTENT_MISMATCH',
   );
 });
 

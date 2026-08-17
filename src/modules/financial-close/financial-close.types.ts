@@ -11,10 +11,7 @@ export type SettlementStatus =
   | 'FAILED'
   | 'REVERSED';
 export type ReconciliationStatus =
-  | 'PENDING'
-  | 'MATCHED'
-  | 'MISMATCH'
-  | 'RESOLVED';
+  'PENDING' | 'MATCHED' | 'MISMATCH' | 'RESOLVED';
 
 export interface FinancialAuditDocument {
   event_type: string;
@@ -73,11 +70,7 @@ export interface ReconciliationDocument {
 }
 
 export type PayoutStatus =
-  | 'PENDING'
-  | 'PROCESSING'
-  | 'PAID'
-  | 'FAILED'
-  | 'REVERSED';
+  'PENDING' | 'PROCESSING' | 'PAID' | 'FAILED' | 'REVERSED';
 
 export interface PayoutDocument {
   _id: ObjectId;
@@ -101,6 +94,12 @@ export interface PayoutDocument {
 export interface InvoiceDocument {
   _id: ObjectId;
   settlement_id: ObjectId;
+  /**
+   * Denormalised from the owning Settlement so Partner invoice listing is a
+   * single indexed query. Null only for legacy rows whose settlement is
+   * missing; those are excluded from every Partner-scoped listing.
+   */
+  partner_id: ObjectId | null;
   environment: FinancialEnvironment;
   invoice_number: string;
   type: 'TAX_INVOICE' | 'CREDIT_NOTE' | 'DEBIT_NOTE';

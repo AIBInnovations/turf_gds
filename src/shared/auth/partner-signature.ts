@@ -9,9 +9,16 @@ export function hashCredential(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('base64url');
 }
 
-export function createPartnerApiKey(
-  environment: 'SANDBOX' | 'PRODUCTION',
-): { apiKey: string; prefix: string } {
+export function timingSafeEqualStrings(a: string, b: string): boolean {
+  const bufferA = Buffer.from(a, 'utf8');
+  const bufferB = Buffer.from(b, 'utf8');
+  return bufferA.length === bufferB.length && timingSafeEqual(bufferA, bufferB);
+}
+
+export function createPartnerApiKey(environment: 'SANDBOX' | 'PRODUCTION'): {
+  apiKey: string;
+  prefix: string;
+} {
   const prefix = randomBytes(6).toString('hex');
   const secret = randomBytes(24).toString('base64url');
   const environmentCode = environment === 'SANDBOX' ? 'sbx' : 'prd';
@@ -31,9 +38,7 @@ export function deriveSigningSecret(
 }
 
 export function extractKeyPrefix(apiKey: string): string | undefined {
-  const match = /^gds_(?:sbx|prd)_([a-f0-9]{12})_[A-Za-z0-9_-]+$/.exec(
-    apiKey,
-  );
+  const match = /^gds_(?:sbx|prd)_([a-f0-9]{12})_[A-Za-z0-9_-]+$/.exec(apiKey);
   return match?.[1];
 }
 
@@ -78,8 +83,5 @@ export function verifyHmacSignature(
     return false;
   }
 
-  return (
-    actual.length === expected.length &&
-    timingSafeEqual(actual, expected)
-  );
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
 }

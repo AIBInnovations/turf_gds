@@ -5,10 +5,23 @@ const ledgerEntryValidator: Document = {
     bsonType: 'object',
     additionalProperties: false,
     required: [
-      '_id', 'booking_id', 'partner_id', 'venue_id', 'contract_id',
-      'settlement_id', 'payout_id', 'reverses_entry_id', 'environment',
-      'entry_type', 'direction', 'amount_minor', 'currency',
-      'effective_at', 'correlation_id', 'metadata', 'created_at',
+      '_id',
+      'booking_id',
+      'partner_id',
+      'venue_id',
+      'contract_id',
+      'settlement_id',
+      'payout_id',
+      'reverses_entry_id',
+      'environment',
+      'entry_type',
+      'direction',
+      'amount_minor',
+      'currency',
+      'effective_at',
+      'correlation_id',
+      'metadata',
+      'created_at',
     ],
     properties: {
       _id: { bsonType: 'objectId' },
@@ -21,7 +34,7 @@ const ledgerEntryValidator: Document = {
       reverses_entry_id: { bsonType: ['objectId', 'null'] },
       environment: { enum: ['SANDBOX', 'PRODUCTION'] },
       entry_type: {
-        enum: ['BOOKING', 'COMMISSION', 'TAX', 'REFUND', 'REVERSAL', 'ADJUSTMENT'],
+        enum: ['BOOKING', 'COMMISSION', 'TAX', 'REVERSAL', 'ADJUSTMENT'],
       },
       direction: { enum: ['DEBIT', 'CREDIT'] },
       amount_minor: { bsonType: ['int', 'long'], minimum: 0 },
@@ -36,7 +49,9 @@ const ledgerEntryValidator: Document = {
 
 export async function initializeLedgerPersistence(db: Db): Promise<void> {
   const name = 'ledger_entries';
-  const exists = await db.listCollections({ name }, { nameOnly: true }).hasNext();
+  const exists = await db
+    .listCollections({ name }, { nameOnly: true })
+    .hasNext();
   if (!exists) {
     await db.createCollection(name, {
       validator: ledgerEntryValidator,
@@ -51,22 +66,35 @@ export async function initializeLedgerPersistence(db: Db): Promise<void> {
       validationAction: 'error',
     });
   }
-  await db.collection(name).createIndex(
-    { booking_id: 1, effective_at: 1 },
-    { name: 'ix_ledger_booking' },
-  );
-  await db.collection(name).createIndex(
-    { settlement_id: 1, venue_id: 1 },
-    { name: 'ix_ledger_settlement_venue' },
-  );
-  await db.collection(name).createIndex(
-    { payout_id: 1 },
-    { name: 'ix_ledger_payout' },
-  );
-  await db.collection(name).createIndex(
-    { partner_id: 1, environment: 1, settlement_id: 1, effective_at: 1 },
-    { name: 'ix_ledger_unsettled_batch' },
-  );
+  await db
+    .collection(name)
+    .createIndex(
+      { booking_id: 1, effective_at: 1 },
+      { name: 'ix_ledger_booking' },
+    );
+  await db
+    .collection(name)
+    .createIndex(
+      { settlement_id: 1, venue_id: 1 },
+      { name: 'ix_ledger_settlement_venue' },
+    );
+  // Serves the Partner settlement-allocation keyset, whose sort is
+  // { booking_id: -1 }. Neither of the other settlement indexes can provide it.
+  await db
+    .collection(name)
+    .createIndex(
+      { settlement_id: 1, partner_id: 1, environment: 1, booking_id: -1 },
+      { name: 'ix_ledger_settlement_allocations' },
+    );
+  await db
+    .collection(name)
+    .createIndex({ payout_id: 1 }, { name: 'ix_ledger_payout' });
+  await db
+    .collection(name)
+    .createIndex(
+      { partner_id: 1, environment: 1, settlement_id: 1, effective_at: 1 },
+      { name: 'ix_ledger_unsettled_batch' },
+    );
   await db.collection(name).createIndex(
     { reverses_entry_id: 1 },
     {
@@ -74,10 +102,9 @@ export async function initializeLedgerPersistence(db: Db): Promise<void> {
       name: 'ix_ledger_reversal_reference',
     },
   );
-  await db.collection(name).createIndex(
-    { correlation_id: 1 },
-    { name: 'ix_ledger_correlation' },
-  );
+  await db
+    .collection(name)
+    .createIndex({ correlation_id: 1 }, { name: 'ix_ledger_correlation' });
   await db.collection(name).createIndex(
     {
       environment: 1,

@@ -1,9 +1,4 @@
-import {
-  randomBytes,
-  scrypt,
-  scryptSync,
-  timingSafeEqual,
-} from 'node:crypto';
+import { randomBytes, scrypt, scryptSync, timingSafeEqual } from 'node:crypto';
 
 const KEY_LENGTH = 64;
 const COST = 16_384;
@@ -46,10 +41,7 @@ function formatHash(salt: Buffer, key: Buffer): string {
   ].join('$');
 }
 
-const dummySalt = Buffer.from(
-  '13bc145e20ad2af852b1165e79c242e8',
-  'hex',
-);
+const dummySalt = Buffer.from('13bc145e20ad2af852b1165e79c242e8', 'hex');
 const dummyKey = scryptSync('invalid-password', dummySalt, KEY_LENGTH, {
   N: COST,
   r: BLOCK_SIZE,

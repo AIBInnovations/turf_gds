@@ -161,8 +161,13 @@ const courtValidator: Document = {
       name: { bsonType: 'string', minLength: 2, maxLength: 120 },
       sport_type: {
         enum: [
-          'FOOTBALL', 'CRICKET', 'BADMINTON', 'TENNIS', 'PICKLEBALL',
-          'MULTI_SPORT', 'OTHER',
+          'FOOTBALL',
+          'CRICKET',
+          'BADMINTON',
+          'TENNIS',
+          'PICKLEBALL',
+          'MULTI_SPORT',
+          'OTHER',
         ],
       },
       surface_type: { bsonType: 'string' },
@@ -278,11 +283,18 @@ async function ensureVenueCollection(db: Db): Promise<void> {
     },
     { bypassDocumentValidation: true },
   );
-  await db.collection('venues').updateMany(
-    { $or: [{ approved_by: { $exists: true } }, { approved_at: { $exists: true } }] },
-    { $unset: { approved_by: '', approved_at: '' } },
-    { bypassDocumentValidation: true },
-  );
+  await db
+    .collection('venues')
+    .updateMany(
+      {
+        $or: [
+          { approved_by: { $exists: true } },
+          { approved_at: { $exists: true } },
+        ],
+      },
+      { $unset: { approved_by: '', approved_at: '' } },
+      { bypassDocumentValidation: true },
+    );
 
   await db.command({
     collMod: 'venues',
@@ -308,13 +320,15 @@ async function ensureCourtCollection(db: Db): Promise<void> {
 
   await db.collection('courts').updateMany(
     { status: { $in: ['ACTIVE', 'INACTIVE'] } },
-    [{
-      $set: {
-        status: {
-          $cond: [{ $eq: ['$status', 'ACTIVE'] }, 'AVAILABLE', 'UNAVAILABLE'],
+    [
+      {
+        $set: {
+          status: {
+            $cond: [{ $eq: ['$status', 'ACTIVE'] }, 'AVAILABLE', 'UNAVAILABLE'],
+          },
         },
       },
-    }],
+    ],
     { bypassDocumentValidation: true },
   );
 
@@ -329,18 +343,21 @@ async function ensureCourtCollection(db: Db): Promise<void> {
 export async function initializeVenuePersistence(db: Db): Promise<void> {
   await ensureVenueCollection(db);
   await ensureCourtCollection(db);
-  await db.collection('venues').createIndex(
-    { geo: '2dsphere' },
-    { name: 'ix_venues_geo' },
-  );
-  await db.collection('courts').createIndex(
-    { venue_id: 1, status: 1, booking_mode: 1 },
-    { name: 'ix_courts_venue_status_mode' },
-  );
-  await db.collection('venues').createIndex(
-    { environment: 1, status: 1 },
-    { name: 'ix_venues_environment_status' },
-  );
+  await db
+    .collection('venues')
+    .createIndex({ geo: '2dsphere' }, { name: 'ix_venues_geo' });
+  await db
+    .collection('courts')
+    .createIndex(
+      { venue_id: 1, status: 1, booking_mode: 1 },
+      { name: 'ix_courts_venue_status_mode' },
+    );
+  await db
+    .collection('venues')
+    .createIndex(
+      { environment: 1, status: 1 },
+      { name: 'ix_venues_environment_status' },
+    );
   await db.collection('courts').createIndex(
     { venue_id: 1, name: 1 },
     {
@@ -349,10 +366,15 @@ export async function initializeVenuePersistence(db: Db): Promise<void> {
       collation: { locale: 'en', strength: 2 },
     },
   );
-  await db.collection('courts').createIndex(
-    { venue_id: 1, status: 1, booking_mode: 1 },
-    { name: 'ix_courts_venue_status_mode' },
-  );
+  // Partner availability and venue search both filter venue_id + status +
+  // sport_type. Without sport_type in the index it is a residual fetch on every
+  // court of every candidate venue — the hottest fan-out in the product.
+  await db
+    .collection('courts')
+    .createIndex(
+      { venue_id: 1, status: 1, sport_type: 1 },
+      { name: 'ix_courts_venue_status_sport' },
+    );
   await initializeInventoryPersistence(db);
   await initializePayoutAccountPersistence(db);
   await initializeVenueContentPersistence(db);

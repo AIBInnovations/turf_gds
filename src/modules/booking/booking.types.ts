@@ -3,11 +3,7 @@ import type { ObjectId } from 'mongodb';
 export type BookingEnvironment = 'SANDBOX' | 'PRODUCTION';
 export type BookingType = 'OPEN_TIME' | 'FIXED_SLOT' | 'DIRECT';
 export type BookingStatus =
-  | 'CONFIRMED'
-  | 'CANCELLED'
-  | 'REFUND_PENDING'
-  | 'REFUNDED'
-  | 'DISPUTED';
+  'CONFIRMED' | 'CANCELLED' | 'REFUND_PENDING' | 'REFUNDED' | 'DISPUTED';
 
 export interface BookingAuditDocument {
   event_type: string;

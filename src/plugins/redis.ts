@@ -19,7 +19,8 @@ const redisPlugin: FastifyPluginAsync<RedisPluginOptions> = async (
   fastify,
   options,
 ) => {
-  const client = options.client ??
+  const client =
+    options.client ??
     (options.config.url
       ? createClient({
           url: options.config.url,

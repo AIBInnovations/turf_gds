@@ -1,5 +1,74 @@
 import type { ObjectId } from 'mongodb';
-export type TreasuryEnvironment='SANDBOX'|'PRODUCTION';
-export interface PartnerRemittanceDocument{_id:ObjectId;settlement_id:ObjectId;partner_id:ObjectId;environment:TreasuryEnvironment;expected_amount_minor:number;received_amount_minor:number;currency:'INR';status:'AWAITING_FUNDS'|'PARTIALLY_RECEIVED'|'RECEIVED'|'OVERPAID'|'MANUAL_REVIEW';provider:'RAZORPAY'|'MANUAL';provider_reference:string|null;virtual_account_id:string|null;virtual_account_number:string|null;virtual_account_ifsc:string|null;due_at:Date;receipts:Array<{receipt_id:string;amount_minor:number;bank_reference:string|null;provider_payment_id:string|null;received_at:Date}>;manual_evidence:Array<{bank_reference:string;evidence_uri:string|null;amount_minor:number;submitted_at:Date;reviewed_by:ObjectId|null;reviewed_at:Date|null;status:'PENDING'|'APPROVED'|'REJECTED';notes:string|null}>;created_at:Date;updated_at:Date;}
-export interface ProviderWebhookReceiptDocument{_id:ObjectId;provider:'RAZORPAY';provider_event_id:string;event_type:string;payload_hash:string;status:'PROCESSED'|'IGNORED'|'FAILED';error:string|null;received_at:Date;processed_at:Date|null;}
-export interface PayoutAttemptDocument{_id:ObjectId;payout_id:ObjectId;provider:'RAZORPAY';provider_payout_id:string|null;idempotency_key:string;status:'PENDING'|'PROCESSING'|'PAID'|'FAILED'|'REVERSED';failure_reason:string|null;request_reference:string;created_at:Date;updated_at:Date;}
+export type TreasuryEnvironment = 'SANDBOX' | 'PRODUCTION';
+export interface PartnerRemittanceDocument {
+  _id: ObjectId;
+  settlement_id: ObjectId;
+  partner_id: ObjectId;
+  environment: TreasuryEnvironment;
+  expected_amount_minor: number;
+  received_amount_minor: number;
+  currency: 'INR';
+  status:
+    | 'AWAITING_FUNDS'
+    | 'PARTIALLY_RECEIVED'
+    | 'RECEIVED'
+    | 'OVERPAID'
+    | 'MANUAL_REVIEW';
+  provider: 'RAZORPAY' | 'MANUAL';
+  provider_reference: string | null;
+  virtual_account_id: string | null;
+  virtual_account_number: string | null;
+  virtual_account_ifsc: string | null;
+  due_at: Date;
+  receipts: Array<{
+    receipt_id: string;
+    amount_minor: number;
+    bank_reference: string | null;
+    provider_payment_id: string | null;
+    received_at: Date;
+  }>;
+  manual_evidence: Array<{
+    bank_reference: string;
+    evidence_uri: string | null;
+    amount_minor: number;
+    submitted_at: Date;
+    reviewed_by: ObjectId | null;
+    reviewed_at: Date | null;
+    status: 'PENDING' | 'APPROVED' | 'REJECTED';
+    notes: string | null;
+  }>;
+  created_at: Date;
+  updated_at: Date;
+}
+export interface ProviderWebhookReceiptDocument {
+  _id: ObjectId;
+  provider: 'RAZORPAY';
+  provider_event_id: string;
+  event_type: string;
+  payload_hash: string;
+  status: 'PROCESSED' | 'IGNORED' | 'FAILED';
+  error: string | null;
+  received_at: Date;
+  processed_at: Date | null;
+}
+export interface PayoutAttemptDocument {
+  _id: ObjectId;
+  payout_id: ObjectId;
+  provider: 'RAZORPAY';
+  provider_payout_id: string | null;
+  idempotency_key: string;
+  status:
+    | 'PENDING'
+    | 'PROCESSING'
+    | 'PAID'
+    | 'FAILED'
+    | 'REVERSED'
+    | 'AWAITING_RECONCILIATION';
+  failure_reason: string | null;
+  request_reference: string;
+  reconcile_lease_until?: Date | null;
+  reconcile_worker_id?: string | null;
+  reconcile_attempt_count?: number;
+  created_at: Date;
+  updated_at: Date;
+}

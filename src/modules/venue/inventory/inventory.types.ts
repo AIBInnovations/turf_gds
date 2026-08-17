@@ -18,11 +18,7 @@ export interface PricingRuleDocument {
 }
 
 export type SlotStatus =
-  | 'AVAILABLE'
-  | 'HELD'
-  | 'BOOKED'
-  | 'BLOCKED'
-  | 'UNAVAILABLE';
+  'AVAILABLE' | 'HELD' | 'BOOKED' | 'BLOCKED' | 'UNAVAILABLE';
 
 export interface SlotAuditDocument {
   event_type: string;
@@ -50,8 +46,21 @@ export interface SlotDocument {
   hold_partner_id: ObjectId | null;
   hold_expires_at: Date | null;
   hold_created_at: Date | null;
-  source: 'SYSTEM_GENERATED' | 'OWNER_DASHBOARD' | 'ADMIN' | 'BOOKING' | 'EXTERNAL_CONNECTOR';
+  source:
+    | 'SYSTEM_GENERATED'
+    | 'OWNER_DASHBOARD'
+    | 'ADMIN'
+    | 'BOOKING'
+    | 'EXTERNAL_CONNECTOR';
   booking_id: ObjectId | null;
+  /**
+   * Set on a FIXED_SLOT that an overlapping OPEN_TIME slot has consumed. The
+   * value is the consuming OPEN_TIME slot's `_id`, and `status` is
+   * `UNAVAILABLE`. Restoring the consumer clears both. A slot that is
+   * `UNAVAILABLE` with a null value here is deliberately unavailable and must
+   * never be restored.
+   */
+  consumed_by_slot_id: ObjectId | null;
   audit_history: SlotAuditDocument[];
   version: number;
   created_at: Date;
