@@ -109,7 +109,7 @@ function createFixture(options: {
         : null;
     },
     async findPayment() { return null; },
-    async lockCourtForDirectBooking() { return true; },
+    async lockCourtForBooking() { return true; },
     async findOverlappingSlots() { return []; },
     async consumeFixedSlots() { return 0; },
     async insertDirectSlot() {},
@@ -436,7 +436,7 @@ function createDirectBookingFixture(options: {
     async findForVenue() { return null; },
     async findCancellation() { return null; },
     async findPayment() { return null; },
-    async lockCourtForDirectBooking(input) {
+    async lockCourtForBooking(input) {
       lockCalls.push(input);
       return options.lockSucceeds ?? true;
     },

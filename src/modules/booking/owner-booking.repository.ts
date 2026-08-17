@@ -41,7 +41,7 @@ export interface OwnerBookingRepository {
     venueId: ObjectId,
     bookingId: ObjectId,
   ): Promise<BookingPaymentDocument | null>;
-  lockCourtForDirectBooking(input: {
+  lockCourtForBooking(input: {
     courtId: ObjectId;
     venueId: ObjectId;
     expectedVersion: number;
@@ -159,7 +159,7 @@ export function createOwnerBookingRepository(
         .findOne({ venue_id: venueId, booking_id: bookingId });
     },
 
-    async lockCourtForDirectBooking(input) {
+    async lockCourtForBooking(input) {
       const result = await database.db
         .collection<CourtDocument>('courts')
         .updateOne(

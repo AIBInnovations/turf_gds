@@ -265,7 +265,7 @@ export function createOwnerBookingService(input: {
         // Lock, then scan. The consumption write below has to happen under the
         // Court mutex, so the read it is derived from must too.
         if (
-          !(await input.repository.lockCourtForDirectBooking({
+          !(await input.repository.lockCourtForBooking({
             courtId,
             venueId,
             expectedVersion: court.version,
