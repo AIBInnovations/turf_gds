@@ -10,3 +10,6 @@ coverage/
 *.log
 *.pid
 .DS_Store
+
+# Written by scripts/seed.mjs — contains live API key pairs and demo passwords.
+CREDENTIALS.md
