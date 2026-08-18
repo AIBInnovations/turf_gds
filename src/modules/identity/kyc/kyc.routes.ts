@@ -455,6 +455,53 @@ const kycRoutes: FastifyPluginAsync<KycRoutesOptions> = async (
     },
   );
 
+  /**
+   * The admin review queue.
+   *
+   * Without this, the console had no way to discover an owner's verification: only partners had
+   * a per-subject list endpoint, so reviewing an owner meant pasting an owner id and a
+   * verification id copied out of a support request. Any admin role may read the queue —
+   * opening the documents is still ADMIN-only, and reviewing still needs ADMIN or OPS.
+   */
+  fastify.get<{
+    Querystring: {
+      status?: 'PENDING' | 'VERIFIED' | 'REJECTED';
+      subjectType?: 'VENUE_OWNER' | 'PARTNER';
+      subjectId?: string;
+      page?: number;
+      limit?: number;
+    };
+  }>(
+    '/admin/verifications',
+    {
+      preHandler: adminAuth,
+      schema: {
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            status: { enum: ['PENDING', 'VERIFIED', 'REJECTED'] },
+            subjectType: { enum: ['VENUE_OWNER', 'PARTNER'] },
+            subjectId: { type: 'string', pattern: '^[a-fA-F0-9]{24}$' },
+            page: { type: 'integer', minimum: 1 },
+            limit: { type: 'integer', minimum: 1, maximum: 100 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      requireAdminContext(request);
+      if (!options.service.listQueue)
+        throw new AppError({
+          code: 'KYC_QUEUE_UNAVAILABLE',
+          message: 'The KYC review queue is unavailable',
+          statusCode: 503,
+        });
+      const result = await options.service.listQueue(request.query);
+      return reply.status(200).send(result);
+    },
+  );
+
   fastify.patch<{
     Params: { verificationId: string };
     Body: {

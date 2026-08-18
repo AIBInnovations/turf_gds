@@ -43,6 +43,7 @@ import {
 } from './modules/identity/owner/owner-auth.service.js';
 import { createOwnerAccessRepository } from './modules/identity/owner/owner-access.repository.js';
 import { createOwnerAccessService } from './modules/identity/owner/owner-access.service.js';
+import { createOwnerAccountClosureService } from './modules/identity/owner/owner-account-closure.service.js';
 import { createPartnerAccessRepository } from './modules/identity/partner/partner-access.repository.js';
 import { createPartnerAccessService } from './modules/identity/partner/partner-access.service.js';
 import { createPartnerPayoutAccountService } from './modules/identity/partner/partner-payout-account.service.js';
@@ -231,6 +232,9 @@ export async function buildApp(
     identityService,
     repository: createOwnerAccessRepository(app.database),
   });
+  const ownerAccountClosureService = createOwnerAccountClosureService({
+    database: app.database,
+  });
   const ownerEvents = createOwnerEventPublisher(
     app.database,
     createOutboxRepository(app.database),
@@ -407,6 +411,7 @@ export async function buildApp(
     prefix: '/api/v1',
     identityService,
     ownerAccessService,
+    ownerAccountClosureService,
     adminAuthService,
     adminOnboardingService,
     kycService,

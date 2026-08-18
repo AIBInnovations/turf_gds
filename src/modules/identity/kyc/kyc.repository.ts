@@ -33,6 +33,23 @@ export interface KycRepository {
     details: Record<string, string>,
   ): Promise<boolean>;
   countActiveDocuments(verificationId: ObjectId): Promise<number>;
+  /**
+   * The review queue. Only `is_current` verifications are returned — a superseded draft is
+   * never the one an admin acts on, and showing it would offer a review that the service
+   * layer then refuses.
+   */
+  listQueue?(input: {
+    status?: KycStatus;
+    subjectType?: KycSubjectType;
+    /** Narrows to one owner or partner — lets a venue screen read its owner's KYC state. */
+    subjectId?: ObjectId;
+    page: number;
+    limit: number;
+  }): Promise<{ items: KycVerificationDocument[]; total: number }>;
+  /** Document counts for a page of verifications, keyed by verification id. */
+  countDocumentsFor?(
+    verificationIds: ObjectId[],
+  ): Promise<Map<string, number>>;
   submit(
     id: ObjectId,
     subjectId: ObjectId,
@@ -134,7 +151,12 @@ export function createKycRepository(
       return documents()
         .find({
           kyc_verification_id: verificationId,
-          status: 'PENDING',
+          // "Active" is about the file, not the review outcome. Filtering on `status: PENDING`
+          // conflated the two, so approving a verification flipped its documents to ACCEPTED
+          // and the evidence vanished from the viewer — exactly when it is most worth auditing.
+          // REJECTED stays excluded: a rejected upload is not valid evidence and must not
+          // satisfy the registration checklist on re-submission.
+          status: { $ne: 'REJECTED' },
           'file.status': 'ACTIVE',
         })
         .sort({ created_at: -1 })
@@ -155,8 +177,43 @@ export function createKycRepository(
     countActiveDocuments(verificationId) {
       return documents().countDocuments({
         kyc_verification_id: verificationId,
-        status: 'PENDING',
+        status: { $ne: 'REJECTED' },
+        'file.status': 'ACTIVE',
       });
+    },
+    async listQueue(input) {
+      const filter: Record<string, unknown> = { is_current: true };
+      if (input.status) filter.status = input.status;
+      if (input.subjectType) filter.subject_type = input.subjectType;
+      if (input.subjectId) filter.subject_id = input.subjectId;
+
+      const [items, total] = await Promise.all([
+        verifications()
+          .find(filter)
+          // Oldest first: a review queue is worked in the order people submitted.
+          .sort({ created_at: 1 })
+          .skip((input.page - 1) * input.limit)
+          .limit(input.limit)
+          .toArray(),
+        verifications().countDocuments(filter),
+      ]);
+      return { items, total };
+    },
+    async countDocumentsFor(verificationIds) {
+      if (verificationIds.length === 0) return new Map();
+      const rows = await documents()
+        .aggregate<{ _id: ObjectId; count: number }>([
+          {
+            $match: {
+              kyc_verification_id: { $in: verificationIds },
+              status: { $ne: 'REJECTED' },
+              'file.status': 'ACTIVE',
+            },
+          },
+          { $group: { _id: '$kyc_verification_id', count: { $sum: 1 } } },
+        ])
+        .toArray();
+      return new Map(rows.map((row) => [row._id.toHexString(), row.count]));
     },
     async submit(id, subjectId, actorType, correlationId, _now) {
       const result = await verifications().updateOne(
@@ -193,7 +250,10 @@ export function createKycRepository(
             status: 'PENDING',
             is_current: true,
             preliminary_status: 'APPROVED',
-            preliminary_reviewed_by: { $ne: input.adminId },
+            // No `preliminary_reviewed_by: { $ne: adminId }` here: one admin runs the whole
+            // review now. Dropping it from the service alone would not have been enough — this
+            // filter is what actually decides, and a mismatch here fails silently as
+            // "cannot be reviewed".
             audit_history: { $elemMatch: { event_type: 'KYC_SUBMITTED' } },
           },
           { session },

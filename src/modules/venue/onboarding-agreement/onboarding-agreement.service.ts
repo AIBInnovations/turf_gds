@@ -35,6 +35,8 @@ export interface OnboardingAgreementService {
   }): Promise<object>;
   listTemplates(): Promise<object[]>;
   getOwner(input: { actorOwnerId: string; venueId: string }): Promise<object>;
+  /** Admin read of the live agreement for a venue, so approval state is visible before approving. */
+  getAdmin(input: { venueId: string }): Promise<object>;
   accept(input: {
     actorOwnerId: string;
     venueId: string;
@@ -218,6 +220,25 @@ export function createOnboardingAgreementService(input: {
         .find({
           venue_id: oid(v.venueId),
           owner_id: oid(v.actorOwnerId),
+          status: { $in: ['PROPOSED', 'CHANGES_REQUESTED', 'ACCEPTED'] },
+        })
+        .sort({ version: -1 })
+        .limit(1)
+        .next();
+      if (!value)
+        throw new AppError({
+          code: 'ONBOARDING_AGREEMENT_NOT_FOUND',
+          message: 'No onboarding agreement has been proposed',
+          statusCode: 404,
+        });
+      return present(value);
+    },
+    async getAdmin(v) {
+      // Same record the owner sees, without the membership check: an admin is not a member of the
+      // venue, and the approval screen needs to read acceptance back.
+      const value = await agreements()
+        .find({
+          venue_id: oid(v.venueId),
           status: { $in: ['PROPOSED', 'CHANGES_REQUESTED', 'ACCEPTED'] },
         })
         .sort({ version: -1 })

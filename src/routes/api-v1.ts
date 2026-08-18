@@ -16,6 +16,7 @@ import type { KycService } from '../modules/identity/kyc/kyc.service.js';
 import identityRoutes from '../modules/identity/owner/owner-auth.routes.js';
 import type { IdentityService } from '../modules/identity/owner/owner-auth.service.js';
 import ownerAccessRoutes from '../modules/identity/owner/owner-access.routes.js';
+import type { OwnerAccountClosureService } from '../modules/identity/owner/owner-account-closure.service.js';
 import type { OwnerAccessService } from '../modules/identity/owner/owner-access.service.js';
 import partnerAccessRoutes from '../modules/identity/partner/partner-access.routes.js';
 import type { PartnerAccessService } from '../modules/identity/partner/partner-access.service.js';
@@ -54,6 +55,7 @@ import type { TreasuryService } from '../modules/treasury/treasury.service.js';
 export interface ApiV1RoutesOptions {
   identityService: IdentityService;
   ownerAccessService: OwnerAccessService;
+  ownerAccountClosureService: OwnerAccountClosureService;
   adminAuthService: AdminAuthService;
   adminOnboardingService: AdminOnboardingService;
   kycService: KycService;
@@ -93,6 +95,7 @@ const apiV1Routes: FastifyPluginAsync<ApiV1RoutesOptions> = async (
   await fastify.register(ownerAccessRoutes, {
     prefix: '/auth/venue-owners',
     service: options.ownerAccessService,
+    closureService: options.ownerAccountClosureService,
   });
   await fastify.register(ownerDeviceRoutes, {
     prefix: '/auth/venue-owners',

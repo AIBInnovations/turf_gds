@@ -145,6 +145,14 @@ const routes: FastifyPluginAsync<OnboardingAgreementRoutesOptions> = async (
         venueId: r.params.venueId,
       }),
   );
+  f.get<{ Params: { venueId: string } }>(
+    '/admin/onboarding/venues/:venueId/agreement',
+    { preHandler: adminAuth, schema: { params: venueParams } },
+    async (r) => {
+      requireAdminRole(r);
+      return o.service.getAdmin({ venueId: r.params.venueId });
+    },
+  );
   f.post<{ Params: { venueId: string }; Body: { version: number } }>(
     '/owner/venues/:venueId/onboarding-agreement/accept',
     {

@@ -84,7 +84,19 @@ function createFixture() {
 async function buildRouteTestApp(service: OwnerAccessService) {
   const app = Fastify({ logger: false });
   await app.register(errorHandlerPlugin);
-  await app.register(ownerAccessRoutes, { service });
+  // These tests cover authentication and membership routes only; closure has its own suite, so
+  // the dependency is stubbed to something that fails loudly if a test ever reaches it.
+  await app.register(ownerAccessRoutes, {
+    service,
+    closureService: {
+      checkBlockers: async () => {
+        throw new Error('closure service not stubbed for this test');
+      },
+      closeAccount: async () => {
+        throw new Error('closure service not stubbed for this test');
+      },
+    },
+  });
   return app;
 }
 

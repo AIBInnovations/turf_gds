@@ -6,9 +6,11 @@ import {
   requireOwnerContext,
 } from '../shared/auth-context.js';
 import type { OwnerAccessService } from './owner-access.service.js';
+import type { OwnerAccountClosureService } from './owner-account-closure.service.js';
 
 export interface OwnerAccessRoutesOptions {
   service: OwnerAccessService;
+  closureService: OwnerAccountClosureService;
 }
 
 const ownerAccessRoutes: FastifyPluginAsync<OwnerAccessRoutesOptions> = async (
@@ -29,6 +31,51 @@ const ownerAccessRoutes: FastifyPluginAsync<OwnerAccessRoutesOptions> = async (
       const owner = requireOwnerContext(request);
       await options.service.logout(owner.ownerId, getBearerToken(request));
       return reply.status(204).send();
+    },
+  );
+
+  /** What would prevent this account from closing. Read-only, so the UI can warn before asking. */
+  fastify.get(
+    '/me/closure-blockers',
+    { preHandler: authenticate },
+    async (request) => {
+      const owner = requireOwnerContext(request);
+      const blockers = await options.closureService.checkBlockers(owner.ownerId);
+      return { blockers, canClose: blockers.length === 0 };
+    },
+  );
+
+  /**
+   * Closes the account. `POST` rather than `DELETE`: nothing is deleted — the owner is suspended,
+   * their sessions dropped and their contact details overwritten, while bookings and money
+   * records stay for audit. The password is re-entered because a live session alone is a weak
+   * gate for something irreversible.
+   */
+  fastify.post<{ Body: { password: string; reason?: string } }>(
+    '/me/close',
+    {
+      preHandler: authenticate,
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['password'],
+          properties: {
+            password: { type: 'string', minLength: 1, maxLength: 128 },
+            reason: { type: 'string', maxLength: 500 },
+          },
+        },
+      },
+    },
+    async (request) => {
+      const owner = requireOwnerContext(request);
+      // `exactOptionalPropertyTypes` is on, so an explicit `undefined` is not the same as
+      // an absent key — the property is only spread in when the caller actually sent one.
+      return options.closureService.closeAccount({
+        ownerId: owner.ownerId,
+        password: request.body.password,
+        ...(request.body.reason === undefined ? {} : { reason: request.body.reason }),
+      });
     },
   );
 

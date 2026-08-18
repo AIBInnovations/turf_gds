@@ -74,6 +74,43 @@ export interface KycService {
     notes?: string;
     correlationId: string;
   }): Promise<void>;
+  listQueue?(input: {
+    status?: KycStatus;
+    subjectType?: KycSubjectType;
+    subjectId?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<{
+    items: KycQueueEntry[];
+    page: number;
+    limit: number;
+    total: number;
+  }>;
+}
+
+/**
+ * One row of the admin review queue: the verification, plus enough of the subject to recognise
+ * who submitted it. Admins were previously expected to paste a 24-character owner id and a
+ * 24-character verification id copied out of a support request — the ids are still here, but
+ * nobody has to read them.
+ */
+export interface KycQueueEntry {
+  verificationId: string;
+  subjectType: KycSubjectType;
+  subjectId: string;
+  /** Business/legal name, falling back to the email when a subject has no name on file. */
+  subjectName: string;
+  subjectEmail: string | null;
+  verificationType: string;
+  status: KycStatus;
+  documentCount: number;
+  preliminaryStatus: 'APPROVED' | 'REJECTED' | null;
+  preliminaryReviewedBy: string | null;
+  preliminaryReviewedAt: string | null;
+  /** True once the subject actually submitted; a draft with no documents is not reviewable. */
+  submitted: boolean;
+  submittedAt: string | null;
+  createdAt: string;
 }
 
 export function createKycService(input: {
@@ -427,15 +464,10 @@ export function createKycService(input: {
         message: 'A preliminary approval is required before final KYC approval',
         statusCode: 409,
       });
-    if (
-      verification.preliminary_reviewed_by?.equals(toObjectId(values.adminId))
-    )
-      throw new AppError({
-        code: 'KYC_MAKER_CHECKER_REQUIRED',
-        message:
-          'The final reviewer must be different from the preliminary reviewer',
-        statusCode: 409,
-      });
+    // The maker-checker rule that required the final reviewer to be a different admin from the
+    // preliminary reviewer was removed deliberately: one admin now runs the whole review. The
+    // checklist and both reviewer ids are still recorded on the verification, so the audit trail
+    // still says who did what — it just no longer has to be two people.
 
     const reviewed = await input.repository.review({
       id: verification._id,
@@ -576,6 +608,126 @@ export function createKycService(input: {
     });
   }
 
+  /**
+   * The review queue, with each verification resolved to the person who submitted it.
+   *
+   * Subject identity lives in two different collections — `venue_owners` and `partners` — so
+   * the rows are grouped by type and fetched with one query each rather than per row. The
+   * `KYC_SUBMITTED` audit event is what separates a real submission from an abandoned draft.
+   */
+  async function listQueue(
+    values: NonNullable<Parameters<NonNullable<KycService['listQueue']>>[0]>,
+  ): Promise<{
+    items: KycQueueEntry[];
+    page: number;
+    limit: number;
+    total: number;
+  }> {
+    if (!input.database || !input.repository.listQueue) {
+      throw new AppError({
+        code: 'KYC_QUEUE_UNAVAILABLE',
+        message: 'The KYC review queue is unavailable',
+        statusCode: 503,
+      });
+    }
+
+    const page = Math.max(1, Math.trunc(values.page ?? 1));
+    const limit = Math.min(100, Math.max(1, Math.trunc(values.limit ?? 20)));
+
+    const { items, total } = await input.repository.listQueue({
+      ...(values.status ? { status: values.status } : {}),
+      ...(values.subjectType ? { subjectType: values.subjectType } : {}),
+      ...(values.subjectId ? { subjectId: toObjectId(values.subjectId) } : {}),
+      page,
+      limit,
+    });
+
+    const counts =
+      (await input.repository.countDocumentsFor?.(
+        items.map((item) => item._id),
+      )) ?? new Map<string, number>();
+
+    const db = input.database.db;
+    const idsByType = (type: KycSubjectType) =>
+      items
+        .filter((item) => item.subject_type === type)
+        .map((item) => item.subject_id);
+
+    const [owners, partners] = await Promise.all([
+      db
+        .collection('venue_owners')
+        .find(
+          { _id: { $in: idsByType('VENUE_OWNER') } },
+          { projection: { legal_name: 1, email: 1 } },
+        )
+        .toArray(),
+      db
+        .collection('partners')
+        .find(
+          { _id: { $in: idsByType('PARTNER') } },
+          { projection: { legal_name: 1, display_name: 1, email: 1 } },
+        )
+        .toArray(),
+    ]);
+
+    // `exactOptionalPropertyTypes` is on, so the value type spells out `| undefined` rather
+    // than marking the keys optional — these fields are present and may be empty.
+    const subjects = new Map<
+      string,
+      { name: string | undefined; email: string | undefined }
+    >();
+    for (const owner of owners)
+      subjects.set(owner._id.toHexString(), {
+        name: owner.legal_name as string | undefined,
+        email: owner.email as string | undefined,
+      });
+    for (const partner of partners)
+      subjects.set(partner._id.toHexString(), {
+        name: (partner.legal_name ?? partner.display_name) as
+          | string
+          | undefined,
+        email: partner.email as string | undefined,
+      });
+
+    return {
+      page,
+      limit,
+      total,
+      items: items.map((item) => {
+        const subjectId = item.subject_id.toHexString();
+        const subject = subjects.get(subjectId);
+        const submitted = item.audit_history?.find(
+          (event) =>
+            typeof event === 'object' &&
+            event !== null &&
+            'event_type' in event &&
+            event.event_type === 'KYC_SUBMITTED',
+        ) as { occurred_at?: Date } | undefined;
+
+        return {
+          verificationId: item._id.toHexString(),
+          subjectType: item.subject_type,
+          subjectId,
+          // A subject with neither name nor email would be unrecognisable; the id is the
+          // last resort rather than a blank cell.
+          subjectName: subject?.name ?? subject?.email ?? subjectId,
+          subjectEmail: subject?.email ?? null,
+          verificationType: item.verification_type,
+          status: item.status,
+          documentCount: counts.get(item._id.toHexString()) ?? 0,
+          preliminaryStatus: item.preliminary_status ?? null,
+          preliminaryReviewedBy:
+            item.preliminary_reviewed_by?.toHexString() ?? null,
+          preliminaryReviewedAt:
+            item.preliminary_reviewed_at?.toISOString() ?? null,
+          submitted: Boolean(submitted),
+          submittedAt: submitted?.occurred_at?.toISOString() ?? null,
+          createdAt: item.created_at.toISOString(),
+        };
+      }),
+    };
+  }
+
   return {
     createDraft,
     uploadDocument,
@@ -586,6 +738,7 @@ export function createKycService(input: {
     isVerified,
     review,
     preliminaryReview,
+    listQueue,
   };
 }
 
