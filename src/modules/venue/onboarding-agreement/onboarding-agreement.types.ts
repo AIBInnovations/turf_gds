@@ -25,7 +25,11 @@ export interface VenueOnboardingAgreementDocument {
   };
   status: 'PROPOSED' | 'CHANGES_REQUESTED' | 'ACCEPTED' | 'SUPERSEDED';
   version: number;
-  proposed_by: ObjectId;
+  /**
+   * Null when the platform proposed the standard terms automatically at registration rather
+   * than an admin drafting them. `audit_history` records the actor type either way.
+   */
+  proposed_by: ObjectId | null;
   proposed_at: Date;
   accepted_by: ObjectId | null;
   accepted_at: Date | null;

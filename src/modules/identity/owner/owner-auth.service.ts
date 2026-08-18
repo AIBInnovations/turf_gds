@@ -76,6 +76,18 @@ export interface IdentityServiceDependencies {
   venueService: VenueService;
   database: DatabaseConnection;
   authConfig: AppConfig['auth'];
+  /**
+   * Optional so the service can still be constructed without it (tests, and the wiring order in
+   * app.ts). When present, registration proposes the platform's standard terms straight away.
+   */
+  agreementService?: {
+    proposeStandard(input: {
+      venueId: string;
+      ownerId: string;
+      venueName: string;
+      correlationId: string;
+    }): Promise<boolean>;
+  };
   now?: () => Date;
 }
 
@@ -174,6 +186,22 @@ export function createIdentityService(
 
       throw error;
     }
+
+    /**
+     * Offer the standard agreement immediately, so the owner meets it on their first sign-in
+     * rather than waiting for an admin to draft one. Without this the onboarding gate had
+     * nothing to show and fell straight through to KYC — which is how venues ended up with
+     * verified owners, no agreement, and an approval the admin could not complete.
+     *
+     * Deliberately outside the transaction above and never awaited for its result: the account
+     * exists either way, and an admin can always propose terms by hand.
+     */
+    await dependencies.agreementService?.proposeStandard({
+      venueId: venueId.toHexString(),
+      ownerId: ownerId.toHexString(),
+      venueName: input.venue.displayName,
+      correlationId: `register:${ownerId.toHexString()}`,
+    });
 
     return {
       ownerId: ownerId.toHexString(),

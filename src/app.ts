@@ -227,6 +227,15 @@ export async function buildApp(
       venueService,
       database: app.database,
       authConfig: config.auth,
+      /**
+       * Late-bound on purpose. The agreement service needs `ownerAccessService`, which needs
+       * this very identity service, so the two cannot be constructed in one order. Forwarding
+       * through a closure breaks the cycle without a container.
+       */
+      agreementService: {
+        proposeStandard: (values) =>
+          onboardingAgreementService.proposeStandard(values),
+      },
     });
   const ownerAccessService = createOwnerAccessService({
     identityService,

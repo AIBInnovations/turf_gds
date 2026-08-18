@@ -7,7 +7,8 @@ import type { OwnerAccessService } from '../../identity/owner/owner-access.servi
 import type { VenueOnboardingAgreementDocument } from './onboarding-agreement.types.js';
 
 export type ProposeAgreementInput = {
-  adminId: string;
+  /** Omitted when the platform proposes the standard terms itself at registration. */
+  adminId?: string;
   venueId: string;
   ownerId: string;
   templateId?: string;
@@ -25,8 +26,47 @@ export type ProposeAgreementInput = {
   };
   correlationId: string;
 };
+/**
+ * The platform's default commercial terms, applied to the agreement every owner is offered the
+ * moment they register. They are the same values the admin proposal form has always pre-filled;
+ * putting them here is what let the proposal stop being a manual step.
+ *
+ * An admin can still propose different terms afterwards — that supersedes this one.
+ */
+export const STANDARD_TERMS = {
+  /** 12%. */
+  platformCommissionBps: 1200,
+  settlementCycle: 'T_PLUS_N' as const,
+  settlementLagDays: 2,
+  cancellationPolicy: {
+    cancellationAllowed: true,
+    /** 50%. */
+    defaultRefundBps: 5000,
+    noShowRefundBps: 0,
+    ownerCancellationNoticeMinutes: 120,
+    refundRules: [
+      { minMinutesBeforeStart: 1440, refundBps: 10000 },
+      { minMinutesBeforeStart: 180, refundBps: 5000 },
+    ],
+  },
+};
+
+/** Preferred template code; any ACTIVE template is used if this one is missing. */
+export const STANDARD_TEMPLATE_CODE = 'STANDARD_TURF_2026';
+
 export interface OnboardingAgreementService {
   propose(input: ProposeAgreementInput): Promise<object>;
+  /**
+   * Proposes STANDARD_TERMS for a freshly registered venue. Never throws: registration must not
+   * fail because the platform has no contract template configured — an admin can still propose
+   * one by hand, which is exactly the old behaviour.
+   */
+  proposeStandard(input: {
+    venueId: string;
+    ownerId: string;
+    venueName: string;
+    correlationId: string;
+  }): Promise<boolean>;
   createTemplate(input: {
     adminId: string;
     code: string;
@@ -117,6 +157,32 @@ export function createOnboardingAgreementService(input: {
         await templates().find({ status: 'ACTIVE' }).sort({ code: 1 }).toArray()
       ).map(templateView);
     },
+    async proposeStandard(v) {
+      try {
+        const template =
+          (await templates().findOne({
+            code: STANDARD_TEMPLATE_CODE,
+            status: 'ACTIVE',
+          })) ?? (await templates().findOne({ status: 'ACTIVE' }));
+
+        if (!template) return false;
+
+        await this.propose({
+          venueId: v.venueId,
+          ownerId: v.ownerId,
+          templateId: template._id.toHexString(),
+          title: `${v.venueName} — platform agreement`,
+          correlationId: v.correlationId,
+          ...STANDARD_TERMS,
+        });
+        return true;
+      } catch {
+        // Swallowed on purpose: a registration that succeeded must not be reported as failed
+        // because the automatic proposal could not be written. An admin can still propose by
+        // hand, which is exactly the behaviour that existed before this ran automatically.
+        return false;
+      }
+    },
     async propose(v) {
       validate(v);
       const template = v.templateId
@@ -177,7 +243,7 @@ export function createOnboardingAgreementService(input: {
           },
           status: 'PROPOSED',
           version: (latest?.version ?? 0) + 1,
-          proposed_by: oid(v.adminId),
+          proposed_by: v.adminId ? oid(v.adminId) : null,
           proposed_at: timestamp,
           accepted_by: null,
           accepted_at: null,
@@ -189,8 +255,8 @@ export function createOnboardingAgreementService(input: {
                 latest?.status === 'ACCEPTED'
                   ? 'ONBOARDING_AGREEMENT_AMENDMENT_PROPOSED'
                   : 'ONBOARDING_AGREEMENT_PROPOSED',
-              actor_type: 'ADMIN',
-              actor_id: oid(v.adminId),
+              actor_type: v.adminId ? 'ADMIN' : 'SYSTEM',
+              actor_id: v.adminId ? oid(v.adminId) : null,
               correlation_id: v.correlationId,
               terms_hash: hash(termsText),
               occurred_at: timestamp,

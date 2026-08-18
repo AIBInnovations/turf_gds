@@ -75,7 +75,9 @@ const validator: Document = {
           },
         },
       },
-      proposed_by: { bsonType: 'objectId' },
+      // Null when the platform proposed the standard terms itself at registration rather than
+      // an admin drafting them; `audit_history` carries actor_type SYSTEM in that case.
+      proposed_by: { bsonType: ['objectId', 'null'] },
       proposed_at: { bsonType: 'date' },
       accepted_by: { bsonType: ['objectId', 'null'] },
       accepted_at: { bsonType: ['date', 'null'] },
