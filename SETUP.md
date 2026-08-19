@@ -1,5 +1,26 @@
 # Turf GDS — local environment
 
+## Repository layout
+
+There is no monorepo. Each piece is its own repository, and they are expected to sit side by side
+in one parent folder — `scripts/dev.sh` and `scripts/seed.mjs` both resolve the apps as siblings
+of this backend, and skip any that is not checked out:
+
+```
+<parent>/
+  turf_gds/                    this repo — API, worker, seed script
+  turfgang-admin-portal/       admin console      (Vercel)
+  turfgang-owner-web/          venue-owner web    (Vercel)
+  turfgang-partner-console/    partner console    (Vercel)
+  turfgang-owner-mobile/       React Native app
+```
+
+Each app repo vendors its own copy of `packages/ui` and `packages/api-client` and declares
+`"workspaces": ["packages/*"]`. **Never copy `package.json`, `package-lock.json`, `.gitignore`,
+`next.config.ts` or `vercel.json` between repos** — those are per-repo, and overwriting them is
+what previously stripped the `workspaces` declaration and broke every deploy with an
+`npm 404 @turfgang/api-client`.
+
 ## Status
 
 | Piece | State |
@@ -74,3 +95,40 @@ hex values and **must not be equal** — the config loader refuses to boot if th
 
 Rotating `PARTNER_CREDENTIAL_MASTER_SECRET` invalidates every partner API key at once, because
 signing secrets are derived from it rather than stored.
+
+## Deploying the web apps to Vercel
+
+`apps/admin-portal` and `apps/owner-web` each carry a `vercel.json`. Both are Next.js App Router
+apps, so Vercel routes them natively — there is **no** SPA catch-all rewrite, and adding one
+(`/(.*) → /index.html`) would break them, because there is no `index.html` to serve.
+
+Per project, in the Vercel dashboard:
+
+| Setting | Value |
+| --- | --- |
+| Root Directory | `apps/admin-portal` (or `apps/owner-web`) |
+| Include files outside root directory | **on** — the apps import `packages/*` workspaces |
+| Framework | Next.js (already set by `vercel.json`) |
+
+Install and build run from the repo root (`cd ../.. && npm install`) so npm links the
+`@turfgang/ui` and `@turfgang/api-client` workspaces. Without that the build cannot resolve them.
+
+### Required environment variable
+
+```
+API_ORIGIN=https://your-backend-host
+```
+
+Both apps proxy `/api/*` and `/ready` to `API_ORIGIN` through a Next rewrite, which is what keeps
+browser requests same-origin — the backend still registers no CORS plugin, so a direct
+cross-origin call from the deployed frontend is refused. `API_ORIGIN` defaults to
+`http://localhost:3000`, which exists only on a developer machine: leave it unset in a deployment
+and every API call fails while the pages themselves render fine.
+
+### Why `distDir` is conditional
+
+Locally, production builds go to `.next-build` so that running `npm run build` cannot overwrite
+the `.next` a dev server is still reading. Vercel's builder only ever looks in `.next`, and it
+builds with `NODE_ENV=production` — so on Vercel (`process.env.VERCEL`) the split is switched
+off. Without that guard the output lands in `.next-build`, Vercel finds an empty `.next`, and
+**every route 404s** even though the build log says it succeeded.
