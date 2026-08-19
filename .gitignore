@@ -13,3 +13,7 @@ coverage/
 
 # Written by scripts/seed.mjs — contains live API key pairs and demo passwords.
 CREDENTIALS.md
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat
+.gitignore
