@@ -773,17 +773,15 @@ export async function initializeIdentityPersistence(db: Db): Promise<void> {
 }
 
 async function migrateCommunicationsEmbeds(db: Db): Promise<void> {
+  const targetNames = new Set([
+    'admin_users',
+    'venue_owners',
+    'webhook_endpoints',
+  ]);
   const existing = new Set(
-    (
-      await db
-        .listCollections(
-          {
-            name: { $in: ['admin_users', 'venue_owners', 'webhook_endpoints'] },
-          },
-          { nameOnly: true },
-        )
-        .toArray()
-    ).map(({ name }) => name),
+    (await db.listCollections({}, { nameOnly: true }).toArray())
+      .map(({ name }) => name)
+      .filter((name) => targetNames.has(name)),
   );
   if (existing.has('admin_users')) {
     await db.collection('admin_users').updateMany(
