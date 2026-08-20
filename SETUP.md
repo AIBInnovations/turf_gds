@@ -98,20 +98,27 @@ signing secrets are derived from it rather than stored.
 
 ## Deploying the web apps to Vercel
 
-`apps/admin-portal` and `apps/owner-web` each carry a `vercel.json`. Both are Next.js App Router
-apps, so Vercel routes them natively — there is **no** SPA catch-all rewrite, and adding one
-(`/(.*) → /index.html`) would break them, because there is no `index.html` to serve.
+`turfgang-admin-portal`, `turfgang-owner-web` and `turfgang-partner-console` each carry a
+`vercel.json`. All three are Next.js App Router apps, so Vercel routes them natively — there is
+**no** SPA catch-all rewrite, and adding one (`/(.*) → /index.html`) would break them, because
+there is no `index.html` to serve.
 
-Per project, in the Vercel dashboard:
+Each app is its own repository whose root *is* the app, so the dashboard needs nothing unusual:
+leave **Root Directory** empty and **Include files outside root directory** off. `vercel.json`
+sets the framework and output directory; install and build are the defaults.
 
-| Setting | Value |
+What each repo must keep for the build to resolve its shared code:
+
+| File | Why |
 | --- | --- |
-| Root Directory | `apps/admin-portal` (or `apps/owner-web`) |
-| Include files outside root directory | **on** — the apps import `packages/*` workspaces |
-| Framework | Next.js (already set by `vercel.json`) |
+| `package.json` → `"workspaces": ["packages/*"]` | tells npm that `@turfgang/ui` and `@turfgang/api-client` are the vendored local packages, not registry ones |
+| `package-lock.json` | records those links |
+| `packages/ui`, `packages/api-client` | the vendored source itself |
 
-Install and build run from the repo root (`cd ../.. && npm install`) so npm links the
-`@turfgang/ui` and `@turfgang/api-client` workspaces. Without that the build cannot resolve them.
+Losing the first two is how a deploy fails with `npm error 404 … @turfgang/api-client`: npm falls
+back to the public registry, where those names do not exist. When copying code between repos,
+copy **only** `src/` and `packages/*/src/` — never `package.json`, `package-lock.json`,
+`.gitignore`, `next.config.ts` or `vercel.json`.
 
 ### Required environment variable
 

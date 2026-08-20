@@ -709,8 +709,9 @@ Every seed run creates a NEW owner and partner, and rewrites this file.
 
 The mobile app uses the same owner login as the owner web app.
 
-Both admins are needed to demo KYC: the preliminary check and the final decision must be made by
-two different people, so one account cannot complete a verification on its own.
+One admin can complete a verification on its own — the preliminary check and the final decision
+no longer have to be made by different people. The OPS login is kept for exercising the role that
+may record the check but may not open documents.
 
 ## Ids
 
