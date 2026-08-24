@@ -87,6 +87,16 @@ export function createMsg91OtpProvider(
       };
 
       if (!response.ok || value.type !== 'success' || !value.message) {
+        /**
+         * MSG91 answers a rejected token with HTTP 200 and a non-success body, so the HTTP
+         * status alone cannot tell "this token is no good" from "MSG91 is having a bad day".
+         * A reachable MSG91 that refuses the token is the caller's problem — an expired or
+         * replayed verification — and must surface as 401 so the client can say "that
+         * verification failed, request a new code" rather than showing a gateway error for
+         * what is a routine, user-recoverable outcome. Only an unreachable or erroring MSG91
+         * is a 502.
+         */
+        const providerReachable = response.ok;
         logger?.warn(
           {
             providerStatus: response.status,
@@ -96,13 +106,18 @@ export function createMsg91OtpProvider(
             providerMessage:
               value.type === 'success' ? maskPhone(value.message ?? '') : (value.message ?? null),
             elapsedMs: Date.now() - startedAt,
+            outcome: providerReachable ? 'token-rejected' : 'provider-error',
           },
-          'MSG91 rejected the access token',
+          providerReachable
+            ? 'MSG91 rejected the access token'
+            : 'MSG91 returned an error response',
         );
         throw new AppError({
-          code: 'OTP_PROVIDER_ERROR',
-          message: 'MSG91 access-token verification failed',
-          statusCode: response.status === 401 || response.status === 400 ? 401 : 502,
+          code: providerReachable ? 'OTP_VERIFICATION_FAILED' : 'OTP_PROVIDER_ERROR',
+          message: providerReachable
+            ? 'That verification could not be confirmed. Request a new code and try again.'
+            : 'The OTP provider could not verify this right now',
+          statusCode: providerReachable ? 401 : 502,
           details: { providerStatus: response.status },
         });
       }
