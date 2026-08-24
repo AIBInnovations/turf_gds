@@ -5,6 +5,7 @@ import { loadConfig } from '../../src/config/env.js';
 import { initializeIdentityPersistence } from '../../src/modules/identity/persistence.js';
 import { createAdminAuthRepository } from '../../src/modules/identity/platform/auth.repository.js';
 import { createAdminAuthService } from '../../src/modules/identity/platform/auth.service.js';
+import { createMsg91OtpProvider } from '../../src/modules/identity/owner/msg91-otp.provider.js';
 import { initializeVenuePersistence } from '../../src/modules/venue/profile/venue.persistence.js';
 import { initializeContractPersistence } from '../../src/modules/contracts/contract.persistence.js';
 import { initializeBookingPersistence } from '../../src/modules/booking/booking.persistence.js';
@@ -77,6 +78,9 @@ await initializeOutboxPersistence(database.db);
 const adminAuthService = createAdminAuthService({
   repository: createAdminAuthRepository(database),
   authConfig: config.auth,
+  otpProvider: createMsg91OtpProvider(
+    config.msg91 ?? { enabled: false, baseUrl: 'https://api.msg91.com' },
+  ),
 });
 await adminAuthService.bootstrapAdmin({
   email: 'curl-admin@example.com',

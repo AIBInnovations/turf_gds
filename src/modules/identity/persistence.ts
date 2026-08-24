@@ -98,6 +98,7 @@ const adminValidator = documentValidator(
     'display_name',
     'role',
     'status',
+    'phone_e164',
     'failed_login_count',
     'locked_until',
     'fcm_tokens',
@@ -112,6 +113,9 @@ const adminValidator = documentValidator(
     display_name: { bsonType: 'string' },
     role: { enum: ['ADMIN', 'OPS', 'SUPPORT'] },
     status: { enum: ['ACTIVE', 'DISABLED'] },
+    // Null until the admin verifies one — see the phone+OTP login migration. Existing admins
+    // predate this field entirely, hence nullable rather than required-with-a-value.
+    phone_e164: { bsonType: ['string', 'null'] },
     failed_login_count: { bsonType: 'int', minimum: 0 },
     locked_until: { bsonType: ['date', 'null'] },
     fcm_tokens: {
@@ -565,6 +569,12 @@ export async function initializeIdentityPersistence(db: Db): Promise<void> {
         { failed_login_count: { $exists: false } },
         { $set: { failed_login_count: 0, locked_until: null } },
       );
+    await db
+      .collection('admin_users')
+      .updateMany(
+        { phone_e164: { $exists: false } },
+        { $set: { phone_e164: null } },
+      );
   }
   await ensureValidatedCollection(db, 'admin_users', adminValidator);
   await ensureValidatedCollection(
@@ -631,6 +641,11 @@ export async function initializeIdentityPersistence(db: Db): Promise<void> {
   await db
     .collection('admin_users')
     .createIndex({ email: 1 }, { unique: true, name: 'uq_admin_users_email' });
+  // Sparse: most existing admins have no phone yet — only enforce uniqueness once one is set.
+  await db.collection('admin_users').createIndex(
+    { phone_e164: 1 },
+    { unique: true, sparse: true, name: 'uq_admin_users_phone_e164' },
+  );
   await db.collection('venue_owners').createIndex(
     { email: 1 },
     {

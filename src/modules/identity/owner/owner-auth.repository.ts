@@ -9,6 +9,7 @@ import type {
 
 export interface IdentityRepository {
   ownerEmailExists(email: string, session: ClientSession): Promise<boolean>;
+  ownerPhoneExists(phoneE164: string, session: ClientSession): Promise<boolean>;
   insertOwner(owner: VenueOwnerDocument, session: ClientSession): Promise<void>;
   insertOwnerMembership(
     membership: VenueOwnerMembershipDocument,
@@ -19,6 +20,7 @@ export interface IdentityRepository {
     session?: ClientSession,
   ): Promise<VenueOwnerDocument | null>;
   findOwnerByEmail(email: string): Promise<VenueOwnerDocument | null>;
+  findOwnerByPhone(phoneE164: string): Promise<VenueOwnerDocument | null>;
   recordFailedLogin(
     ownerId: ObjectId,
     maximumAttempts: number,
@@ -71,6 +73,17 @@ export function createIdentityRepository(
     return owner !== null;
   }
 
+  async function ownerPhoneExists(
+    phoneE164: string,
+    session: ClientSession,
+  ): Promise<boolean> {
+    const owner = await owners().findOne(
+      { phone_e164: phoneE164 },
+      { session, projection: { _id: 1 } },
+    );
+    return owner !== null;
+  }
+
   async function insertOwner(
     owner: VenueOwnerDocument,
     session: ClientSession,
@@ -89,6 +102,12 @@ export function createIdentityRepository(
     email: string,
   ): Promise<VenueOwnerDocument | null> {
     return owners().findOne({ email });
+  }
+
+  async function findOwnerByPhone(
+    phoneE164: string,
+  ): Promise<VenueOwnerDocument | null> {
+    return owners().findOne({ phone_e164: phoneE164 });
   }
 
   async function findOwnerById(
@@ -273,10 +292,12 @@ export function createIdentityRepository(
 
   return {
     ownerEmailExists,
+    ownerPhoneExists,
     insertOwner,
     insertOwnerMembership,
     findOwnerById,
     findOwnerByEmail,
+    findOwnerByPhone,
     recordFailedLogin,
     resetLoginFailures,
     appendSession,

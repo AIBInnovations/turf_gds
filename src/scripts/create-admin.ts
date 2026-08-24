@@ -2,6 +2,7 @@ import { loadConfig } from '../config/env.js';
 import { createAdminAuthRepository } from '../modules/identity/platform/auth.repository.js';
 import { createAdminAuthService } from '../modules/identity/platform/auth.service.js';
 import type { AdminRole } from '../modules/identity/platform/auth.types.js';
+import { createMsg91OtpProvider } from '../modules/identity/owner/msg91-otp.provider.js';
 import { MongoDatabaseConnection } from '../shared/database/database-connection.js';
 
 const config = loadConfig();
@@ -30,6 +31,9 @@ try {
   const service = createAdminAuthService({
     repository: createAdminAuthRepository(database),
     authConfig: config.auth,
+    otpProvider: createMsg91OtpProvider(
+      config.msg91 ?? { enabled: false, baseUrl: 'https://api.msg91.com' },
+    ),
   });
   const result = await service.bootstrapAdmin({
     email,

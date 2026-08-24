@@ -101,6 +101,13 @@ export interface AppConfig {
     accountNumber?: string;
     baseUrl: string;
   };
+  msg91?: {
+    enabled: boolean;
+    /** Server-side account auth key for verifyAccessToken. Never shipped to clients. */
+    authKey?: string;
+    /** Verification host — distinct from the client SDK's control.msg91.com. */
+    baseUrl: string;
+  };
 }
 
 function readEnum<T extends string>(
@@ -196,6 +203,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     env.RAZORPAY_ENABLED,
     false,
   );
+  const msg91Enabled = readBoolean('MSG91_ENABLED', env.MSG91_ENABLED, false);
   const config: AppConfig = {
     nodeEnv: readEnum('NODE_ENV', env.NODE_ENV, NODE_ENV_VALUES, 'development'),
     host: env.HOST?.trim() || '0.0.0.0',
@@ -464,6 +472,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       : {
           enabled: false,
           baseUrl: env.RAZORPAY_BASE_URL?.trim() || 'https://api.razorpay.com',
+        },
+    msg91: msg91Enabled
+      ? {
+          enabled: true,
+          authKey: readRequired('MSG91_AUTH_KEY', env.MSG91_AUTH_KEY),
+          baseUrl: env.MSG91_BASE_URL?.trim() || 'https://api.msg91.com',
+        }
+      : {
+          enabled: false,
+          baseUrl: env.MSG91_BASE_URL?.trim() || 'https://api.msg91.com',
         },
   };
   if (

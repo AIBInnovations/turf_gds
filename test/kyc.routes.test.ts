@@ -46,6 +46,12 @@ function createFixture() {
     async login() {
       throw new Error('not used');
     },
+    async otpLogin() {
+      throw new Error('not used');
+    },
+    async setPhone() {
+      throw new Error('not used');
+    },
     async authenticate() {
       return {
         actorType: 'ADMIN',

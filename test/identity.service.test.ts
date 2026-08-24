@@ -6,6 +6,7 @@ import { ObjectId } from 'mongodb';
 import type { AppConfig } from '../src/config/env.js';
 import type { IdentityRepository } from '../src/modules/identity/owner/owner-auth.repository.js';
 import { createIdentityService } from '../src/modules/identity/owner/owner-auth.service.js';
+import type { OtpProvider } from '../src/modules/identity/owner/msg91-otp.provider.js';
 import type {
   OwnerSessionDocument,
   VenueOwnerDocument,
@@ -38,6 +39,7 @@ const authConfig: AppConfig['auth'] = {
 
 interface FakeRepositoryState {
   duplicate: boolean;
+  duplicatePhone: boolean;
   owner: VenueOwnerDocument | null;
   insertedOwner?: VenueOwnerDocument;
   createdVenue?: CreateInitialVenueInput;
@@ -51,22 +53,42 @@ interface FakeRepositoryState {
   };
 }
 
+/**
+ * A fake MSG91 provider that treats the "access token" as the verified phone number's digits
+ * directly — tests pass e.g. `accessToken: '919876543210'` to mean "MSG91 verified this exact
+ * phone." Passing a different digit string than the owner's real phone exercises the mismatch
+ * rejection path.
+ */
+function createFakeOtpProvider(): OtpProvider {
+  return {
+    async verifyAccessToken({ accessToken }) {
+      return { verifiedPhoneDigits: accessToken };
+    },
+  };
+}
+
 function createFakeRepository(
   initialOwner: VenueOwnerDocument | null = null,
 ): {
   repository: IdentityRepository;
   venueService: VenueService;
   database: DatabaseConnection;
+  otpProvider: OtpProvider;
   state: FakeRepositoryState;
 } {
   const state: FakeRepositoryState = {
     duplicate: false,
+    duplicatePhone: false,
     owner: initialOwner,
   };
 
   const repository: IdentityRepository = {
     async ownerEmailExists() {
       return state.duplicate;
+    },
+
+    async ownerPhoneExists() {
+      return state.duplicatePhone;
     },
 
     async insertOwner(owner) {
@@ -79,6 +101,12 @@ function createFakeRepository(
 
     async findOwnerByEmail() {
       return state.owner;
+    },
+
+    async findOwnerByPhone(phoneE164) {
+      return state.owner && state.owner.phone_e164 === phoneE164
+        ? state.owner
+        : null;
     },
 
     async recordFailedLogin(
@@ -174,7 +202,13 @@ function createFakeRepository(
     },
   };
 
-  return { repository, venueService, database, state };
+  return {
+    repository,
+    venueService,
+    database,
+    otpProvider: createFakeOtpProvider(),
+    state,
+  };
 }
 
 async function createOwner(
@@ -222,6 +256,7 @@ test('registration prepares owner, venue, and owner membership result', async ()
     venueService: fake.venueService,
     database: fake.database,
     authConfig,
+    otpProvider: fake.otpProvider,
     now: () => fixedNow,
   });
 
@@ -266,6 +301,7 @@ test('login returns a raw token but stores only its hash', async () => {
     venueService: fake.venueService,
     database: fake.database,
     authConfig,
+    otpProvider: fake.otpProvider,
     now: () => fixedNow,
   });
 
@@ -296,6 +332,7 @@ test('repeated invalid passwords lock the owner account', async () => {
     venueService: fake.venueService,
     database: fake.database,
     authConfig,
+    otpProvider: fake.otpProvider,
     now: () => fixedNow,
   });
 
@@ -350,6 +387,7 @@ test('session validation rejects expired or revoked sessions', async () => {
     venueService: fake.venueService,
     database: fake.database,
     authConfig,
+    otpProvider: fake.otpProvider,
     now: () => fixedNow,
   });
 
@@ -368,6 +406,7 @@ test('owner approval is delegated to the identity repository', async () => {
     venueService: fake.venueService,
     database: fake.database,
     authConfig,
+    otpProvider: fake.otpProvider,
     now: () => fixedNow,
   });
   const adminId = new ObjectId('687f00000000000000000005');
@@ -400,6 +439,7 @@ test('owner approval rejects malformed identifiers', async () => {
     venueService: fake.venueService,
     database: fake.database,
     authConfig,
+    otpProvider: fake.otpProvider,
   });
 
   await assert.rejects(
@@ -411,5 +451,196 @@ test('owner approval rejects malformed identifiers', async () => {
     }, undefined as never),
     (error: unknown) =>
       error instanceof AppError && error.code === 'INVALID_ID',
+  );
+});
+
+test('OTP registration verifies the access token and stores an unusable password placeholder', async () => {
+  const fake = createFakeRepository();
+  const service = createIdentityService({
+    repository: fake.repository,
+    venueService: fake.venueService,
+    database: fake.database,
+    authConfig,
+    otpProvider: fake.otpProvider,
+    now: () => fixedNow,
+  });
+
+  const result = await service.registerVenueOwner({
+    legalName: 'Turf Owner Private Limited',
+    email: 'otp-owner@example.com',
+    phoneE164: '+919876543210',
+    accessToken: '919876543210',
+    venue: {
+      legalName: 'Green Arena Private Limited',
+      displayName: 'Green Arena',
+      timezone: 'Asia/Kolkata',
+      address: {
+        line1: 'MG Road',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        postalCode: '560001',
+        country: 'in',
+      },
+      latitude: 12.9716,
+      longitude: 77.5946,
+    },
+  });
+
+  assert.equal(result.ownerStatus, 'ACTIVE');
+  assert.equal(fake.state.insertedOwner?.phone_e164, '+919876543210');
+  assert.ok(fake.state.insertedOwner?.password_hash);
+  assert.equal(
+    await verifyPassword('', fake.state.insertedOwner?.password_hash ?? ''),
+    false,
+  );
+});
+
+test('OTP registration rejects a token verified for a different phone', async () => {
+  const fake = createFakeRepository();
+  const service = createIdentityService({
+    repository: fake.repository,
+    venueService: fake.venueService,
+    database: fake.database,
+    authConfig,
+    otpProvider: fake.otpProvider,
+    now: () => fixedNow,
+  });
+
+  await assert.rejects(
+    service.registerVenueOwner({
+      legalName: 'Turf Owner Private Limited',
+      email: 'otp-owner@example.com',
+      phoneE164: '+919876543210',
+      accessToken: '919999999999', // verified for a different phone
+      venue: {
+        legalName: 'Green Arena Private Limited',
+        displayName: 'Green Arena',
+        timezone: 'Asia/Kolkata',
+        address: {
+          line1: 'MG Road',
+          city: 'Bengaluru',
+          state: 'Karnataka',
+          postalCode: '560001',
+          country: 'in',
+        },
+        latitude: 12.9716,
+        longitude: 77.5946,
+      },
+    }),
+    (error: unknown) =>
+      error instanceof AppError && error.code === 'PHONE_TOKEN_MISMATCH',
+  );
+  assert.equal(fake.state.insertedOwner, undefined);
+});
+
+test('registration rejects a body carrying both password and accessToken', async () => {
+  const fake = createFakeRepository();
+  const service = createIdentityService({
+    repository: fake.repository,
+    venueService: fake.venueService,
+    database: fake.database,
+    authConfig,
+    otpProvider: fake.otpProvider,
+    now: () => fixedNow,
+  });
+
+  await assert.rejects(
+    service.registerVenueOwner({
+      legalName: 'Turf Owner Private Limited',
+      email: 'otp-owner@example.com',
+      phoneE164: '+919876543210',
+      password: 'correct-horse-battery',
+      accessToken: '919876543210',
+      venue: {
+        legalName: 'Green Arena Private Limited',
+        displayName: 'Green Arena',
+        timezone: 'Asia/Kolkata',
+        address: {
+          line1: 'MG Road',
+          city: 'Bengaluru',
+          state: 'Karnataka',
+          postalCode: '560001',
+          country: 'in',
+        },
+        latitude: 12.9716,
+        longitude: 77.5946,
+      },
+    }),
+    (error: unknown) =>
+      error instanceof AppError && error.code === 'VALIDATION_ERROR',
+  );
+});
+
+test('OTP login issues a session for the matching phone number', async () => {
+  const owner = await createOwner();
+  const fake = createFakeRepository(owner);
+  const service = createIdentityService({
+    repository: fake.repository,
+    venueService: fake.venueService,
+    database: fake.database,
+    authConfig,
+    otpProvider: fake.otpProvider,
+    now: () => fixedNow,
+  });
+
+  const result = await service.loginVenueOwnerWithOtp({
+    phoneE164: owner.phone_e164,
+    accessToken: owner.phone_e164.replace(/\D/g, ''),
+    ipAddress: '127.0.0.1',
+    userAgent: 'identity-test',
+  });
+
+  assert.equal(result.owner.id, owner._id.toHexString());
+  assert.ok(result.sessionToken.length >= 40);
+  assert.equal(
+    fake.state.appendedSession?.token_hash,
+    hashSessionToken(result.sessionToken),
+  );
+});
+
+test('OTP login rejects a phone with no registered owner', async () => {
+  const fake = createFakeRepository(null);
+  const service = createIdentityService({
+    repository: fake.repository,
+    venueService: fake.venueService,
+    database: fake.database,
+    authConfig,
+    otpProvider: fake.otpProvider,
+    now: () => fixedNow,
+  });
+
+  await assert.rejects(
+    service.loginVenueOwnerWithOtp({
+      phoneE164: '+919876543210',
+      accessToken: '919876543210',
+      ipAddress: '127.0.0.1',
+      userAgent: 'identity-test',
+    }),
+    (error: unknown) =>
+      error instanceof AppError && error.code === 'PHONE_NOT_REGISTERED',
+  );
+});
+
+test('OTP login rejects a token verified for a different phone than claimed', async () => {
+  const owner = await createOwner();
+  const fake = createFakeRepository(owner);
+  const service = createIdentityService({
+    repository: fake.repository,
+    venueService: fake.venueService,
+    database: fake.database,
+    authConfig,
+    otpProvider: fake.otpProvider,
+    now: () => fixedNow,
+  });
+
+  await assert.rejects(
+    service.loginVenueOwnerWithOtp({
+      phoneE164: owner.phone_e164,
+      accessToken: '919999999999', // verified for a different phone
+      ipAddress: '127.0.0.1',
+      userAgent: 'identity-test',
+    }),
+    (error: unknown) =>
+      error instanceof AppError && error.code === 'PHONE_TOKEN_MISMATCH',
   );
 });

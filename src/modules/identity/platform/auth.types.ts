@@ -9,6 +9,8 @@ export interface AdminUserDocument {
   display_name: string;
   role: AdminRole;
   status: 'ACTIVE' | 'DISABLED';
+  /** Null until the admin verifies one via the phone+OTP self-service flow. */
+  phone_e164: string | null;
   failed_login_count: number;
   locked_until: Date | null;
   fcm_tokens: unknown[];

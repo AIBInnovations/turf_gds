@@ -11,6 +11,7 @@ import { initializeAuditPersistence } from '../shared/audit/audit.persistence.js
 import { initializeTreasuryPersistence } from '../modules/treasury/treasury.persistence.js';
 import { initializeSchedulerPersistence } from '../shared/scheduler/scheduler.persistence.js';
 import { initializeIpRateLimitPersistence } from '../shared/rate-limit/ip-rate-limit.repository.js';
+import { initializeMessagingPersistence } from '../modules/messaging/messaging.persistence.js';
 
 /**
  * The single ordered list of collection migrations.
@@ -33,4 +34,5 @@ export async function initializePersistence(db: Db): Promise<void> {
   await initializeTreasuryPersistence(db);
   await initializeSchedulerPersistence(db);
   await initializeIpRateLimitPersistence(db);
+  await initializeMessagingPersistence(db);
 }

@@ -11,6 +11,7 @@ import type { BookingDocument } from '../src/modules/booking/booking.types.js';
 import { initializeIdentityPersistence } from '../src/modules/identity/persistence.js';
 import { createIdentityRepository } from '../src/modules/identity/owner/owner-auth.repository.js';
 import { createIdentityService } from '../src/modules/identity/owner/owner-auth.service.js';
+import { createMsg91OtpProvider } from '../src/modules/identity/owner/msg91-otp.provider.js';
 import { initializeLedgerPersistence } from '../src/modules/ledger/ledger.persistence.js';
 import { createLedgerRepository } from '../src/modules/ledger/ledger.repository.js';
 import { createLedgerService } from '../src/modules/ledger/ledger.service.js';
@@ -46,6 +47,7 @@ test('Epic 08 atomically creates venues and reports isolated stored financial da
     const venueService = createVenueService({ repository: createVenueRepository(database) });
     const identityService = createIdentityService({
       repository: createIdentityRepository(database), venueService, database, authConfig,
+      otpProvider: createMsg91OtpProvider({ enabled: false, baseUrl: 'https://api.msg91.com' }),
     });
     const owner = await identityService.registerVenueOwner({
       legalName: 'Admin Owner', email: 'admin-epic08-owner@example.com',

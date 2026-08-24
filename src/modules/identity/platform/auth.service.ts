@@ -11,6 +11,7 @@ import {
   verifyAdminJwt,
 } from '../../../shared/auth/admin-jwt.js';
 import { AppError } from '../../../shared/errors/app-error.js';
+import type { OtpProvider } from '../owner/msg91-otp.provider.js';
 import type { AdminRole } from './auth.types.js';
 import type { AdminAuthRepository } from './auth.repository.js';
 
@@ -25,6 +26,26 @@ export interface AdminAuthService {
       role: AdminRole;
     };
   }>;
+  /**
+   * Additive alongside `login` — password stays the only way in until every existing admin has
+   * verified a phone number through `setPhone`. See the phone+OTP login migration.
+   */
+  otpLogin(input: { phoneE164: string; accessToken: string }): Promise<{
+    accessToken: string;
+    expiresAt: string;
+    admin: {
+      id: string;
+      email: string;
+      displayName: string;
+      role: AdminRole;
+    };
+  }>;
+  /** Self-service: an already-authenticated admin attaches a verified phone to their own account. */
+  setPhone(input: {
+    adminId: string;
+    phoneE164: string;
+    accessToken: string;
+  }): Promise<void>;
   authenticate(token: string): Promise<{
     actorType: 'ADMIN';
     adminId: string;
@@ -42,9 +63,50 @@ export interface AdminAuthService {
 export function createAdminAuthService(input: {
   repository: AdminAuthRepository;
   authConfig: AppConfig['auth'];
+  otpProvider: OtpProvider;
   now?: () => Date;
 }): AdminAuthService {
   const now = input.now ?? (() => new Date());
+
+  async function verifyPhoneAccessToken(
+    phoneE164: string,
+    accessToken: string,
+  ): Promise<void> {
+    const { verifiedPhoneDigits } =
+      await input.otpProvider.verifyAccessToken({ accessToken });
+    if (verifiedPhoneDigits !== phoneE164.replace(/\D/g, '')) {
+      throw new AppError({
+        code: 'PHONE_TOKEN_MISMATCH',
+        message: 'That verification does not match this phone number',
+        statusCode: 401,
+      });
+    }
+  }
+
+  function issueJwt(admin: {
+    _id: ObjectId;
+    email: string;
+    display_name: string;
+    role: AdminRole;
+  }): { accessToken: string; expiresAt: string } {
+    const timestamp = now();
+    const issuedAt = Math.floor(timestamp.getTime() / 1_000);
+    const expiresAt = new Date(
+      timestamp.getTime() +
+        input.authConfig.adminAccessTokenTtlMinutes * 60_000,
+    );
+    const accessToken = createAdminJwt(
+      {
+        sub: admin._id.toHexString(),
+        actor: 'ADMIN',
+        role: admin.role,
+        iat: issuedAt,
+        exp: Math.floor(expiresAt.getTime() / 1_000),
+      },
+      input.authConfig.adminAccessTokenSecret,
+    );
+    return { accessToken, expiresAt: expiresAt.toISOString() };
+  }
 
   async function login(
     credentials: Parameters<AdminAuthService['login']>[0],
@@ -93,26 +155,12 @@ export function createAdminAuthService(input: {
       throw invalidAdminCredentials();
     }
 
-    const issuedAt = Math.floor(timestamp.getTime() / 1_000);
-    const expiresAt = new Date(
-      timestamp.getTime() +
-        input.authConfig.adminAccessTokenTtlMinutes * 60_000,
-    );
-    const accessToken = createAdminJwt(
-      {
-        sub: admin._id.toHexString(),
-        actor: 'ADMIN',
-        role: admin.role,
-        iat: issuedAt,
-        exp: Math.floor(expiresAt.getTime() / 1_000),
-      },
-      input.authConfig.adminAccessTokenSecret,
-    );
+    const { accessToken, expiresAt } = issueJwt(admin);
     await input.repository.recordLogin(admin._id, timestamp);
 
     return {
       accessToken,
-      expiresAt: expiresAt.toISOString(),
+      expiresAt,
       admin: {
         id: admin._id.toHexString(),
         email: admin.email,
@@ -120,6 +168,85 @@ export function createAdminAuthService(input: {
         role: admin.role,
       },
     };
+  }
+
+  async function otpLogin(
+    credentials: Parameters<AdminAuthService['otpLogin']>[0],
+  ): ReturnType<AdminAuthService['otpLogin']> {
+    const phoneE164 = credentials.phoneE164.trim();
+
+    // Verify with MSG91 before touching the database — no owner-guessing timing surface to
+    // equalize here, since the expensive step (the outbound MSG91 call) runs unconditionally.
+    await verifyPhoneAccessToken(phoneE164, credentials.accessToken);
+
+    const admin = await input.repository.findByPhone(phoneE164);
+    if (!admin) {
+      throw new AppError({
+        code: 'PHONE_NOT_REGISTERED',
+        message: 'No admin account is registered with this phone number',
+        statusCode: 404,
+      });
+    }
+
+    if (admin.status !== 'ACTIVE') {
+      throw new AppError({
+        code: 'ADMIN_DISABLED',
+        message: 'This admin account is disabled',
+        statusCode: 403,
+      });
+    }
+
+    const timestamp = now();
+    if (admin.locked_until && admin.locked_until > timestamp) {
+      throw new AppError({
+        code: 'ADMIN_ACCOUNT_LOCKED',
+        message: 'Too many failed login attempts. Try again later',
+        statusCode: 423,
+        details: { lockedUntil: admin.locked_until.toISOString() },
+      });
+    }
+
+    const { accessToken, expiresAt } = issueJwt(admin);
+    await input.repository.recordLogin(admin._id, timestamp);
+
+    return {
+      accessToken,
+      expiresAt,
+      admin: {
+        id: admin._id.toHexString(),
+        email: admin.email,
+        displayName: admin.display_name,
+        role: admin.role,
+      },
+    };
+  }
+
+  async function setPhone(
+    values: Parameters<AdminAuthService['setPhone']>[0],
+  ): ReturnType<AdminAuthService['setPhone']> {
+    if (!ObjectId.isValid(values.adminId)) {
+      throw new AppError({
+        code: 'INVALID_ID',
+        message: 'Identifier is invalid',
+        statusCode: 400,
+      });
+    }
+    const phoneE164 = values.phoneE164.trim();
+    await verifyPhoneAccessToken(phoneE164, values.accessToken);
+
+    if (await input.repository.phoneExists(phoneE164)) {
+      throw new AppError({
+        code: 'PHONE_ALREADY_REGISTERED',
+        message: 'This phone number is already linked to another admin account',
+        statusCode: 409,
+      });
+    }
+
+    await input.repository.setPhone(
+      new ObjectId(values.adminId),
+      phoneE164,
+      now(),
+    );
   }
 
   async function authenticate(
@@ -196,6 +323,7 @@ export function createAdminAuthService(input: {
         display_name: values.displayName.trim(),
         role: values.role,
         status: 'ACTIVE',
+        phone_e164: null,
         failed_login_count: 0,
         locked_until: null,
         fcm_tokens: [],
@@ -223,7 +351,7 @@ export function createAdminAuthService(input: {
     return { adminId: id.toHexString() };
   }
 
-  return { login, authenticate, logout, bootstrapAdmin };
+  return { login, otpLogin, setPhone, authenticate, logout, bootstrapAdmin };
 }
 
 function invalidAdminCredentials(): AppError {

@@ -2,7 +2,7 @@ import { ObjectId } from 'mongodb';
 
 import type { DatabaseConnection } from '../../../shared/database/database-connection.js';
 import { AppError } from '../../../shared/errors/app-error.js';
-import { verifyPassword } from '../../../shared/auth/password.js';
+import type { OtpProvider } from './msg91-otp.provider.js';
 import type {
   VenueOwnerDocument,
   VenueOwnerMembershipDocument,
@@ -37,9 +37,13 @@ export interface OwnerAccountClosureService {
   checkBlockers(ownerId: string): Promise<ClosureBlocker[]>;
   closeAccount(input: {
     ownerId: string;
-    /** Re-entered by the owner. Closing is irreversible, so possession of a live session
-        is not enough on its own. */
-    password: string;
+    /**
+     * Re-proven by the owner right before this irreversible action — possession of a live
+     * session is not enough on its own. A fresh MSG91 access token for the account's own
+     * phone number, obtained by the client re-running send/verify OTP immediately before
+     * calling this.
+     */
+    accessToken: string;
     reason?: string;
   }): Promise<{
     closedAt: string;
@@ -53,6 +57,7 @@ const CLOSED_PHONE = '+000000000000';
 
 export function createOwnerAccountClosureService(input: {
   database: DatabaseConnection;
+  otpProvider: OtpProvider;
   now?: () => Date;
 }): OwnerAccountClosureService {
   const now = input.now ?? (() => new Date());
@@ -142,7 +147,7 @@ export function createOwnerAccountClosureService(input: {
 
   async function closeAccount(values: {
     ownerId: string;
-    password: string;
+    accessToken: string;
     reason?: string;
   }): Promise<{ closedAt: string; venuesSuspended: number }> {
     const ownerId = oid(values.ownerId);
@@ -155,10 +160,13 @@ export function createOwnerAccountClosureService(input: {
         statusCode: 404,
       });
     }
-    if (!(await verifyPassword(values.password, account.password_hash))) {
+    const { verifiedPhoneDigits } = await input.otpProvider.verifyAccessToken({
+      accessToken: values.accessToken,
+    });
+    if (verifiedPhoneDigits !== account.phone_e164.replace(/\D/g, '')) {
       throw new AppError({
-        code: 'INVALID_CREDENTIALS',
-        message: 'That password is not correct',
+        code: 'PHONE_TOKEN_MISMATCH',
+        message: 'That verification does not match this account',
         statusCode: 401,
       });
     }

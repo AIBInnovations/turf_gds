@@ -68,7 +68,14 @@ export interface RegisterVenueOwnerInput {
   legalName: string;
   email: string;
   phoneE164: string;
-  password: string;
+  /**
+   * Exactly one of these is required (enforced by the route schema's `oneOf` and re-checked in
+   * the service). `password` is the legacy path, kept only until every client has moved to
+   * phone+OTP registration — see the phone-login migration plan. `accessToken` is an MSG91
+   * widget access token proving the caller just verified `phoneE164` by OTP.
+   */
+  password?: string;
+  accessToken?: string;
   venue: {
     legalName: string;
     displayName: string;
@@ -89,6 +96,13 @@ export interface RegisterVenueOwnerInput {
 export interface LoginVenueOwnerInput {
   email: string;
   password: string;
+  ipAddress: string;
+  userAgent: string;
+}
+
+export interface OtpLoginVenueOwnerInput {
+  phoneE164: string;
+  accessToken: string;
   ipAddress: string;
   userAgent: string;
 }

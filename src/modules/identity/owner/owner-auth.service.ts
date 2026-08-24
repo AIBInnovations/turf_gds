@@ -11,14 +11,17 @@ import {
   generateSessionToken,
   hashSessionToken,
 } from '../../../shared/auth/session-token.js';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { AppError } from '../../../shared/errors/app-error.js';
 import type { VenueService } from '../../venue/profile/venue.service.js';
+import type { OtpProvider } from './msg91-otp.provider.js';
 import type { IdentityRepository } from './owner-auth.repository.js';
 import type {
   LoginVenueOwnerInput,
+  OtpLoginVenueOwnerInput,
   RegisterVenueOwnerInput,
   VenueMembershipRole,
+  VenueOwnerDocument,
   VenueOwnerStatus,
 } from './owner.types.js';
 
@@ -31,6 +34,16 @@ export interface IdentityService {
     venueStatus: 'PENDING';
   }>;
   loginVenueOwner(input: LoginVenueOwnerInput): Promise<{
+    sessionToken: string;
+    expiresAt: string;
+    owner: {
+      id: string;
+      legalName: string;
+      email: string;
+      status: 'ACTIVE';
+    };
+  }>;
+  loginVenueOwnerWithOtp(input: OtpLoginVenueOwnerInput): Promise<{
     sessionToken: string;
     expiresAt: string;
     owner: {
@@ -76,6 +89,7 @@ export interface IdentityServiceDependencies {
   venueService: VenueService;
   database: DatabaseConnection;
   authConfig: AppConfig['auth'];
+  otpProvider: OtpProvider;
   /**
    * Optional so the service can still be constructed without it (tests, and the wiring order in
    * app.ts). When present, registration proposes the platform's standard terms straight away.
@@ -100,11 +114,54 @@ export function createIdentityService(
 ): IdentityService {
   const now = dependencies.now ?? (() => new Date());
 
+  /**
+   * Confirms an MSG91 access token really was issued for `phoneE164`, not replayed from a
+   * different phone's verification. Shared by every entry point that accepts an access token
+   * instead of a password (register, OTP login, account closure).
+   */
+  async function verifyPhoneAccessToken(
+    phoneE164: string,
+    accessToken: string,
+  ): Promise<void> {
+    const { verifiedPhoneDigits } =
+      await dependencies.otpProvider.verifyAccessToken({ accessToken });
+    if (verifiedPhoneDigits !== phoneE164.replace(/\D/g, '')) {
+      throw new AppError({
+        code: 'PHONE_TOKEN_MISMATCH',
+        message: 'That verification does not match this phone number',
+        statusCode: 401,
+      });
+    }
+  }
+
   async function registerVenueOwner(
     input: RegisterVenueOwnerInput,
   ): ReturnType<IdentityService['registerVenueOwner']> {
     const timestamp = now();
-    const passwordHash = await hashPassword(input.password);
+    const phoneE164 = input.phoneE164.trim();
+
+    // Exactly one credential path — the route schema's `oneOf` should already guarantee this,
+    // but the service re-checks rather than trusting the transport layer alone.
+    if (Boolean(input.password) === Boolean(input.accessToken)) {
+      throw new AppError({
+        code: 'VALIDATION_ERROR',
+        message: 'Provide exactly one of password or accessToken',
+        statusCode: 400,
+      });
+    }
+
+    const passwordHash = input.accessToken
+      ? // OTP-registered owners have no password. The validator still requires a non-null
+        // password_hash, so this stores a random value nobody knows and no code path ever
+        // verifies against — it exists only to satisfy the schema until that requirement is
+        // dropped once every client has moved off password auth.
+        await hashPassword(randomBytes(32).toString('hex'))
+      : await hashPassword(input.password as string);
+
+    if (input.accessToken) {
+      await verifyPhoneAccessToken(phoneE164, input.accessToken);
+    }
+
     const ownerId = new ObjectId();
     const venueId = new ObjectId();
     const membershipId = new ObjectId();
@@ -112,13 +169,22 @@ export function createIdentityService(
     try {
       await dependencies.database.withTransaction(async ({ session }) => {
         const email = normalizeEmail(input.email);
-        const duplicate = await dependencies.repository.ownerEmailExists(
+        // Sequential, not Promise.all: a MongoDB ClientSession only permits one command in
+        // flight at a time — two operations racing on the same transaction session corrupt its
+        // command ordering and the transaction fails with a driver-level conflict.
+        const emailDuplicate = await dependencies.repository.ownerEmailExists(
           email,
           session,
         );
-
-        if (duplicate) {
+        if (emailDuplicate) {
           throw emailAlreadyRegistered();
+        }
+        const phoneDuplicate = await dependencies.repository.ownerPhoneExists(
+          phoneE164,
+          session,
+        );
+        if (phoneDuplicate) {
+          throw phoneAlreadyRegistered();
         }
 
         await dependencies.repository.insertOwner(
@@ -126,7 +192,7 @@ export function createIdentityService(
             _id: ownerId,
             legal_name: input.legalName.trim(),
             email,
-            phone_e164: input.phoneE164.trim(),
+            phone_e164: phoneE164,
             password_hash: passwordHash,
             email_verified_at: null,
             kyc_status: 'PENDING',
@@ -181,7 +247,9 @@ export function createIdentityService(
       });
     } catch (error) {
       if (isDuplicateKeyError(error)) {
-        throw emailAlreadyRegistered();
+        throw duplicateKeyField(error) === 'phone_e164'
+          ? phoneAlreadyRegistered()
+          : emailAlreadyRegistered();
       }
 
       throw error;
@@ -263,6 +331,24 @@ export function createIdentityService(
       throw invalidCredentials();
     }
 
+    return issueSession(owner, input.ipAddress, input.userAgent, timestamp);
+  }
+
+  /**
+   * Shared by every path that has already proven who the owner is (password match, or a
+   * verified OTP access token) and just needs a session. Not exported — every credential check
+   * happens in the caller first.
+   */
+  async function issueSession(
+    owner: VenueOwnerDocument,
+    ipAddress: string,
+    userAgent: string,
+    timestamp: Date,
+  ): Promise<{
+    sessionToken: string;
+    expiresAt: string;
+    owner: { id: string; legalName: string; email: string; status: 'ACTIVE' };
+  }> {
     const sessionToken = generateSessionToken();
     const expiresAt = new Date(
       timestamp.getTime() +
@@ -272,10 +358,8 @@ export function createIdentityService(
       owner._id,
       {
         token_hash: hashSessionToken(sessionToken),
-        ip_hash: createHash('sha256')
-          .update(input.ipAddress.slice(0, 64))
-          .digest('hex'),
-        user_agent: input.userAgent.slice(0, 512),
+        ip_hash: createHash('sha256').update(ipAddress.slice(0, 64)).digest('hex'),
+        user_agent: userAgent.slice(0, 512),
         expires_at: expiresAt,
         last_seen_at: timestamp,
         revoked_at: null,
@@ -300,9 +384,50 @@ export function createIdentityService(
         id: owner._id.toHexString(),
         legalName: owner.legal_name,
         email: owner.email,
-        status: owner.status,
+        status: 'ACTIVE',
       },
     };
+  }
+
+  async function loginVenueOwnerWithOtp(
+    input: OtpLoginVenueOwnerInput,
+  ): ReturnType<IdentityService['loginVenueOwnerWithOtp']> {
+    const timestamp = now();
+    const phoneE164 = input.phoneE164.trim();
+
+    // Verify with MSG91 before touching the database — there is no owner-guessing timing
+    // surface here the way there is for password login, since the expensive step (the outbound
+    // call to MSG91) runs unconditionally either way.
+    await verifyPhoneAccessToken(phoneE164, input.accessToken);
+
+    const owner = await dependencies.repository.findOwnerByPhone(phoneE164);
+    if (!owner) {
+      throw phoneNotRegistered();
+    }
+
+    if (owner.status === 'SUSPENDED') {
+      throw new AppError({
+        code: 'ACCOUNT_SUSPENDED',
+        message: 'This account is suspended',
+        statusCode: 403,
+      });
+    }
+
+    // No password-guessing surface to lock out here, but an existing lock (e.g. from the
+    // password path, still live during the migration) still applies as defense in depth.
+    if (owner.locked_until && owner.locked_until > timestamp) {
+      throw new AppError({
+        code: 'ACCOUNT_LOCKED',
+        message: 'Too many failed login attempts. Try again later',
+        statusCode: 423,
+        details: { lockedUntil: owner.locked_until.toISOString() },
+      });
+    }
+    if (owner.locked_until && owner.locked_until <= timestamp) {
+      await dependencies.repository.resetLoginFailures(owner._id, timestamp);
+    }
+
+    return issueSession(owner, input.ipAddress, input.userAgent, timestamp);
   }
 
   async function validateOwnerSession(input: {
@@ -471,6 +596,7 @@ export function createIdentityService(
   return {
     registerVenueOwner,
     loginVenueOwner,
+    loginVenueOwnerWithOtp,
     validateOwnerSession,
     approveVenueOwner,
     attachOwnerVenue,
@@ -498,11 +624,38 @@ function isDuplicateKeyError(error: unknown): boolean {
   );
 }
 
+/** Best-effort: reads which unique index a duplicate-key error tripped, from the driver's own
+    `keyPattern`/`keyValue` on the error object. Falls back to email if it can't tell. */
+function duplicateKeyField(error: unknown): 'phone_e164' | 'email' {
+  if (typeof error === 'object' && error !== null) {
+    const keyPattern = (error as { keyPattern?: Record<string, unknown> })
+      .keyPattern;
+    if (keyPattern && 'phone_e164' in keyPattern) return 'phone_e164';
+  }
+  return 'email';
+}
+
 function emailAlreadyRegistered(): AppError {
   return new AppError({
     code: 'EMAIL_ALREADY_REGISTERED',
     message: 'An account with this email already exists',
     statusCode: 409,
+  });
+}
+
+function phoneAlreadyRegistered(): AppError {
+  return new AppError({
+    code: 'PHONE_ALREADY_REGISTERED',
+    message: 'An account with this phone number already exists',
+    statusCode: 409,
+  });
+}
+
+function phoneNotRegistered(): AppError {
+  return new AppError({
+    code: 'PHONE_NOT_REGISTERED',
+    message: 'No account is registered with this phone number',
+    statusCode: 404,
   });
 }
 

@@ -10,6 +10,7 @@ import { createKycRepository } from '../src/modules/identity/kyc/kyc.repository.
 import { createKycService } from '../src/modules/identity/kyc/kyc.service.js';
 import { createIdentityRepository } from '../src/modules/identity/owner/owner-auth.repository.js';
 import { createIdentityService } from '../src/modules/identity/owner/owner-auth.service.js';
+import { createMsg91OtpProvider } from '../src/modules/identity/owner/msg91-otp.provider.js';
 import { createOwnerAccessRepository } from '../src/modules/identity/owner/owner-access.repository.js';
 import { createOwnerAccessService } from '../src/modules/identity/owner/owner-access.service.js';
 import { initializeVenuePersistence } from '../src/modules/venue/profile/venue.persistence.js';
@@ -91,6 +92,10 @@ test('Venue Owner registration commits and rolls back as one MongoDB transaction
       venueService,
       database,
       authConfig,
+      otpProvider: createMsg91OtpProvider({
+        enabled: false,
+        baseUrl: 'https://api.msg91.com',
+      }),
     });
 
     const result = await service.registerVenueOwner(
@@ -318,6 +323,10 @@ test('Venue Owner registration commits and rolls back as one MongoDB transaction
       venueService: failingVenueService,
       database,
       authConfig,
+      otpProvider: createMsg91OtpProvider({
+        enabled: false,
+        baseUrl: 'https://api.msg91.com',
+      }),
     });
 
     await assert.rejects(
@@ -351,11 +360,18 @@ test('Venue Owner registration commits and rolls back as one MongoDB transaction
   }
 });
 
+/** A deterministic, distinct phone per email — phone is now unique per owner alongside email. */
+function phoneFromEmail(email: string): string {
+  let hash = 0;
+  for (const char of email) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return `+91${(hash % 900_000_000) + 100_000_000}`;
+}
+
 function registrationInput(email: string) {
   return {
     legalName: 'Turf Owner Private Limited',
     email,
-    phoneE164: '+919876543210',
+    phoneE164: phoneFromEmail(email),
     password: 'correct-horse-battery',
     venue: {
       legalName: 'Green Arena Private Limited',

@@ -48,10 +48,11 @@ const ownerAccessRoutes: FastifyPluginAsync<OwnerAccessRoutesOptions> = async (
   /**
    * Closes the account. `POST` rather than `DELETE`: nothing is deleted — the owner is suspended,
    * their sessions dropped and their contact details overwritten, while bookings and money
-   * records stay for audit. The password is re-entered because a live session alone is a weak
-   * gate for something irreversible.
+   * records stay for audit. A fresh OTP access token is required because a live session alone is
+   * a weak gate for something irreversible — the client re-runs send/verify OTP right before
+   * calling this.
    */
-  fastify.post<{ Body: { password: string; reason?: string } }>(
+  fastify.post<{ Body: { accessToken: string; reason?: string } }>(
     '/me/close',
     {
       preHandler: authenticate,
@@ -59,9 +60,9 @@ const ownerAccessRoutes: FastifyPluginAsync<OwnerAccessRoutesOptions> = async (
         body: {
           type: 'object',
           additionalProperties: false,
-          required: ['password'],
+          required: ['accessToken'],
           properties: {
-            password: { type: 'string', minLength: 1, maxLength: 128 },
+            accessToken: { type: 'string', minLength: 1, maxLength: 4096 },
             reason: { type: 'string', maxLength: 500 },
           },
         },
@@ -73,7 +74,7 @@ const ownerAccessRoutes: FastifyPluginAsync<OwnerAccessRoutesOptions> = async (
       // an absent key — the property is only spread in when the caller actually sent one.
       return options.closureService.closeAccount({
         ownerId: owner.ownerId,
-        password: request.body.password,
+        accessToken: request.body.accessToken,
         ...(request.body.reason === undefined ? {} : { reason: request.body.reason }),
       });
     },

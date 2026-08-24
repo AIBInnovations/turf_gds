@@ -2,7 +2,7 @@
 
 Everything here was read out of `turf_gds/src` route registrations, not just the docs. Where the
 docs disagree with the code, the code is recorded and the doc error is noted. Base URL
-`http://localhost:3000/api/v1`.
+`https://turf-gds.onrender.com/api/v1` — the one origin every app talks to.
 
 Authoritative machine-readable spec: `GET /api/v1/openapi.json` (add `?partner=true` for the
 partner-only surface — use it to generate the developer console's reference pages).
@@ -78,6 +78,14 @@ refetch-and-retry path**; silently re-submitting will clobber a concurrent chang
 ### 1. Admin — HS256 JWT
 
 - `POST /auth/admin/login` `{email, password}` → `{accessToken, expiresAt, admin:{id,email,displayName,role}}`
+- `POST /auth/admin/otp/verify` `{phoneE164, accessToken}` → same shape as `/auth/admin/login`.
+  MSG91 phone+OTP sign-in. `accessToken` is the MSG91 widget token, re-verified server-side against
+  MSG91 before any JWT is issued. 404 `PHONE_NOT_REGISTERED` when no admin holds that number,
+  401 `PHONE_TOKEN_MISMATCH` when the token was verified for a different number.
+- `POST /auth/admin/me/phone` `{phoneE164, accessToken}` → 204. Authenticated self-enrolment: links a
+  verified phone to the calling admin so OTP sign-in works for them. 409 `PHONE_ALREADY_REGISTERED`.
+  Admin accounts are made by CLI bootstrap or by another admin, so this is the only way to set one.
+  Password sign-in stays available — admins predating this have no phone on file.
 - Header `Authorization: Bearer <accessToken>`
 - TTL from `ADMIN_ACCESS_TOKEN_TTL_MINUTES` (set to 480 locally). **No refresh endpoint** — on 401, re-login.
 - `GET /auth/admin/me` → `{id, role}`
@@ -87,10 +95,20 @@ refetch-and-retry path**; silently re-submitting will clobber a concurrent chang
   - Any role: reads, `/admin/operations/health`, booking audit.
 - The admin row is reloaded on every request, so disabling a user takes effect before token expiry.
 
-### 2. Venue owner — opaque session token (NOT OTP, NOT a JWT)
+### 2. Venue owner — opaque session token (phone+OTP sign-in, NOT a JWT)
 
-- `POST /auth/venue-owners/register` → `{ownerId, venueId}` (creates owner + venue + OWNER membership atomically)
-- `POST /auth/venue-owners/login` `{email, password}` → `{sessionToken, expiresAt, owner}`
+- `POST /auth/venue-owners/register` → `{ownerId, venueId}` (creates owner + venue + OWNER membership atomically).
+  Carries **exactly one** of `password` or `accessToken` (AJV `oneOf`). `accessToken` is the MSG91
+  phone-verification token and is the path every current client uses; `email` stays required as a
+  contact detail, not as a credential. 409 `PHONE_ALREADY_REGISTERED` on a duplicate number.
+- `POST /auth/venue-owners/otp/verify` `{phoneE164, accessToken}` → `{sessionToken, expiresAt, owner}`.
+  Phone+OTP sign-in, and the way owners sign in. The client verifies the OTP with MSG91 directly,
+  then hands the resulting access token here; the backend re-verifies it against MSG91's
+  `verifyAccessToken` and requires the number MSG91 returns to match `phoneE164` — without that
+  check a token for one phone could sign in as another. 404 `PHONE_NOT_REGISTERED`,
+  401 `PHONE_TOKEN_MISMATCH`, 503 `OTP_PROVIDER_ERROR`. `phone_e164` is unique per owner.
+- `POST /auth/venue-owners/login` `{email, password}` → `{sessionToken, expiresAt, owner}`.
+  Legacy email+password, retained only until every client has moved to OTP.
 - Header `Authorization: Bearer <sessionToken>`. Opaque — only its SHA-256 hash is stored; you cannot decode it. Persist `expiresAt` from the response.
 - TTL 168h, max 5 concurrent sessions, lockout after 5 failed attempts for 15 min. **No refresh.**
 - `GET /auth/venue-owners/me` → profile + memberships + roles + **permissions**. Call immediately after login; it is the only source of the venue list and the per-venue permission set.
@@ -245,6 +263,16 @@ eventType, status `PENDING|RETRYING|DELIVERED|FAILED`, from, to, page, limit) ·
 `GET /admin/communications/events/:eventId` · `POST /admin/communications/events/:eventId/endpoints/:endpointId/retry`
 *Docs say `/outbox` and `/webhook-deliveries`; both are wrong.*
 
+**Messaging (person to person — not the outbox):** `GET /admin/messages/threads?page=&limit=` →
+`{items[]{recipientType, recipientId, recipientName, recipientEmail, recipientPhone, lastMessage, messageCount,
+unreadCount}, pagination}` · `GET /admin/messages?recipientType=PARTNER|VENUE_OWNER&recipientId=&page=&limit=`
+(newest first) · `POST /admin/messages` `{recipientType, recipientId, subject?, body}` → 201 message
+(ADMIN or OPS; 403 `MESSAGING_OPERATOR_REQUIRED` for SUPPORT, 404 when the account does not exist) ·
+`POST /admin/messages/read` `{recipientType, recipientId}` → `{updated}` (clears inbound replies only).
+The recipient side reads and replies to its **own** thread — the id comes from the session, never the
+request: `GET|POST /owner/messages`, `POST /owner/messages/read`, `GET|POST /partners/me/messages`,
+`POST /partners/me/messages/read`. Bodies cap at 8 KB, subjects at 200 chars.
+
 **Ops:** `GET /admin/operations/health` · `GET /admin/operations/inventory-health`
 (`health: HEALTHY|STALE|EMPTY|DISABLED`)
 
@@ -270,9 +298,10 @@ affordance, and forgot-password must be an admin-assisted path for now.
 blocks App Store and Play Store submission):
 - `GET /auth/venue-owners/me/closure-blockers` → `{blockers[]{code, message, count}, canClose}`.
   Read-only. Codes: `UPCOMING_BOOKINGS`, `OPEN_SETTLEMENTS`, `PENDING_PAYOUTS`.
-- `POST /auth/venue-owners/me/close` `{password, reason?}` → `{closedAt, venuesSuspended}`.
-  The password is re-entered because a live session alone is a weak gate for something
-  irreversible; a wrong one is 401 `INVALID_CREDENTIALS`. Blocked closure is 409
+- `POST /auth/venue-owners/me/close` `{accessToken, reason?}` → `{closedAt, venuesSuspended}`.
+  A **fresh** OTP verification of the account's own number is required because a live session alone
+  is a weak gate for something irreversible; a token verified for a different number is 401
+  `PHONE_TOKEN_MISMATCH`. Blocked closure is 409
   `ACCOUNT_CLOSURE_BLOCKED` with the blocker list in `details`, re-checked server-side rather than
   trusted from the client. Closing twice is 409 `ACCOUNT_ALREADY_CLOSED`.
 

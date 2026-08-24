@@ -35,6 +35,56 @@ const adminAuthRoutes: FastifyPluginAsync<AdminAuthRoutesOptions> = async (
     async (request) => options.service.login(request.body),
   );
 
+  fastify.post<{
+    Body: { phoneE164: string; accessToken: string };
+  }>(
+    '/otp/verify',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['phoneE164', 'accessToken'],
+          properties: {
+            phoneE164: { type: 'string', pattern: '^\\+[1-9][0-9]{7,14}$' },
+            accessToken: { type: 'string', minLength: 1, maxLength: 4096 },
+          },
+        },
+      },
+    },
+    async (request) => options.service.otpLogin(request.body),
+  );
+
+  /**
+   * Self-service: an already-authenticated admin attaches a verified phone number to their own
+   * account. This is the backfill path for every admin bootstrapped before phone+OTP login
+   * existed — there is no self-registration screen for admins, so this is the only way in.
+   */
+  fastify.post<{
+    Body: { phoneE164: string; accessToken: string };
+  }>(
+    '/me/phone',
+    {
+      preHandler: createAdminAuthenticationHook(options.service),
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['phoneE164', 'accessToken'],
+          properties: {
+            phoneE164: { type: 'string', pattern: '^\\+[1-9][0-9]{7,14}$' },
+            accessToken: { type: 'string', minLength: 1, maxLength: 4096 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const admin = requireAdminContext(request);
+      await options.service.setPhone({ adminId: admin.adminId, ...request.body });
+      return reply.status(204).send();
+    },
+  );
+
   fastify.get(
     '/me',
     { preHandler: createAdminAuthenticationHook(options.service) },

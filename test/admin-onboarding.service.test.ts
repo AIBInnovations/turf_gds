@@ -28,6 +28,9 @@ function createFixture(kycVerified: boolean) {
     async loginVenueOwner() {
       throw new Error('not used');
     },
+    async loginVenueOwnerWithOtp() {
+      throw new Error('not used');
+    },
     async validateOwnerSession() {
       throw new Error('not used');
     },

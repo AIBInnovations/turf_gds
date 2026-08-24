@@ -6,6 +6,9 @@ import type { AdminUserDocument } from './auth.types.js';
 export interface AdminAuthRepository {
   findByEmail(email: string): Promise<AdminUserDocument | null>;
   findById(id: ObjectId): Promise<AdminUserDocument | null>;
+  findByPhone(phoneE164: string): Promise<AdminUserDocument | null>;
+  phoneExists(phoneE164: string): Promise<boolean>;
+  setPhone(id: ObjectId, phoneE164: string, now: Date): Promise<void>;
   recordLogin(id: ObjectId, now: Date): Promise<void>;
   recordFailedLogin(
     id: ObjectId,
@@ -35,6 +38,22 @@ export function createAdminAuthRepository(
     },
     findById(id) {
       return admins().findOne({ _id: id });
+    },
+    findByPhone(phoneE164) {
+      return admins().findOne({ phone_e164: phoneE164 });
+    },
+    async phoneExists(phoneE164) {
+      const admin = await admins().findOne(
+        { phone_e164: phoneE164 },
+        { projection: { _id: 1 } },
+      );
+      return admin !== null;
+    },
+    async setPhone(id, phoneE164, now) {
+      await admins().updateOne(
+        { _id: id },
+        { $set: { phone_e164: phoneE164, updated_at: now } },
+      );
     },
     async recordLogin(id, now) {
       await admins().updateOne(

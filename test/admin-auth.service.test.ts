@@ -7,8 +7,18 @@ import type { AppConfig } from '../src/config/env.js';
 import type { AdminAuthRepository } from '../src/modules/identity/platform/auth.repository.js';
 import { createAdminAuthService } from '../src/modules/identity/platform/auth.service.js';
 import type { AdminUserDocument } from '../src/modules/identity/platform/auth.types.js';
+import type { OtpProvider } from '../src/modules/identity/owner/msg91-otp.provider.js';
 import { hashPassword } from '../src/shared/auth/password.js';
 import { AppError } from '../src/shared/errors/app-error.js';
+
+/** Treats the "access token" as the verified phone's digits directly — see identity.service.test.ts. */
+function createFakeOtpProvider(): OtpProvider {
+  return {
+    async verifyAccessToken({ accessToken }) {
+      return { verifiedPhoneDigits: accessToken };
+    },
+  };
+}
 
 const fixedNow = new Date('2026-07-28T08:00:00.000Z');
 const authConfig: AppConfig['auth'] = {
@@ -34,6 +44,7 @@ function createFixtureWithClock(
     display_name: 'Platform Admin',
     role: 'ADMIN',
     status,
+    phone_e164: null,
     failed_login_count: 0,
     locked_until: null,
     fcm_tokens: [],
@@ -48,6 +59,16 @@ function createFixtureWithClock(
     },
     async findById(id) {
       return id.equals(admin._id) ? admin : null;
+    },
+    async findByPhone(phoneE164) {
+      return admin.phone_e164 === phoneE164 ? admin : null;
+    },
+    async phoneExists(phoneE164) {
+      return admin.phone_e164 === phoneE164;
+    },
+    async setPhone(_id, phoneE164, updatedAt) {
+      admin.phone_e164 = phoneE164;
+      admin.updated_at = updatedAt;
     },
     async recordLogin(_id, now) {
       admin.last_login_at = now;
@@ -74,6 +95,7 @@ function createFixtureWithClock(
     service: createAdminAuthService({
       repository,
       authConfig,
+      otpProvider: createFakeOtpProvider(),
       now: () => currentNow,
     }),
   };
@@ -200,4 +222,87 @@ test('login for an unknown email stays enumeration-safe and does not touch locko
   );
   assert.equal(fixture.admin.failed_login_count, 0);
   assert.equal(fixture.admin.locked_until, null);
+});
+
+test('setPhone attaches a verified phone to the caller’s own account', async () => {
+  const fixture = await createFixture();
+
+  await fixture.service.setPhone({
+    adminId: fixture.admin._id.toHexString(),
+    phoneE164: '+919876543210',
+    accessToken: '919876543210',
+  });
+
+  assert.equal(fixture.admin.phone_e164, '+919876543210');
+});
+
+test('setPhone rejects a token verified for a different phone', async () => {
+  const fixture = await createFixture();
+
+  await assert.rejects(
+    fixture.service.setPhone({
+      adminId: fixture.admin._id.toHexString(),
+      phoneE164: '+919876543210',
+      accessToken: '919999999999',
+    }),
+    (error: unknown) =>
+      error instanceof AppError && error.code === 'PHONE_TOKEN_MISMATCH',
+  );
+  assert.equal(fixture.admin.phone_e164, null);
+});
+
+test('setPhone rejects a phone already linked to another admin', async () => {
+  const fixture = await createFixture();
+  fixture.admin.phone_e164 = '+919876543210';
+
+  await assert.rejects(
+    fixture.service.setPhone({
+      adminId: fixture.admin._id.toHexString(),
+      phoneE164: '+919876543210',
+      accessToken: '919876543210',
+    }),
+    (error: unknown) =>
+      error instanceof AppError && error.code === 'PHONE_ALREADY_REGISTERED',
+  );
+});
+
+test('otpLogin issues an access token for a verified phone', async () => {
+  const fixture = await createFixture();
+  fixture.admin.phone_e164 = '+919876543210';
+
+  const result = await fixture.service.otpLogin({
+    phoneE164: '+919876543210',
+    accessToken: '919876543210',
+  });
+  const context = await fixture.service.authenticate(result.accessToken);
+
+  assert.equal(context.adminId, fixture.admin._id.toHexString());
+  assert.equal(fixture.admin.last_login_at?.toISOString(), fixedNow.toISOString());
+});
+
+test('otpLogin rejects a phone with no linked admin', async () => {
+  const fixture = await createFixture();
+
+  await assert.rejects(
+    fixture.service.otpLogin({
+      phoneE164: '+919876543210',
+      accessToken: '919876543210',
+    }),
+    (error: unknown) =>
+      error instanceof AppError && error.code === 'PHONE_NOT_REGISTERED',
+  );
+});
+
+test('otpLogin rejects a disabled admin even with a valid verification', async () => {
+  const fixture = await createFixture('DISABLED');
+  fixture.admin.phone_e164 = '+919876543210';
+
+  await assert.rejects(
+    fixture.service.otpLogin({
+      phoneE164: '+919876543210',
+      accessToken: '919876543210',
+    }),
+    (error: unknown) =>
+      error instanceof AppError && error.code === 'ADMIN_DISABLED',
+  );
 });

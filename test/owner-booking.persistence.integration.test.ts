@@ -16,6 +16,7 @@ import type { SlotDocument } from '../src/modules/venue/inventory/inventory.type
 import { initializeIdentityPersistence } from '../src/modules/identity/persistence.js';
 import { createIdentityRepository } from '../src/modules/identity/owner/owner-auth.repository.js';
 import { createIdentityService } from '../src/modules/identity/owner/owner-auth.service.js';
+import { createMsg91OtpProvider } from '../src/modules/identity/owner/msg91-otp.provider.js';
 import { createOwnerAccessRepository } from '../src/modules/identity/owner/owner-access.repository.js';
 import { createOwnerAccessService } from '../src/modules/identity/owner/owner-access.service.js';
 import { initializeVenuePersistence } from '../src/modules/venue/profile/venue.persistence.js';
@@ -72,6 +73,10 @@ test('Owner Booking persistence enforces filters, detail scope, cancellation, an
       venueService: createVenueService({ repository: venueRepository }),
       database,
       authConfig,
+      otpProvider: createMsg91OtpProvider({
+        enabled: false,
+        baseUrl: 'https://api.msg91.com',
+      }),
     });
     const firstOwner = await identityService.registerVenueOwner(
       registrationInput('booking-owner-a@example.com', 'Booking Arena A'),
@@ -446,11 +451,18 @@ test('Owner Booking persistence enforces filters, detail scope, cancellation, an
   }
 });
 
+/** A deterministic, distinct phone per email — phone is now unique per owner alongside email. */
+function phoneFromEmail(email: string): string {
+  let hash = 0;
+  for (const char of email) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return `+91${(hash % 900_000_000) + 100_000_000}`;
+}
+
 function registrationInput(email: string, displayName: string) {
   return {
     legalName: `${displayName} Owner Private Limited`,
     email,
-    phoneE164: '+919876543210',
+    phoneE164: phoneFromEmail(email),
     password: 'correct-horse-battery',
     venue: {
       legalName: `${displayName} Private Limited`,

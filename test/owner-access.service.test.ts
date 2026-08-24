@@ -115,6 +115,9 @@ function createService(options: {
     async loginVenueOwner() {
       throw new Error('not used');
     },
+    async loginVenueOwnerWithOtp() {
+      throw new Error('not used');
+    },
     async validateOwnerSession() {
       return {
         ownerId: ownerId.toHexString(),

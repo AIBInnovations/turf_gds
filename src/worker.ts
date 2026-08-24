@@ -23,6 +23,7 @@ import { createOwnerAccessService } from './modules/identity/owner/owner-access.
 import { createIdentityRepository } from './modules/identity/owner/owner-auth.repository.js';
 import { createIdentityService } from './modules/identity/owner/owner-auth.service.js';
 import { createRazorpayProvider } from './modules/treasury/razorpay.provider.js';
+import { createMsg91OtpProvider } from './modules/identity/owner/msg91-otp.provider.js';
 import { createTreasuryService } from './modules/treasury/treasury.service.js';
 import { createVenueRepository } from './modules/venue/profile/venue.repository.js';
 import { createVenueService } from './modules/venue/profile/venue.service.js';
@@ -92,6 +93,9 @@ const ownerAccessService = createOwnerAccessService({
     venueService,
     database,
     authConfig: config.auth,
+    otpProvider: createMsg91OtpProvider(
+      config.msg91 ?? { enabled: false, baseUrl: 'https://api.msg91.com' },
+    ),
   }),
   repository: createOwnerAccessRepository(database),
 });

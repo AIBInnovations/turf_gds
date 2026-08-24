@@ -81,6 +81,8 @@ import type { MediaStorage } from './shared/media/cloudinary-media-storage.js';
 import { createPartnerRateLimiter } from './shared/rate-limit/partner-rate-limiter.js';
 import { createInventorySyncService } from './modules/inventory-sync/inventory-sync.service.js';
 import { createRazorpayProvider } from './modules/treasury/razorpay.provider.js';
+import { createMsg91OtpProvider } from './modules/identity/owner/msg91-otp.provider.js';
+import { createMessagingService } from './modules/messaging/messaging.service.js';
 import { createTreasuryService } from './modules/treasury/treasury.service.js';
 import openapiRoutes from './routes/openapi.js';
 import observabilityPlugin from './plugins/observability.js';
@@ -128,6 +130,10 @@ export async function buildApp(
                 '*.password',
                 '*.passwordHash',
                 '*.password_hash',
+                '*.accessToken',
+                '*.access-token',
+                'req.headers.authkey',
+                'request.headers.authkey',
                 '*.signingSecret',
                 '*.signing_secret',
                 '*.signing_secret_hash',
@@ -220,6 +226,9 @@ export async function buildApp(
   const venueService = createVenueService({
     repository: createVenueRepository(app.database),
   });
+  const otpProvider = createMsg91OtpProvider(
+    config.msg91 ?? { enabled: false, baseUrl: 'https://api.msg91.com' },
+  );
   const identityService =
     options.identityService ??
     createIdentityService({
@@ -227,6 +236,7 @@ export async function buildApp(
       venueService,
       database: app.database,
       authConfig: config.auth,
+      otpProvider,
       /**
        * Late-bound on purpose. The agreement service needs `ownerAccessService`, which needs
        * this very identity service, so the two cannot be constructed in one order. Forwarding
@@ -243,6 +253,7 @@ export async function buildApp(
   });
   const ownerAccountClosureService = createOwnerAccountClosureService({
     database: app.database,
+    otpProvider,
   });
   const ownerEvents = createOwnerEventPublisher(
     app.database,
@@ -291,6 +302,7 @@ export async function buildApp(
   const adminAuthService = createAdminAuthService({
     repository: createAdminAuthRepository(app.database),
     authConfig: config.auth,
+    otpProvider,
   });
   const kycService = createKycService({
     repository: createKycRepository(app.database),
@@ -416,6 +428,8 @@ export async function buildApp(
         config.adminOperations?.inventoryMinimumCoverageDays ?? 7,
     });
 
+  const messagingService = createMessagingService({ db: app.database.db });
+
   await app.register(apiV1Routes, {
     prefix: '/api/v1',
     identityService,
@@ -448,6 +462,7 @@ export async function buildApp(
       config.auth.partnerCredentialMasterSecret,
     ),
     treasuryService,
+    messagingService,
   });
   await app.register(openapiRoutes, { prefix: '/api/v1' });
 

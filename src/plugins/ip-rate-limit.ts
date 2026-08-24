@@ -28,7 +28,9 @@ const SKIP_ROUTES = new Set(['/health', '/ready', '/metrics']);
 const AUTH_ROUTES = new Set([
   '/api/v1/auth/venue-owners/login',
   '/api/v1/auth/venue-owners/register',
+  '/api/v1/auth/venue-owners/otp/verify',
   '/api/v1/auth/admin/login',
+  '/api/v1/auth/admin/otp/verify',
   '/api/v1/partners/auth/login',
   // Unauthenticated Partner signup.
   '/api/v1/partners/applications',

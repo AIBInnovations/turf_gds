@@ -49,6 +49,12 @@ import adminEpic08Routes from '../modules/admin/epic08/admin-epic08.routes.js';
 import type { AdminEpic08Service } from '../modules/admin/epic08/admin-epic08.service.js';
 import inventorySyncRoutes from '../modules/inventory-sync/inventory-sync.routes.js';
 import type { InventorySyncService } from '../modules/inventory-sync/inventory-sync.service.js';
+import {
+  adminMessagingRoutes,
+  ownerMessagingRoutes,
+  partnerMessagingRoutes,
+} from '../modules/messaging/messaging.routes.js';
+import type { MessagingService } from '../modules/messaging/messaging.service.js';
 import treasuryRoutes from '../modules/treasury/treasury.routes.js';
 import type { TreasuryService } from '../modules/treasury/treasury.service.js';
 
@@ -77,6 +83,7 @@ export interface ApiV1RoutesOptions {
   adminEpic08Service: AdminEpic08Service;
   inventorySyncService: InventorySyncService;
   treasuryService: TreasuryService;
+  messagingService: MessagingService;
 }
 
 const apiV1Routes: FastifyPluginAsync<ApiV1RoutesOptions> = async (
@@ -223,6 +230,21 @@ const apiV1Routes: FastifyPluginAsync<ApiV1RoutesOptions> = async (
     service: options.treasuryService,
     partnerAccessService: options.partnerAccessService,
     adminAuthService: options.adminAuthService,
+  });
+  await fastify.register(adminMessagingRoutes, {
+    prefix: '/admin/messages',
+    service: options.messagingService,
+    adminAuthService: options.adminAuthService,
+  });
+  await fastify.register(ownerMessagingRoutes, {
+    prefix: '/owner',
+    service: options.messagingService,
+    ownerAccessService: options.ownerAccessService,
+  });
+  await fastify.register(partnerMessagingRoutes, {
+    prefix: '/partners',
+    service: options.messagingService,
+    partnerAccessService: options.partnerAccessService,
   });
 };
 
