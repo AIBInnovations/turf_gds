@@ -153,6 +153,32 @@ export async function buildApp(
           },
   });
 
+  const msg91Config = config.msg91 ?? {
+    enabled: false,
+    baseUrl: 'https://api.msg91.com',
+  };
+  /**
+   * Stated at boot, before the database is touched, so it still appears when something else is
+   * broken. Phone+OTP is how owners sign in, so a host missing MSG91_AUTH_KEY breaks every
+   * sign-in — far cheaper to notice in the first lines of a startup log than to diagnose from
+   * three clients all reporting "cannot log in".
+   */
+  if (msg91Config.enabled && msg91Config.authKey) {
+    app.log.info(
+      { baseUrl: msg91Config.baseUrl },
+      'MSG91 OTP verification enabled',
+    );
+  } else {
+    app.log.error(
+      {
+        MSG91_ENABLED: msg91Config.enabled,
+        hasAuthKey: Boolean(msg91Config.authKey),
+      },
+      'MSG91 OTP verification DISABLED — phone sign-in will fail for owners and admins. ' +
+        'Set MSG91_ENABLED=true and MSG91_AUTH_KEY on this host.',
+    );
+  }
+
   await app.register(errorHandlerPlugin);
   // Before every route plugin: its onRoute hook only sees routes registered
   // after it.
@@ -226,9 +252,7 @@ export async function buildApp(
   const venueService = createVenueService({
     repository: createVenueRepository(app.database),
   });
-  const otpProvider = createMsg91OtpProvider(
-    config.msg91 ?? { enabled: false, baseUrl: 'https://api.msg91.com' },
-  );
+  const otpProvider = createMsg91OtpProvider(msg91Config, app.log);
   const identityService =
     options.identityService ??
     createIdentityService({

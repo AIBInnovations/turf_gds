@@ -5,6 +5,7 @@ import {
   requireAdminContext,
   getBearerToken,
 } from '../shared/auth-context.js';
+import { maskPhone } from '../owner/msg91-otp.provider.js';
 import type { AdminAuthService } from './auth.service.js';
 
 export interface AdminAuthRoutesOptions {
@@ -52,7 +53,24 @@ const adminAuthRoutes: FastifyPluginAsync<AdminAuthRoutesOptions> = async (
         },
       },
     },
-    async (request) => options.service.otpLogin(request.body),
+    async (request) => {
+      const phone = maskPhone(request.body.phoneE164);
+      request.log.info({ phone }, 'Admin OTP sign-in attempt');
+      try {
+        const result = await options.service.otpLogin(request.body);
+        request.log.info(
+          { phone, adminId: result.admin.id, role: result.admin.role },
+          'Admin OTP sign-in succeeded',
+        );
+        return result;
+      } catch (error) {
+        request.log.warn(
+          { phone, code: (error as { code?: string }).code ?? 'UNKNOWN' },
+          'Admin OTP sign-in failed',
+        );
+        throw error;
+      }
+    },
   );
 
   /**
@@ -80,8 +98,26 @@ const adminAuthRoutes: FastifyPluginAsync<AdminAuthRoutesOptions> = async (
     },
     async (request, reply) => {
       const admin = requireAdminContext(request);
-      await options.service.setPhone({ adminId: admin.adminId, ...request.body });
-      return reply.status(204).send();
+      const phone = maskPhone(request.body.phoneE164);
+      request.log.info({ phone, adminId: admin.adminId }, 'Admin phone enrolment attempt');
+      try {
+        await options.service.setPhone({ adminId: admin.adminId, ...request.body });
+        request.log.info(
+          { phone, adminId: admin.adminId },
+          'Admin phone enrolled — OTP sign-in now available for this account',
+        );
+        return reply.status(204).send();
+      } catch (error) {
+        request.log.warn(
+          {
+            phone,
+            adminId: admin.adminId,
+            code: (error as { code?: string }).code ?? 'UNKNOWN',
+          },
+          'Admin phone enrolment failed',
+        );
+        throw error;
+      }
     },
   );
 

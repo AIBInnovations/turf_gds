@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 
+import { maskPhone } from './msg91-otp.provider.js';
 import type { IdentityService } from './owner-auth.service.js';
 import type {
   LoginVenueOwnerInput,
@@ -100,8 +101,23 @@ const identityRoutes: FastifyPluginAsync<IdentityRoutesOptions> = async (
     '/register',
     { schema: registerSchema },
     async (request, reply) => {
-      const result = await options.service.registerVenueOwner(request.body);
-      return reply.status(201).send(result);
+      const phone = maskPhone(request.body.phoneE164 ?? '');
+      const credential = request.body.accessToken ? 'otp' : 'password';
+      request.log.info({ phone, credential }, 'Owner registration attempt');
+      try {
+        const result = await options.service.registerVenueOwner(request.body);
+        request.log.info(
+          { phone, credential, ownerId: result.ownerId, venueId: result.venueId },
+          'Owner registration succeeded',
+        );
+        return reply.status(201).send(result);
+      } catch (error) {
+        request.log.warn(
+          { phone, credential, code: (error as { code?: string }).code ?? 'UNKNOWN' },
+          'Owner registration failed',
+        );
+        throw error;
+      }
     },
   );
 
@@ -118,11 +134,29 @@ const identityRoutes: FastifyPluginAsync<IdentityRoutesOptions> = async (
   fastify.post<{
     Body: Pick<OtpLoginVenueOwnerInput, 'phoneE164' | 'accessToken'>;
   }>('/otp/verify', { schema: otpLoginSchema }, async (request) => {
-    return options.service.loginVenueOwnerWithOtp({
-      ...request.body,
-      ipAddress: request.ip,
-      userAgent: request.headers['user-agent'] ?? 'unknown',
-    });
+    const phone = maskPhone(request.body.phoneE164);
+    request.log.info({ phone }, 'Owner OTP sign-in attempt');
+    try {
+      const result = await options.service.loginVenueOwnerWithOtp({
+        ...request.body,
+        ipAddress: request.ip,
+        userAgent: request.headers['user-agent'] ?? 'unknown',
+      });
+      request.log.info(
+        { phone, ownerId: result.owner.id },
+        'Owner OTP sign-in succeeded',
+      );
+      return result;
+    } catch (error) {
+      // Re-thrown for the error handler; logged here because the code is what distinguishes an
+      // unknown number from a replayed token from an unconfigured provider — all three look
+      // the same from the client.
+      request.log.warn(
+        { phone, code: (error as { code?: string }).code ?? 'UNKNOWN' },
+        'Owner OTP sign-in failed',
+      );
+      throw error;
+    }
   });
 };
 
