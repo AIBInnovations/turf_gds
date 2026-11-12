@@ -29,6 +29,7 @@
     "fastify-plugin": "^6.0.0",
     "fastify-raw-body": "^5.0.0",
     "mongodb": "^7.5.0",
+    "node-fetch": "^3.3.2",
     "redis": "^5.8.2"
   },
   "devDependencies": {
